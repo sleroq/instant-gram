@@ -1,6 +1,7 @@
 <script lang="ts">
   import '../../lib/bridge';
   import { sendMessage } from 'webext-bridge/popup';
+  import { tick } from 'svelte';
   import type { Message, Page, ReelMedia, Result, Thread, ThreadMessages } from '../../lib/domain';
 
   type JsonPayload = null | boolean | number | string | JsonPayload[] | { [key: string]: JsonPayload };
@@ -14,6 +15,11 @@
     cursor?: string;
     hasNextPage: boolean;
     requestId?: number;
+    scrollTop: number;
+    scrollHeight: number;
+    clientHeight: number;
+    isAtBottom: boolean;
+    didInitialScroll: boolean;
   };
 
   let inbox = $state<View<Page<Thread>>>({ state: 'loading' });
@@ -22,6 +28,7 @@
   let threadCache = $state<Record<string, ThreadCacheEntry>>({});
   let pinned = $state<string[]>([]);
   let reel = $state<View<ReelMedia> & { shortcode?: string }>({ state: 'idle' });
+  let messagesEl = $state<HTMLDivElement>();
   let nextThreadRequestId = 0;
 
   const sortedThreads = $derived(inbox.state === 'ready' ? [...inbox.data.items].sort((a, b) => {
@@ -85,7 +92,16 @@
   }
 
   function emptyThreadEntry(): ThreadCacheEntry {
-    return { state: 'idle', loadingOlder: false, hasNextPage: false };
+    return {
+      state: 'idle',
+      loadingOlder: false,
+      hasNextPage: false,
+      scrollTop: 0,
+      scrollHeight: 0,
+      clientHeight: 0,
+      isAtBottom: true,
+      didInitialScroll: false,
+    };
   }
 
   function cacheEntry(key: string): ThreadCacheEntry {
@@ -103,11 +119,56 @@
     };
   }
 
+  function readScrollState(): Pick<ThreadCacheEntry, 'scrollTop' | 'scrollHeight' | 'clientHeight' | 'isAtBottom'> | undefined {
+    if (!messagesEl) return undefined;
+    const distanceFromBottom = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight;
+    return {
+      scrollTop: messagesEl.scrollTop,
+      scrollHeight: messagesEl.scrollHeight,
+      clientHeight: messagesEl.clientHeight,
+      isAtBottom: distanceFromBottom < 48,
+    };
+  }
+
+  function saveActiveScroll() {
+    if (!selectedKey) return;
+    const scroll = readScrollState();
+    if (!scroll) return;
+    const entry = threadCache[selectedKey] ?? emptyThreadEntry();
+    threadCache[selectedKey] = { ...entry, ...scroll };
+  }
+
+  function handleMessagesScroll() {
+    saveActiveScroll();
+  }
+
+  async function restoreThreadScroll(key: string) {
+    await tick();
+    const entry = threadCache[key];
+    if (!entry || !messagesEl) return;
+    messagesEl.scrollTop = entry.isAtBottom ? messagesEl.scrollHeight : entry.scrollTop;
+    const scroll = readScrollState();
+    if (scroll) threadCache[key] = { ...entry, ...scroll };
+  }
+
+  async function scrollThreadToBottom(key: string) {
+    await tick();
+    const entry = threadCache[key];
+    if (!entry || !messagesEl) return;
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    const scroll = readScrollState();
+    if (scroll) threadCache[key] = { ...entry, ...scroll, didInitialScroll: true };
+  }
+
   async function selectThread(thread: Thread) {
+    saveActiveScroll();
     selected = thread;
     selectedKey = thread.key;
     const entry = cacheEntry(thread.key);
-    if (entry.data) return;
+    if (entry.data) {
+      await restoreThreadScroll(thread.key);
+      return;
+    }
 
     const requestId = ++nextThreadRequestId;
     threadCache[thread.key] = { ...entry, state: 'loading-initial', error: undefined, requestId };
@@ -120,7 +181,13 @@
         loadingOlder: false,
         cursor: data.cursor,
         hasNextPage: data.hasNextPage,
+        scrollTop: 0,
+        scrollHeight: 0,
+        clientHeight: 0,
+        isAtBottom: true,
+        didInitialScroll: false,
       };
+      if (selectedKey === thread.key) await scrollThreadToBottom(thread.key);
     } catch (error) {
       if (threadCache[thread.key]?.requestId !== requestId) return;
       threadCache[thread.key] = {
@@ -138,6 +205,8 @@
     const threadKey = selected.cursor ?? selected.key;
     const entry = threadCache[key];
     if (!entry?.data || !entry.cursor || entry.loadingOlder) return;
+    const previousScrollHeight = messagesEl?.scrollHeight ?? 0;
+    const previousScrollTop = messagesEl?.scrollTop ?? 0;
     threadCache[key] = { ...entry, loadingOlder: true, error: undefined };
     try {
       const page = unwrap(await rpc<Result<ThreadMessages>>('getThread', { threadKey, cursor: entry.cursor }));
@@ -152,6 +221,12 @@
         cursor: data.cursor,
         hasNextPage: data.hasNextPage,
       };
+      await tick();
+      if (messagesEl) {
+        messagesEl.scrollTop = messagesEl.scrollHeight - previousScrollHeight + previousScrollTop;
+        const scroll = readScrollState();
+        if (scroll) threadCache[key] = { ...threadCache[key], ...scroll };
+      }
     } catch (error) {
       const latest = threadCache[key];
       if (!latest) return;
@@ -193,10 +268,10 @@
     {#if !selected}<p class="empty">Select a thread</p>
     {:else}
       <div class="top"><strong>{selected.title}</strong></div>
-      {#if activeMessages?.state === 'loading-initial'}<p class="empty">Loading messages…</p>
-      {:else if activeMessages?.state === 'error'}<p class="error">{activeMessages.error}</p>
-      {:else if activeMessages?.data}
-        <div class="messages">
+      <div class="messages" bind:this={messagesEl} onscroll={handleMessagesScroll}>
+        {#if activeMessages?.state === 'loading-initial'}<p class="empty">Loading messages…</p>
+        {:else if activeMessages?.state === 'error'}<p class="error">{activeMessages.error}</p>
+        {:else if activeMessages?.data}
           {#if activeMessages.hasNextPage}<button class="load" disabled={activeMessages.loadingOlder} onclick={loadOlder}>{activeMessages.loadingOlder ? 'Loading older…' : 'Load older'}</button>{/if}
           {#if activeMessages.error}<p class="error">{activeMessages.error}</p>{/if}
           {#each activeMessages.data.items as message, index (message.id)}
@@ -215,8 +290,8 @@
               </div>
             </div>
           {/each}
-        </div>
-      {/if}
+        {/if}
+      </div>
     {/if}
   </section>
 </main>
