@@ -82,7 +82,6 @@
 
 <main class="app">
   <aside class="sidebar">
-    <div class="top"><strong>Instagram DMs</strong></div>
     {#if inbox.state === 'loading'}<p class="empty">Loading chats…</p>
     {:else if inbox.state === 'error'}
       <p class="error">{inbox.message}</p>
