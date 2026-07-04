@@ -64,6 +64,8 @@ type ThreadResponse = {
 type ReelMediaResponse = {
     data?: {
         xdt_shortcode_media?: {
+            id?: unknown;
+            pk?: unknown;
             video_url?: unknown;
             video_duration?: unknown;
             owner?: {
@@ -71,6 +73,22 @@ type ReelMediaResponse = {
             };
         };
     };
+};
+
+type ReelInfoResponse = {
+    items?: {
+        pk?: unknown;
+        code?: unknown;
+        video_duration?: unknown;
+        video_versions?: {
+            url?: unknown;
+            height?: unknown;
+            bandwidth?: unknown;
+        }[];
+        user?: {
+            username?: unknown;
+        };
+    }[];
 };
 
 async function graphql(
@@ -149,6 +167,17 @@ function reelShortcode(url: string): string | undefined {
     return /\/reel\/([^/?#]+)/.exec(url)?.[1];
 }
 
+function reelMediaId(xma: Record<string, unknown>, targetUrl: string): string | undefined {
+    if (typeof xma.target_id === "string" && xma.target_id.length > 0)
+        return xma.target_id;
+    try {
+        const id = new URL(targetUrl).searchParams.get("id")?.split("_")[0];
+        return id && /^\d+$/.test(id) ? id : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
 function parseMessage(value: unknown): Message | undefined {
     if (typeof value !== "object" || value === null || Array.isArray(value))
         return undefined;
@@ -223,6 +252,7 @@ function parseMessage(value: unknown): Message | undefined {
             senderId: sender,
             ts,
             shortcode,
+            mediaId: reelMediaId(xma, targetUrl),
             targetUrl,
             thumbUrl:
                 typeof xma.preview_image === "object" &&
@@ -527,6 +557,22 @@ function reelMediaRequest(payload: ReelPayload): GraphqlRequest {
     };
 }
 
+async function fetchReelInfo(mediaId: string): Promise<unknown> {
+    const response = await fetch(
+        `https://www.instagram.com/api/v1/media/${mediaId}/info/`,
+        {
+            credentials: "include",
+            headers: {
+                "x-ig-app-id": "936619743392459",
+                "x-asbd-id": "359341",
+            },
+        },
+    );
+    if (!response.ok)
+        throw new Error(`Instagram reel info failed with ${response.status}`);
+    return response.json() as Promise<unknown>;
+}
+
 async function sendGraphqlRequest(
     request: GraphqlRequest,
     tokens?: Tokens,
@@ -576,13 +622,50 @@ function parseThreadResponse(json: unknown, viewerId: string): ThreadMessages {
 function parseReelMediaResponse(
     json: unknown,
     payload: ReelPayload,
-): ReelMedia {
+): ReelMedia | { mediaId: string } {
     const media = (json as ReelMediaResponse).data?.xdt_shortcode_media;
     const videoUrl = media?.video_url;
-    if (typeof videoUrl !== "string" || videoUrl.length === 0)
-        throw new Error("Instagram reel video URL was not returned");
     const duration = media?.video_duration;
     const username = media?.owner?.username;
+    if (typeof videoUrl !== "string" || videoUrl.length === 0) {
+        const mediaId =
+            typeof media?.pk === "string" && media.pk.length > 0
+                ? media.pk
+                : typeof media?.id === "string" && media.id.length > 0
+                  ? media.id.split("_")[0]
+                  : undefined;
+        if (mediaId) return { mediaId };
+        throw new Error("Instagram reel video URL was not returned");
+    }
+    return {
+        shortcode: payload.shortcode,
+        videoUrl,
+        durationSec: typeof duration === "number" ? duration : 0,
+        owner:
+            typeof username === "string" && username.length > 0 ? username : "",
+    };
+}
+
+function parseReelInfoResponse(json: unknown, payload: ReelPayload): ReelMedia {
+    const item = (json as ReelInfoResponse).items?.[0];
+    const versions = Array.isArray(item?.video_versions)
+        ? item.video_versions
+        : [];
+    const bestVersion = versions
+        .filter((version) => typeof version.url === "string")
+        .sort((a, b) => {
+            const aHeight = typeof a.height === "number" ? a.height : 0;
+            const bHeight = typeof b.height === "number" ? b.height : 0;
+            if (aHeight !== bHeight) return bHeight - aHeight;
+            const aBandwidth = typeof a.bandwidth === "number" ? a.bandwidth : 0;
+            const bBandwidth = typeof b.bandwidth === "number" ? b.bandwidth : 0;
+            return bBandwidth - aBandwidth;
+        })[0];
+    const videoUrl = bestVersion?.url;
+    if (typeof videoUrl !== "string" || videoUrl.length === 0)
+        throw new Error("Instagram reel video URL was not returned");
+    const duration = item?.video_duration;
+    const username = item?.user?.username;
     return {
         shortcode: payload.shortcode,
         videoUrl,
@@ -623,10 +706,25 @@ export default defineContentScript({
         onMessage("getReelMedia", async ({ data }) => {
             try {
                 const payload = data as ReelPayload;
+                if (payload.mediaId)
+                    return ok(
+                        parseReelInfoResponse(
+                            await fetchReelInfo(payload.mediaId),
+                            payload,
+                        ),
+                    );
                 const json = await sendGraphqlRequest(
                     reelMediaRequest(payload),
                 );
-                return ok(parseReelMediaResponse(json, payload));
+                const parsed = parseReelMediaResponse(json, payload);
+                if ("mediaId" in parsed)
+                    return ok(
+                        parseReelInfoResponse(
+                            await fetchReelInfo(parsed.mediaId),
+                            payload,
+                        ),
+                    );
+                return ok(parsed);
             } catch (error) {
                 return fail(error);
             }

@@ -23,6 +23,7 @@ export type Message =
           senderId: string;
           ts: number;
           shortcode: string;
+          mediaId?: string;
           targetUrl: string;
           thumbUrl: string;
           author: string;
@@ -66,7 +67,7 @@ export type RpcMap = {
         threadKey: string;
         cursor?: string;
     }) => Result<ThreadMessages>;
-    getReelMedia: (payload: { shortcode: string }) => Result<ReelMedia>;
+    getReelMedia: (payload: { shortcode: string; mediaId?: string }) => Result<ReelMedia>;
     getPins: () => { pinned: string[] };
     togglePin: (payload: { threadKey: string }) => { pinned: string[] };
 };

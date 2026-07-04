@@ -89,9 +89,9 @@
     } catch (error) { messages = { state: 'error', message: error instanceof Error ? error.message : String(error) }; }
   }
 
-  async function openReel(shortcode: string) {
+  async function openReel(shortcode: string, mediaId?: string) {
     reel = { state: 'loading', shortcode };
-    try { reel = { state: 'ready', shortcode, data: unwrap(await rpc<Result<ReelMedia>>('getReelMedia', { shortcode })) }; }
+    try { reel = { state: 'ready', shortcode, data: unwrap(await rpc<Result<ReelMedia>>('getReelMedia', mediaId ? { shortcode, mediaId } : { shortcode })) }; }
     catch (error) { reel = { state: 'error', shortcode, message: error instanceof Error ? error.message : String(error) }; }
   }
 
@@ -134,7 +134,7 @@
                 <div class="meta">{new Date(message.ts).toLocaleString()}</div>
                 {#if message.kind === 'text'}<span class="message-text">{message.text}</span>
                 {:else if message.kind === 'reaction_log'}<span class="message-text">{message.fragment}</span>
-                {:else if message.kind === 'reel_share'}<button class="reel" onclick={() => openReel(message.shortcode)}><img class="avatar" src={message.thumbUrl} alt="" /> Open reel by {message.author}</button>
+                {:else if message.kind === 'reel_share'}<button class="reel" onclick={() => openReel(message.shortcode, message.mediaId)}><img class="avatar" src={message.thumbUrl} alt="" /> Open reel by {message.author}</button>
                 {:else}<em>Unsupported: {message.contentType}</em>{/if}
               </div>
             </div>
