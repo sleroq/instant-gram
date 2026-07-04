@@ -3,18 +3,28 @@
     color: #171717;
     background: #fafafa;
 }
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+}
 body {
     margin: 0;
+    overflow: hidden;
 }
 .app {
     height: 100vh;
     display: grid;
     grid-template-columns: 340px 1fr;
     background: #fff;
+    overflow: hidden;
 }
 .sidebar {
     border-right: 1px solid #ddd;
-    overflow: auto;
+    min-height: 0;
+    min-width: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
 }
 .top {
     position: sticky;
@@ -23,6 +33,13 @@ body {
     padding: 14px;
     border-bottom: 1px solid #eee;
     z-index: 1;
+    min-width: 0;
+}
+.top strong {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 .thread {
     display: grid;
@@ -35,6 +52,7 @@ body {
     background: #fff;
     text-align: left;
     cursor: pointer;
+    min-width: 0;
 }
 .thread:hover,
 .thread.selected {
@@ -48,9 +66,17 @@ body {
     background: #ddd;
 }
 .title {
+    display: block;
     font-weight: 700;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.thread-text {
+    min-width: 0;
 }
 .snippet {
+    display: block;
     font-size: 13px;
     color: #666;
     white-space: nowrap;
@@ -67,20 +93,26 @@ body {
     display: flex;
     flex-direction: column;
     min-width: 0;
+    min-height: 0;
+    overflow: hidden;
 }
 .messages {
     flex: 1;
+    min-height: 0;
     overflow: auto;
     padding: 16px;
     display: flex;
     flex-direction: column;
     gap: 8px;
+    overflow-x: hidden;
 }
 .bubble {
     max-width: 620px;
+    min-width: 0;
     padding: 10px 12px;
     border-radius: 14px;
     background: #eee;
+    overflow: hidden;
 }
 .mine {
     align-self: flex-end;
@@ -90,6 +122,9 @@ body {
     font-size: 12px;
     color: #666;
     margin-bottom: 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 .reel {
     border: 0;
@@ -98,6 +133,16 @@ body {
     border-radius: 10px;
     padding: 8px 10px;
     cursor: pointer;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.message-text {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 .actions {
     padding: 12px;

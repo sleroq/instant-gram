@@ -89,7 +89,7 @@
       {#each sortedThreads as thread (thread.key)}
         <div class:selected={selected?.key === thread.key} class="thread" role="button" tabindex="0" onclick={() => selectThread(thread)} onkeydown={(event) => event.key === 'Enter' && selectThread(thread)}>
           <img class="avatar" src={thread.users[0]?.picUrl ?? ''} alt="" />
-          <span><span class="title">{thread.title}</span><br /><span class="snippet">{snippet(thread.lastMessage)}</span></span>
+          <span class="thread-text"><span class="title">{thread.title}</span><br /><span class="snippet">{snippet(thread.lastMessage)}</span></span>
           <button class="pin" title="Pin" onclick={(event) => togglePin(thread.key, event)}>{pinned.includes(thread.key) || thread.serverIsPin ? '★' : '☆'}</button>
         </div>
       {/each}
@@ -108,8 +108,8 @@
           {#each messages.data.items as message (message.id)}
             <div class:mine={message.kind !== 'reaction_log' && message.senderId !== selected.users[0]?.id} class="bubble">
               <div class="meta">{new Date(message.ts).toLocaleString()}</div>
-              {#if message.kind === 'text'}{message.text}
-              {:else if message.kind === 'reaction_log'}{message.fragment}
+              {#if message.kind === 'text'}<span class="message-text">{message.text}</span>
+              {:else if message.kind === 'reaction_log'}<span class="message-text">{message.fragment}</span>
               {:else if message.kind === 'reel_share'}<button class="reel" onclick={() => openReel(message.shortcode)}><img class="avatar" src={message.thumbUrl} alt="" /> Open reel by {message.author}</button>
               {:else}<em>Unsupported: {message.contentType}</em>{/if}
             </div>
