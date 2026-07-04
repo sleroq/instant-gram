@@ -2,25 +2,14 @@
   import '../../lib/bridge';
   import { sendMessage } from 'webext-bridge/popup';
   import { tick } from 'svelte';
-  import type { Message, Page, ReelMedia, Result, Thread, ThreadMessages } from '../../lib/domain';
+  import type { Page, ReelMedia, Result, Thread, ThreadMessages } from '../../lib/domain';
+  import MessageList from './MessageList.svelte';
+  import ThreadList from './ThreadList.svelte';
+  import type { ThreadCacheEntry, View } from './types';
 
   type JsonPayload = null | boolean | number | string | JsonPayload[] | { [key: string]: JsonPayload };
-
-  type View<T> = { state: 'idle' } | { state: 'loading' } | { state: 'ready'; data: T } | { state: 'error'; message: string };
-  type ThreadCacheEntry = {
-    state: 'idle' | 'loading-initial' | 'ready' | 'error';
-    data?: ThreadMessages;
-    error?: string;
-    loadingOlder: boolean;
-    cursor?: string;
-    hasNextPage: boolean;
-    requestId?: number;
-    scrollTop: number;
-    scrollHeight: number;
-    clientHeight: number;
-    isAtBottom: boolean;
-    didInitialScroll: boolean;
-  };
+  const TOP_PRELOAD_BUFFER_PX = 200;
+  const BOTTOM_SCROLL_MS = 180;
 
   let inbox = $state<View<Page<Thread>>>({ state: 'loading' });
   let selected = $state<Thread | undefined>();
@@ -29,6 +18,7 @@
   let pinned = $state<string[]>([]);
   let reel = $state<View<ReelMedia> & { shortcode?: string }>({ state: 'idle' });
   let messagesEl = $state<HTMLDivElement>();
+  let jumpingToBottom = false;
   let nextThreadRequestId = 0;
 
   const sortedThreads = $derived(inbox.state === 'ready' ? [...inbox.data.items].sort((a, b) => {
@@ -39,37 +29,9 @@
   }) : []);
   const activeMessages = $derived(selectedKey ? threadCache[selectedKey] : undefined);
 
-  function snippet(message?: Message): string {
-    if (!message) return '';
-    switch (message.kind) {
-      case 'text': return message.text;
-      case 'reaction_log': return message.fragment;
-      case 'reel_share': return `Reel from ${message.author}`;
-      case 'unsupported': return message.contentType;
-    }
-  }
-
   function unwrap<T>(result: Result<T>): T {
     if (!result.ok) throw new Error(result.error.message);
     return result.value;
-  }
-
-  function senderId(message: Message | undefined): string | undefined {
-    return message && 'senderId' in message && message.senderId.length > 0 ? message.senderId : undefined;
-  }
-
-  function isMine(message: Message, viewerId: string): boolean {
-    return senderId(message) === viewerId;
-  }
-
-  function senderAvatar(message: Message, thread?: Thread): string | undefined {
-    const id = senderId(message);
-    return id ? thread?.users.find(user => user.id === id)?.picUrl ?? undefined : undefined;
-  }
-
-  function showSenderAvatar(message: Message, next: Message | undefined, data: ThreadMessages): boolean {
-    const id = senderId(message);
-    return Boolean(id && id !== data.viewerId && id !== senderId(next));
   }
 
   async function rpc<T>(name: string, payload: JsonPayload): Promise<T> {
@@ -130,6 +92,28 @@
     };
   }
 
+  function firstVisibleMessageAnchor(): { id: string; offset: number } | undefined {
+    if (!messagesEl) return undefined;
+    const containerTop = messagesEl.getBoundingClientRect().top;
+    const rows = messagesEl.querySelectorAll<HTMLElement>('.message-row[data-message-id]');
+    for (const row of rows) {
+      const rect = row.getBoundingClientRect();
+      if (rect.bottom >= containerTop) {
+        const id = row.dataset.messageId;
+        return id ? { id, offset: rect.top - containerTop } : undefined;
+      }
+    }
+    return undefined;
+  }
+
+  function restoreMessageAnchor(anchor: { id: string; offset: number }) {
+    if (!messagesEl) return;
+    const row = messagesEl.querySelector<HTMLElement>(`.message-row[data-message-id="${CSS.escape(anchor.id)}"]`);
+    if (!row) return;
+    const containerTop = messagesEl.getBoundingClientRect().top;
+    messagesEl.scrollTop += row.getBoundingClientRect().top - containerTop - anchor.offset;
+  }
+
   function saveActiveScroll() {
     if (!selectedKey) return;
     const scroll = readScrollState();
@@ -140,6 +124,14 @@
 
   function handleMessagesScroll() {
     saveActiveScroll();
+    if (jumpingToBottom) return;
+    void maybePreloadOlder();
+  }
+
+  async function maybePreloadOlder() {
+    if (!messagesEl) return;
+    if (messagesEl.scrollTop > TOP_PRELOAD_BUFFER_PX) return;
+    await loadOlder();
   }
 
   async function restoreThreadScroll(key: string) {
@@ -158,6 +150,45 @@
     messagesEl.scrollTop = messagesEl.scrollHeight;
     const scroll = readScrollState();
     if (scroll) threadCache[key] = { ...entry, ...scroll, didInitialScroll: true };
+  }
+
+  async function scrollActiveThreadToBottom() {
+    if (!selectedKey || !messagesEl) return;
+    const key = selectedKey;
+    jumpingToBottom = true;
+    await animateScrollToBottom();
+    jumpingToBottom = false;
+    if (selectedKey !== key) return;
+    const entry = threadCache[key];
+    const scroll = readScrollState();
+    if (entry && scroll) threadCache[key] = { ...entry, ...scroll };
+  }
+
+  function animateScrollToBottom(): Promise<void> {
+    return new Promise(resolve => {
+      if (!messagesEl) {
+        resolve();
+        return;
+      }
+      const startTop = messagesEl.scrollTop;
+      const startTime = performance.now();
+      const check = () => {
+        if (!messagesEl) {
+          resolve();
+          return;
+        }
+        const targetTop = messagesEl.scrollHeight;
+        const progress = Math.min(1, (performance.now() - startTime) / BOTTOM_SCROLL_MS);
+        messagesEl.scrollTop = startTop + (targetTop - startTop) * progress;
+        if (progress === 1) {
+          messagesEl.scrollTop = messagesEl.scrollHeight;
+          resolve();
+          return;
+        }
+        requestAnimationFrame(check);
+      };
+      requestAnimationFrame(check);
+    });
   }
 
   async function selectThread(thread: Thread) {
@@ -204,9 +235,8 @@
     const key = selectedKey;
     const threadKey = selected.cursor ?? selected.key;
     const entry = threadCache[key];
-    if (!entry?.data || !entry.cursor || entry.loadingOlder) return;
-    const previousScrollHeight = messagesEl?.scrollHeight ?? 0;
-    const previousScrollTop = messagesEl?.scrollTop ?? 0;
+    if (!entry?.data || !entry.cursor || !entry.hasNextPage || entry.loadingOlder) return;
+    const anchor = firstVisibleMessageAnchor();
     threadCache[key] = { ...entry, loadingOlder: true, error: undefined };
     try {
       const page = unwrap(await rpc<Result<ThreadMessages>>('getThread', { threadKey, cursor: entry.cursor }));
@@ -223,10 +253,11 @@
       };
       await tick();
       if (messagesEl) {
-        messagesEl.scrollTop = messagesEl.scrollHeight - previousScrollHeight + previousScrollTop;
+        if (anchor) restoreMessageAnchor(anchor);
         const scroll = readScrollState();
         if (scroll) threadCache[key] = { ...threadCache[key], ...scroll };
       }
+      if (selectedKey === key) void maybePreloadOlder();
     } catch (error) {
       const latest = threadCache[key];
       if (!latest) return;
@@ -249,51 +280,8 @@
 </script>
 
 <main class="app">
-  <aside class="sidebar">
-    {#if inbox.state === 'loading'}<p class="empty">Loading chats…</p>
-    {:else if inbox.state === 'error'}
-      <p class="error">{inbox.message}</p>
-    {:else if inbox.state === 'ready'}
-      {#each sortedThreads as thread (thread.key)}
-        <div class:selected={selected?.key === thread.key} class="thread" role="button" tabindex="0" onclick={() => selectThread(thread)} onkeydown={(event) => event.key === 'Enter' && selectThread(thread)}>
-          <img class="avatar" src={thread.users[0]?.picUrl ?? ''} alt="" />
-          <span class="thread-text"><span class="title">{thread.title}</span><br /><span class="snippet">{snippet(thread.lastMessage)}</span></span>
-          <button class="pin" title="Pin" onclick={(event) => togglePin(thread.key, event)}>{pinned.includes(thread.key) || thread.serverIsPin ? '★' : '☆'}</button>
-        </div>
-      {/each}
-      {#if inbox.data.hasNextPage}<button class="load" onclick={() => loadInbox(inbox.state === 'ready' ? inbox.data.cursor : undefined)}>Load more</button>{/if}
-    {/if}
-  </aside>
-  <section class="main">
-    {#if !selected}<p class="empty">Select a thread</p>
-    {:else}
-      <div class="top"><strong>{selected.title}</strong></div>
-      <div class="messages" bind:this={messagesEl} onscroll={handleMessagesScroll}>
-        {#if activeMessages?.state === 'loading-initial'}<p class="empty">Loading messages…</p>
-        {:else if activeMessages?.state === 'error'}<p class="error">{activeMessages.error}</p>
-        {:else if activeMessages?.data}
-          {#if activeMessages.hasNextPage}<button class="load" disabled={activeMessages.loadingOlder} onclick={loadOlder}>{activeMessages.loadingOlder ? 'Loading older…' : 'Load older'}</button>{/if}
-          {#if activeMessages.error}<p class="error">{activeMessages.error}</p>{/if}
-          {#each activeMessages.data.items as message, index (message.id)}
-            <div class:mine={isMine(message, activeMessages.data.viewerId)} class="message-row">
-              <div class="sender-avatar-slot">
-                {#if showSenderAvatar(message, activeMessages.data.items[index + 1], activeMessages.data)}
-                  <img class="sender-avatar" src={senderAvatar(message, activeMessages.data.thread) ?? ''} alt="" />
-                {/if}
-              </div>
-              <div class="bubble">
-                <div class="meta">{new Date(message.ts).toLocaleString()}</div>
-                {#if message.kind === 'text'}<span class="message-text">{message.text}</span>
-                {:else if message.kind === 'reaction_log'}<span class="message-text">{message.fragment}</span>
-                {:else if message.kind === 'reel_share'}<button class="reel" onclick={() => openReel(message.shortcode, message.mediaId)}><img class="avatar" src={message.thumbUrl} alt="" /> Open reel by {message.author}</button>
-                {:else}<em>Unsupported: {message.contentType}</em>{/if}
-              </div>
-            </div>
-          {/each}
-        {/if}
-      </div>
-    {/if}
-  </section>
+  <ThreadList {inbox} threads={sortedThreads} {selected} {pinned} onselect={selectThread} ontogglepin={togglePin} onloadmore={() => loadInbox(inbox.state === 'ready' ? inbox.data.cursor : undefined)} />
+  <MessageList {selected} entry={activeMessages} bind:messagesEl onscroll={handleMessagesScroll} onopenreel={openReel} onscrollbottom={scrollActiveThreadToBottom} />
 </main>
 
 {#if reel.state !== 'idle'}

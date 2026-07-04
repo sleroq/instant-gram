@@ -21,14 +21,14 @@ Context:
 - Automated type checks are necessary but not sufficient for scroll behavior.
 
 Checklist:
-- [ ] Run `npm run check` and fix any type/Svelte errors introduced by the refactor.
-- [ ] Manually verify switching between at least two chats preserves each chat scroll position.
-- [ ] Manually verify returning to a cached chat does not refetch its initial message page.
+- [x] Run `npm run check` and fix any type/Svelte errors introduced by the refactor.
+- [x] Manually verify switching between at least two chats preserves each chat scroll position.
+- [x] Manually verify returning to a cached chat does not refetch its initial message page.
 - [ ] Manually verify older-history preload starts before reaching the top.
-- [ ] Manually verify prepending older messages keeps the same visible message anchored.
-- [ ] Manually verify initial open of a thread scrolls to bottom once.
+- [x] Manually verify prepending older messages keeps the same visible message anchored.
+- [x] Manually verify initial open of a thread scrolls to bottom once.
 - [ ] Manually verify the down-arrow appears away from bottom, scrolls to bottom, and then hides.
-- [ ] Inspect the implementation to confirm loading older messages never replaces the whole message list with a loading screen.
+- [x] Inspect the implementation to confirm loading older messages never replaces the whole message list with a loading screen.
 
 Done criteria:
 - All manual checks pass in the extension UI.

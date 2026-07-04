@@ -96,26 +96,61 @@ body {
     min-height: 0;
     overflow: hidden;
 }
+.message-panel {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+}
 .messages {
     flex: 1;
     min-height: 0;
     overflow: auto;
+    overflow-anchor: none;
     padding: 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
+    position: relative;
     overflow-x: hidden;
 }
+.message-list-spacer {
+    position: relative;
+    width: 100%;
+}
+.virtual-message-row {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+}
+.history-loader {
+    width: max-content;
+    margin: 8px auto 16px;
+    color: #777;
+    font-size: 13px;
+}
+.jump-bottom {
+    position: absolute;
+    right: 20px;
+    bottom: 20px;
+    width: 40px;
+    height: 40px;
+    border: 1px solid #ddd;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+    cursor: pointer;
+    font-size: 22px;
+    line-height: 1;
+}
 .message-row {
-    flex-shrink: 0;
     display: flex;
     align-items: flex-end;
     gap: 8px;
     max-width: calc(620px + 32px);
     min-width: 0;
+    padding-bottom: 8px;
 }
 .message-row.mine {
-    align-self: flex-end;
+    margin-left: auto;
     flex-direction: row-reverse;
 }
 .bubble {

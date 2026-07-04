@@ -8,10 +8,11 @@
         "check": "svelte-check --tsconfig ./tsconfig.json && tsc --noEmit"
     },
     "dependencies": {
+        "@tanstack/svelte-virtual": "^3.13.31",
         "@wxt-dev/module-svelte": "latest",
         "svelte": "latest",
-        "webextension-polyfill": "latest",
         "webext-bridge": "latest",
+        "webextension-polyfill": "latest",
         "wxt": "latest"
     },
     "devDependencies": {
