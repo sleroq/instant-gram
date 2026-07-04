@@ -7,8 +7,9 @@ priority: normal
 tags:
     - ux
     - chat
+    - reels
 created_at: 2026-07-04T16:59:26Z
-updated_at: 2026-07-04T16:59:26Z
+updated_at: 2026-07-04T17:42:52Z
 ---
 
 Consolidate related message rendering UX improvements into one task.
@@ -30,3 +31,11 @@ Improve chat history readability by reducing repeated metadata while preserving 
 - [ ] First message in each non-me sender group displays that sender's author name.
 - [ ] Sender grouping handles multi-user chats correctly, including transitions between different non-me authors.
 - [ ] Existing message rendering remains visually stable for one-on-one chats.
+
+
+
+## Additional shared reel requirement
+- In chat history, shared reels should render the reel preview banner instead of a large author profile image.
+
+## Additional acceptance criterion
+- [ ] Shared reel messages display the reel preview/banner image in history rather than emphasizing the reel author's avatar.

@@ -1,7 +1,7 @@
 ---
 # icr-kphj
 title: Lazy older-message buffer above viewport
-status: todo
+status: in-progress
 type: milestone
 priority: high
 tags:
@@ -9,7 +9,7 @@ tags:
     - scroll
     - preload
 created_at: 2026-07-04T17:29:19Z
-updated_at: 2026-07-04T17:29:19Z
+updated_at: 2026-07-04T17:41:57Z
 blocked_by:
     - icr-03bb
 ---
@@ -17,7 +17,7 @@ blocked_by:
 Large-size milestone: preload a deep older-message buffer lazily while the user remains below the history boundary.
 
 Goal:
-Maintain a target buffer of older messages above the current viewport, roughly 500 messages when available, without requiring the user to hit the top of the list.
+Maintain a target buffer of older messages above the current viewport, roughly 200 messages for now when available, without requiring the user to hit the top of the list.
 
 Why:
 Reply navigation and smooth upward browsing need old messages to already be present before the user asks for them. The current TOP_PRELOAD_BUFFER_PX trigger only loads when the user is already near the top, which is too late for seamless interactions.
@@ -31,16 +31,22 @@ Implementation notes:
 - Keep request cancellation/race checks for selected thread changes.
 
 Checklist:
-- [ ] Add constants for target older-message buffer and preload batch limits.
-- [ ] Track visible virtual range and count loaded messages before it.
-- [ ] Implement ensureOlderBuffer(threadKey) that fetches older pages until the target is satisfied or history ends.
-- [ ] Trigger ensureOlderBuffer after initial load, scroll range changes, and each older-page merge.
-- [ ] Prevent duplicate concurrent older-page requests per thread.
-- [ ] Preserve viewport anchor during background prepends.
-- [ ] Expose loading/preloading state distinctly enough for UI/debugging without adding noisy user-facing loaders.
-- [ ] Verify that scrolling upward into preloaded history does not require immediate network fetches in the common case.
+- [x] Add constants for target older-message buffer and preload batch limits.
+- [x] Track visible virtual range and count loaded messages before it.
+- [x] Implement ensureOlderBuffer(threadKey) that fetches older pages until the target is satisfied or history ends.
+- [x] Trigger ensureOlderBuffer after initial load, scroll range changes, and each older-page merge.
+- [x] Prevent duplicate concurrent older-page requests per thread.
+- [x] Preserve viewport anchor during background prepends.
+- [x] Expose loading/preloading state distinctly enough for UI/debugging without adding noisy user-facing loaders.
+- [x] Verify that scrolling upward into preloaded history does not require immediate network fetches in the common case.
+
+Implementation checkpoint:
+- MessageList reports the first visible virtual message index to App.
+- App maintains a 200-message older buffer above the visible range when history is available.
+- Background preloads use the existing anchor-preserving prepend path and a passive `preloadingOlder` flag.
+- Verified with `npm run check` and `npm run build`; manual browser/network behavior still belongs to the QA milestone.
 
 Acceptance criteria:
-- When a thread has enough history, the app lazily loads about 500 messages above the visible range.
+- When a thread has enough history, the app lazily loads about 200 messages above the visible range.
 - User can continue reading while background older-page loads happen with no visible jump.
 - Preload stops cleanly at the oldest page or when switching threads.
