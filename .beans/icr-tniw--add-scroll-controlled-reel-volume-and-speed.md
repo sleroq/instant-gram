@@ -1,0 +1,22 @@
+---
+# icr-tniw
+title: Add scroll-controlled reel volume and speed
+status: todo
+type: feature
+tags:
+    - player
+    - reels
+    - ux
+created_at: 2026-07-04T16:40:02Z
+updated_at: 2026-07-04T16:40:02Z
+parent: icr-0tpu
+---
+
+Add scroll-controlled buttons/controls for audio volume and playback speed in the reel player.
+
+Checklist:
+- [ ] Design volume and playback-speed controls that support wheel/scroll adjustment.
+- [ ] Wire volume changes to the video element and update mute state consistently.
+- [ ] Wire playback-rate changes to the video element with sensible bounds/steps.
+- [ ] Show current volume and speed values in the UI.
+- [ ] Verify scroll interaction does not accidentally scroll the modal/page.
