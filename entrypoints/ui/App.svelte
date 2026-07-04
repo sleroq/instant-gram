@@ -6,12 +6,23 @@
   type JsonPayload = null | boolean | number | string | JsonPayload[] | { [key: string]: JsonPayload };
 
   type View<T> = { state: 'idle' } | { state: 'loading' } | { state: 'ready'; data: T } | { state: 'error'; message: string };
+  type ThreadCacheEntry = {
+    state: 'idle' | 'loading-initial' | 'ready' | 'error';
+    data?: ThreadMessages;
+    error?: string;
+    loadingOlder: boolean;
+    cursor?: string;
+    hasNextPage: boolean;
+    requestId?: number;
+  };
 
   let inbox = $state<View<Page<Thread>>>({ state: 'loading' });
   let selected = $state<Thread | undefined>();
-  let messages = $state<View<ThreadMessages>>({ state: 'idle' });
+  let selectedKey = $state<string | undefined>();
+  let threadCache = $state<Record<string, ThreadCacheEntry>>({});
   let pinned = $state<string[]>([]);
   let reel = $state<View<ReelMedia> & { shortcode?: string }>({ state: 'idle' });
+  let nextThreadRequestId = 0;
 
   const sortedThreads = $derived(inbox.state === 'ready' ? [...inbox.data.items].sort((a, b) => {
     const ap = pinned.indexOf(a.key); const bp = pinned.indexOf(b.key);
@@ -19,6 +30,7 @@
     if (a.serverIsPin !== b.serverIsPin) return a.serverIsPin ? -1 : 1;
     return b.lastActivityMs - a.lastActivityMs;
   }) : []);
+  const activeMessages = $derived(selectedKey ? threadCache[selectedKey] : undefined);
 
   function snippet(message?: Message): string {
     if (!message) return '';
@@ -72,21 +84,84 @@
     pinned = (await rpc<{ pinned: string[] }>('togglePin', { threadKey })).pinned;
   }
 
+  function emptyThreadEntry(): ThreadCacheEntry {
+    return { state: 'idle', loadingOlder: false, hasNextPage: false };
+  }
+
+  function cacheEntry(key: string): ThreadCacheEntry {
+    return threadCache[key] ?? (threadCache[key] = emptyThreadEntry());
+  }
+
+  function mergeOlderMessages(current: ThreadMessages, page: ThreadMessages): ThreadMessages {
+    const existingIds = new Set(current.items.map(message => message.id));
+    const olderItems = page.items.filter(message => !existingIds.has(message.id));
+    return {
+      ...page,
+      thread: current.thread ?? page.thread,
+      viewerId: current.viewerId,
+      items: [...olderItems, ...current.items]
+    };
+  }
+
   async function selectThread(thread: Thread) {
-    selected = thread; messages = { state: 'loading' };
-    try { messages = { state: 'ready', data: unwrap(await rpc<Result<ThreadMessages>>('getThread', { threadKey: thread.cursor ?? thread.key })) }; }
-    catch (error) { messages = { state: 'error', message: error instanceof Error ? error.message : String(error) }; }
+    selected = thread;
+    selectedKey = thread.key;
+    const entry = cacheEntry(thread.key);
+    if (entry.data) return;
+
+    const requestId = ++nextThreadRequestId;
+    threadCache[thread.key] = { ...entry, state: 'loading-initial', error: undefined, requestId };
+    try {
+      const data = unwrap(await rpc<Result<ThreadMessages>>('getThread', { threadKey: thread.cursor ?? thread.key }));
+      if (threadCache[thread.key]?.requestId !== requestId) return;
+      threadCache[thread.key] = {
+        state: 'ready',
+        data,
+        loadingOlder: false,
+        cursor: data.cursor,
+        hasNextPage: data.hasNextPage,
+      };
+    } catch (error) {
+      if (threadCache[thread.key]?.requestId !== requestId) return;
+      threadCache[thread.key] = {
+        ...threadCache[thread.key],
+        state: 'error',
+        error: error instanceof Error ? error.message : String(error),
+        loadingOlder: false,
+      };
+    }
   }
 
   async function loadOlder() {
-    if (!selected || messages.state !== 'ready' || !messages.data.cursor) return;
-    const current = messages.data;
-    messages = { state: 'loading' };
+    if (!selected || !selectedKey) return;
+    const key = selectedKey;
+    const threadKey = selected.cursor ?? selected.key;
+    const entry = threadCache[key];
+    if (!entry?.data || !entry.cursor || entry.loadingOlder) return;
+    threadCache[key] = { ...entry, loadingOlder: true, error: undefined };
     try {
-      const threadKey = selected.cursor ?? selected.key;
-      const page = unwrap(await rpc<Result<ThreadMessages>>('getThread', current.cursor ? { threadKey, cursor: current.cursor } : { threadKey }));
-      messages = { state: 'ready', data: { ...page, viewerId: current.viewerId, items: [...page.items, ...current.items] } };
-    } catch (error) { messages = { state: 'error', message: error instanceof Error ? error.message : String(error) }; }
+      const page = unwrap(await rpc<Result<ThreadMessages>>('getThread', { threadKey, cursor: entry.cursor }));
+      const latest = threadCache[key];
+      if (!latest?.data) return;
+      const data = mergeOlderMessages(latest.data, page);
+      threadCache[key] = {
+        ...latest,
+        state: 'ready',
+        data,
+        loadingOlder: false,
+        cursor: data.cursor,
+        hasNextPage: data.hasNextPage,
+      };
+    } catch (error) {
+      const latest = threadCache[key];
+      if (!latest) return;
+      threadCache[key] = {
+        ...latest,
+        state: latest.data ? 'ready' : 'error',
+        error: error instanceof Error ? error.message : String(error),
+        loadingOlder: false,
+      };
+    }
   }
 
   async function openReel(shortcode: string, mediaId?: string) {
@@ -118,16 +193,17 @@
     {#if !selected}<p class="empty">Select a thread</p>
     {:else}
       <div class="top"><strong>{selected.title}</strong></div>
-      {#if messages.state === 'loading'}<p class="empty">Loading messages…</p>
-      {:else if messages.state === 'error'}<p class="error">{messages.message}</p>
-      {:else if messages.state === 'ready'}
+      {#if activeMessages?.state === 'loading-initial'}<p class="empty">Loading messages…</p>
+      {:else if activeMessages?.state === 'error'}<p class="error">{activeMessages.error}</p>
+      {:else if activeMessages?.data}
         <div class="messages">
-          {#if messages.data.hasNextPage}<button class="load" onclick={loadOlder}>Load older</button>{/if}
-          {#each messages.data.items as message, index (message.id)}
-            <div class:mine={isMine(message, messages.data.viewerId)} class="message-row">
+          {#if activeMessages.hasNextPage}<button class="load" disabled={activeMessages.loadingOlder} onclick={loadOlder}>{activeMessages.loadingOlder ? 'Loading older…' : 'Load older'}</button>{/if}
+          {#if activeMessages.error}<p class="error">{activeMessages.error}</p>{/if}
+          {#each activeMessages.data.items as message, index (message.id)}
+            <div class:mine={isMine(message, activeMessages.data.viewerId)} class="message-row">
               <div class="sender-avatar-slot">
-                {#if showSenderAvatar(message, messages.data.items[index + 1], messages.data)}
-                  <img class="sender-avatar" src={senderAvatar(message, messages.data.thread) ?? ''} alt="" />
+                {#if showSenderAvatar(message, activeMessages.data.items[index + 1], activeMessages.data)}
+                  <img class="sender-avatar" src={senderAvatar(message, activeMessages.data.thread) ?? ''} alt="" />
                 {/if}
               </div>
               <div class="bubble">
