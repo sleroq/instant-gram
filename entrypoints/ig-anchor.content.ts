@@ -2,6 +2,12 @@ import '../lib/bridge';
 import { defineContentScript } from 'wxt/utils/define-content-script';
 import { onMessage } from 'webext-bridge/content-script';
 import { DOC_IDS, FRIENDLY_NAMES } from '../lib/config';
+import {
+    clearTokenCache,
+    harvestTokens,
+    startAuthProbeListener,
+    type Tokens,
+} from '../lib/ig-auth';
 import type {
     Folder,
     Message,
@@ -13,406 +19,49 @@ import type {
     User,
 } from '../lib/domain';
 
-type Tokens = {
-    fbDtsg: string;
-    lsd: string;
-    jazoest: string;
-    csrfToken: string;
-    deviceId: string;
-    viewerId: string;
-};
-type TokenKey = keyof Tokens;
-type TokenSources = Partial<Record<TokenKey, string>>;
-type PageAuthProbe = Partial<Tokens> & {
-    at?: number;
-    requireAvailable?: boolean;
-    sources?: Partial<Record<TokenKey, string>>;
-};
-type AuthProbePayload = Partial<
-    Pick<Tokens, 'fbDtsg' | 'lsd' | 'jazoest' | 'deviceId' | 'viewerId'>
-> & {
-    at: number;
-    requireAvailable: boolean;
-    sources: Partial<Record<TokenKey, string>>;
-};
-
-const AUTH_PROBE_EVENT = 'icr:ig-auth-probe';
-const AUTH_PROBE_REQUEST_EVENT = 'icr:ig-auth-probe-request';
-let pageAuthProbe: PageAuthProbe = {};
-
-function findString(root: unknown, keys: string[]): string | undefined {
-    if (typeof root !== 'object' || root === null || Array.isArray(root))
-        return undefined;
-    const rootObj = root as Record<string, unknown>;
-    for (const key of keys) {
-        const value = rootObj[key];
-        if (typeof value === 'string' && value.length > 0) return value;
-    }
-    for (const value of Object.values(rootObj)) {
-        const found = Array.isArray(value)
-            ? value.map(item => findString(item, keys)).find(Boolean)
-            : findString(value, keys);
-        if (found) return found;
-    }
-    return undefined;
-}
-
-function pageJson(): unknown[] {
-    return Array.from(
-        document.querySelectorAll(
-            'script[type="application/json"][data-sjs], script[data-sjs]',
-        ),
-    )
-        .map(node => node.textContent ?? '')
-        .flatMap(text => {
-            try {
-                return [JSON.parse(text) as unknown];
-            } catch {
-                return [];
-            }
-        });
-}
-
-function pageText(): string {
-    return `${document.documentElement.innerHTML}\n${Array.from(
-        document.scripts,
-    )
-        .map(script => script.textContent ?? '')
-        .join('\n')}`;
-}
-
-function firstMatch(text: string, patterns: RegExp[]): string | undefined {
-    for (const pattern of patterns) {
-        const match = pattern.exec(text);
-        if (match?.[1])
-            return decodeURIComponent(match[1].replaceAll('\\/', '/'));
-    }
-    return undefined;
-}
-
-function optionalString(value: unknown, field: string): string | undefined {
-    if (value === undefined) return undefined;
-    if (typeof value === 'string' && value.length > 0) return value;
-    throw new Error(`Invalid Instagram auth probe ${field}`);
-}
-
-function parseAuthProbe(detail: string): AuthProbePayload {
-    const data = JSON.parse(detail) as unknown;
-    if (typeof data !== 'object' || data === null || Array.isArray(data))
-        throw new Error('Invalid Instagram auth probe payload');
-    const dataObj = data as Record<string, unknown>;
-    if (typeof dataObj.at !== 'number')
-        throw new Error('Invalid Instagram auth probe at');
-    if (typeof dataObj.requireAvailable !== 'boolean')
-        throw new Error('Invalid Instagram auth probe requireAvailable');
-    if (
-        typeof dataObj.sources !== 'object' ||
-        dataObj.sources === null ||
-        Array.isArray(dataObj.sources) ||
-        Object.keys(dataObj.sources).length === 0
-    )
-        throw new Error('Invalid Instagram auth probe sources');
-    const sourcesObj = dataObj.sources as Record<string, unknown>;
-    return {
-        fbDtsg: optionalString(dataObj.fbDtsg, 'fbDtsg'),
-        lsd: optionalString(dataObj.lsd, 'lsd'),
-        jazoest: optionalString(dataObj.jazoest, 'jazoest'),
-        deviceId: optionalString(dataObj.deviceId, 'deviceId'),
-        viewerId: optionalString(dataObj.viewerId, 'viewerId'),
-        at: dataObj.at,
-        requireAvailable: dataObj.requireAvailable,
-        sources: {
-            fbDtsg: optionalString(sourcesObj.fbDtsg, 'sources.fbDtsg'),
-            lsd: optionalString(sourcesObj.lsd, 'sources.lsd'),
-            jazoest: optionalString(sourcesObj.jazoest, 'sources.jazoest'),
-            deviceId: optionalString(sourcesObj.deviceId, 'sources.deviceId'),
-            viewerId: optionalString(sourcesObj.viewerId, 'sources.viewerId'),
-        },
-    };
-}
-
-function readProbeToken(key: TokenKey): string | undefined {
-    const value = pageAuthProbe[key];
-    return typeof value === 'string' && value.length > 0 ? value : undefined;
-}
-
-function source(
-    sources: TokenSources,
-    key: TokenKey,
-    value: string | undefined,
-    from: string,
-): string | undefined {
-    if (value) sources[key] = from;
-    return value;
-}
-
-function deriveJazoest(fbDtsg: string | undefined): string | undefined {
-    if (!fbDtsg) return undefined;
-    return `2${Array.from(fbDtsg).reduce((sum, char) => sum + char.charCodeAt(0), 0)}`;
-}
-
-function deviceIdFallback(sources: TokenSources): string {
-    const stored = localStorage.getItem('chatd-deviceid');
-    if (stored) {
-        sources.deviceId = 'localStorage.chatd-deviceid';
-        return stored;
-    }
-    const generated = crypto.randomUUID();
-    localStorage.setItem('chatd-deviceid', generated);
-    sources.deviceId = 'generated chatd-deviceid';
-    return generated;
-}
-
-function cookie(name: string): string | undefined {
-    return document.cookie
-        .split('; ')
-        .find(part => part.startsWith(`${name}=`))
-        ?.split('=')
-        .slice(1)
-        .join('=');
-}
-
-function authError(values: Partial<Tokens>): Error {
-    const keys: TokenKey[] = [
-        'fbDtsg',
-        'lsd',
-        'jazoest',
-        'csrfToken',
-        'deviceId',
-        'viewerId',
-    ];
-    const missing = keys.filter(key => !values[key]);
-    return new Error(
-        `Instagram auth tokens were not found (${missing.join(', ')}); open or refresh instagram.com/direct/inbox first.`,
-    );
-}
-
-function requestAuthProbe() {
-    window.dispatchEvent(new Event(AUTH_PROBE_REQUEST_EVENT));
-}
-
-function wait(ms: number): Promise<void> {
-    return new Promise(resolve => window.setTimeout(resolve, ms));
-}
-
-function startAuthProbeListener() {
-    window.addEventListener(AUTH_PROBE_EVENT, event => {
-        const detail =
-            'detail' in event && typeof event.detail === 'string'
-                ? event.detail
-                : undefined;
-        if (!detail) return;
-
-        const data = parseAuthProbe(detail);
-        pageAuthProbe = data;
-    });
-}
-
-function harvestTokensNow(): Tokens {
-    const roots = pageJson();
-    const text = pageText();
-    const sources: TokenSources = {};
-    const fbDtsg =
-        source(
-            sources,
-            'fbDtsg',
-            readProbeToken('fbDtsg'),
-            pageAuthProbe.sources?.fbDtsg ?? 'main-world probe',
-        ) ??
-        source(
-            sources,
-            'fbDtsg',
-            roots.map(root => findString(root, ['fb_dtsg'])).find(Boolean),
-            'script[data-sjs] JSON',
-        ) ??
-        source(
-            sources,
-            'fbDtsg',
-            firstMatch(text, [
-                /fb_dtsg=([^&"'\\]+)/,
-                /"DTSGInitialData"[^]*?"token"\s*:\s*"([^"]+)"/,
-                /"fb_dtsg"\s*:\s*"([^"]+)"/,
-            ]),
-            'page text',
-        );
-    const lsd =
-        source(
-            sources,
-            'lsd',
-            readProbeToken('lsd'),
-            pageAuthProbe.sources?.lsd ?? 'main-world probe',
-        ) ??
-        source(
-            sources,
-            'lsd',
-            roots.map(root => findString(root, ['lsd'])).find(Boolean),
-            'script[data-sjs] JSON',
-        ) ??
-        source(
-            sources,
-            'lsd',
-            firstMatch(text, [
-                /lsd=([^&"'\\]+)/,
-                /"LSD"[^]*?"token"\s*:\s*"([^"]+)"/,
-                /"lsd"\s*:\s*"([^"]+)"/,
-            ]),
-            'page text',
-        );
-    const jazoest =
-        source(
-            sources,
-            'jazoest',
-            readProbeToken('jazoest'),
-            pageAuthProbe.sources?.jazoest ?? 'main-world probe',
-        ) ??
-        source(
-            sources,
-            'jazoest',
-            roots.map(root => findString(root, ['jazoest'])).find(Boolean),
-            'script[data-sjs] JSON',
-        ) ??
-        source(
-            sources,
-            'jazoest',
-            firstMatch(text, [
-                /jazoest=([^&"'\\]+)/,
-                /"jazoest"\s*:\s*"([^"]+)"/,
-            ]),
-            'page text',
-        ) ??
-        source(
-            sources,
-            'jazoest',
-            deriveJazoest(fbDtsg),
-            'derived from fb_dtsg',
-        );
-    const deviceId =
-        source(
-            sources,
-            'deviceId',
-            readProbeToken('deviceId'),
-            pageAuthProbe.sources?.deviceId ?? 'main-world probe',
-        ) ??
-        source(
-            sources,
-            'deviceId',
-            roots
-                .map(root =>
-                    findString(root, ['device_id_for_iris_subscription']),
-                )
-                .find(Boolean),
-            'script[data-sjs] JSON',
-        ) ??
-        source(
-            sources,
-            'deviceId',
-            firstMatch(text, [
-                /"device_id_for_iris_subscription"\s*:\s*"([^"]+)"/,
-                /device_id_for_iris_subscription=([^&"'\\]+)/,
-            ]),
-            'page text',
-        ) ??
-        deviceIdFallback(sources);
-    const viewerId =
-        source(
-            sources,
-            'viewerId',
-            readProbeToken('viewerId'),
-            pageAuthProbe.sources?.viewerId ?? 'main-world probe',
-        ) ??
-        source(
-            sources,
-            'viewerId',
-            roots
-                .map(root =>
-                    findString(root, [
-                        'viewer_fbid',
-                        'actorID',
-                        'USER_ID',
-                        'account_id',
-                    ]),
-                )
-                .find(Boolean),
-            'script[data-sjs] JSON',
-        ) ??
-        source(
-            sources,
-            'viewerId',
-            firstMatch(text, [
-                /"viewer_fbid"\s*:\s*"?(\d+)/,
-                /"actorID"\s*:\s*"?(\d+)/,
-                /"USER_ID"\s*:\s*"?(\d+)/,
-            ]),
-            'page text',
-        ) ??
-        source(
-            sources,
-            'viewerId',
-            cookie('ds_user_id'),
-            'ds_user_id cookie',
-        ) ??
-        source(sources, 'viewerId', fbDtsg?.split(':')[1], 'fb_dtsg segment');
-    const csrfToken = source(
-        sources,
-        'csrfToken',
-        cookie('csrftoken'),
-        'csrftoken cookie',
-    );
-    if (!fbDtsg || !lsd || !jazoest || !deviceId || !viewerId || !csrfToken)
-        throw authError({ fbDtsg, lsd, jazoest, deviceId, viewerId, csrfToken });
-    return { fbDtsg, lsd, jazoest, csrfToken, deviceId, viewerId };
-}
-
-async function harvestTokens(): Promise<Tokens> {
-    requestAuthProbe();
-    await wait(50);
-    try {
-        return harvestTokensNow();
-    } catch (error) {
-        requestAuthProbe();
-        await wait(300);
-        try {
-            return harvestTokensNow();
-        } catch {
-            throw error;
-        }
-    }
-}
-
 async function graphql(
     friendlyName: string,
     docId: string,
     variables: Record<string, unknown>,
     endpoint = '/api/graphql',
+    tokens?: Tokens,
 ): Promise<unknown> {
-    const tokens = await harvestTokens();
-    const body = new URLSearchParams({
-        __d: 'www',
-        __a: '1',
-        __comet_req: '7',
-        dpr: '2',
-        fb_api_caller_class: 'RelayModern',
-        fb_api_req_friendly_name: friendlyName,
-        server_timestamps: 'true',
-        fb_dtsg: tokens.fbDtsg,
-        lsd: tokens.lsd,
-        jazoest: tokens.jazoest,
-        variables: JSON.stringify(variables),
-        doc_id: docId,
-    });
-    const response = await fetch(`https://www.instagram.com${endpoint}`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-            'content-type': 'application/x-www-form-urlencoded',
-            'x-ig-app-id': '936619743392459',
-            'x-asbd-id': '359341',
-            'x-fb-lsd': tokens.lsd,
-            'x-fb-friendly-name': friendlyName,
-            'x-csrftoken': tokens.csrfToken,
-        },
-        body,
-    });
+    const post = (auth: Tokens) => {
+        const body = new URLSearchParams({
+            __d: 'www',
+            __a: '1',
+            __comet_req: '7',
+            dpr: '2',
+            fb_api_caller_class: 'RelayModern',
+            fb_api_req_friendly_name: friendlyName,
+            server_timestamps: 'true',
+            fb_dtsg: auth.fbDtsg,
+            lsd: auth.lsd,
+            jazoest: auth.jazoest,
+            variables: JSON.stringify(variables),
+            doc_id: docId,
+        });
+        return fetch(`https://www.instagram.com${endpoint}`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+                'content-type': 'application/x-www-form-urlencoded',
+                'x-ig-app-id': '936619743392459',
+                'x-asbd-id': '359341',
+                'x-fb-lsd': auth.lsd,
+                'x-fb-friendly-name': friendlyName,
+                'x-csrftoken': auth.csrfToken,
+            },
+            body,
+        });
+    };
+    tokens ??= await harvestTokens();
+    let response = await post(tokens);
+    if (response.status === 401 || response.status === 403) {
+        clearTokenCache();
+        tokens = await harvestTokens(true);
+        response = await post(tokens);
+    }
     if (!response.ok)
         throw new Error(
             `Instagram GraphQL ${friendlyName} failed with ${response.status}`,
@@ -790,15 +439,23 @@ export default defineContentScript({
                               __relay_internal__pv__PolarisAIGMAccountLabelEnabledrelayprovider: false,
                               __relay_internal__pv__IGDThreadListActionsEnabledGKrelayprovider: false,
                           },
+                          '/api/graphql',
+                          tokens,
                       )
-                    : await graphql(FRIENDLY_NAMES.inbox, DOC_IDS.inbox, {
-                          device_id_for_iris_subscription: tokens.deviceId,
-                          __relay_internal__pv__IGDIsProfessionalAccountGKrelayprovider: false,
-                          __relay_internal__pv__IGDPinnedThreadsRenderEnabledGKrelayprovider: true,
-                          __relay_internal__pv__IGDMaxUnreadMessagesCountrelayprovider: 5,
-                          __relay_internal__pv__PolarisAIGMAccountLabelEnabledrelayprovider: false,
-                          __relay_internal__pv__IGDThreadListActionsEnabledGKrelayprovider: false,
-                      });
+                    : await graphql(
+                          FRIENDLY_NAMES.inbox,
+                          DOC_IDS.inbox,
+                          {
+                              device_id_for_iris_subscription: tokens.deviceId,
+                              __relay_internal__pv__IGDIsProfessionalAccountGKrelayprovider: false,
+                              __relay_internal__pv__IGDPinnedThreadsRenderEnabledGKrelayprovider: true,
+                              __relay_internal__pv__IGDMaxUnreadMessagesCountrelayprovider: 5,
+                              __relay_internal__pv__PolarisAIGMAccountLabelEnabledrelayprovider: false,
+                              __relay_internal__pv__IGDThreadListActionsEnabledGKrelayprovider: false,
+                          },
+                          '/api/graphql',
+                          tokens,
+                      );
                 const root =
                     typeof json === 'object' &&
                     json !== null &&
