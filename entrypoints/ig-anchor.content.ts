@@ -13,8 +13,6 @@ import type {
     User,
 } from '../lib/domain';
 
-type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
-type Obj = { [key: string]: Json };
 type Tokens = {
     fbDtsg: string;
     lsd: string;
@@ -30,31 +28,27 @@ type PageAuthProbe = Partial<Tokens> & {
     requireAvailable?: boolean;
     sources?: Partial<Record<TokenKey, string>>;
 };
+type AuthProbePayload = Partial<
+    Pick<Tokens, 'fbDtsg' | 'lsd' | 'jazoest' | 'deviceId' | 'viewerId'>
+> & {
+    at: number;
+    requireAvailable: boolean;
+    sources: Partial<Record<TokenKey, string>>;
+};
 
 const AUTH_PROBE_EVENT = 'icr:ig-auth-probe';
 const AUTH_PROBE_REQUEST_EVENT = 'icr:ig-auth-probe-request';
 let pageAuthProbe: PageAuthProbe = {};
 
-function isObj(value: Json | undefined | unknown): value is Obj {
-    return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-function str(value: Json | undefined): string | undefined {
-    return typeof value === 'string' && value.length > 0 ? value : undefined;
-}
-function num(value: Json | undefined): number | undefined {
-    return typeof value === 'number' ? value : undefined;
-}
-function arr(value: Json | undefined): Json[] {
-    return Array.isArray(value) ? value : [];
-}
-
-function findString(root: Json, keys: string[]): string | undefined {
-    if (!isObj(root)) return undefined;
+function findString(root: unknown, keys: string[]): string | undefined {
+    if (typeof root !== 'object' || root === null || Array.isArray(root))
+        return undefined;
+    const rootObj = root as Record<string, unknown>;
     for (const key of keys) {
-        const value = str(root[key]);
-        if (value) return value;
+        const value = rootObj[key];
+        if (typeof value === 'string' && value.length > 0) return value;
     }
-    for (const value of Object.values(root)) {
+    for (const value of Object.values(rootObj)) {
         const found = Array.isArray(value)
             ? value.map(item => findString(item, keys)).find(Boolean)
             : findString(value, keys);
@@ -63,7 +57,7 @@ function findString(root: Json, keys: string[]): string | undefined {
     return undefined;
 }
 
-function pageJson(): Json[] {
+function pageJson(): unknown[] {
     return Array.from(
         document.querySelectorAll(
             'script[type="application/json"][data-sjs], script[data-sjs]',
@@ -72,7 +66,7 @@ function pageJson(): Json[] {
         .map(node => node.textContent ?? '')
         .flatMap(text => {
             try {
-                return [JSON.parse(text) as Json];
+                return [JSON.parse(text) as unknown];
             } catch {
                 return [];
             }
@@ -96,12 +90,50 @@ function firstMatch(text: string, patterns: RegExp[]): string | undefined {
     return undefined;
 }
 
-function jsonString(value: Json | undefined, key: string): string | undefined {
-    return isObj(value) ? str(value[key]) : undefined;
+function optionalString(value: unknown, field: string): string | undefined {
+    if (value === undefined) return undefined;
+    if (typeof value === 'string' && value.length > 0) return value;
+    throw new Error(`Invalid Instagram auth probe ${field}`);
+}
+
+function parseAuthProbe(detail: string): AuthProbePayload {
+    const data = JSON.parse(detail) as unknown;
+    if (typeof data !== 'object' || data === null || Array.isArray(data))
+        throw new Error('Invalid Instagram auth probe payload');
+    const dataObj = data as Record<string, unknown>;
+    if (typeof dataObj.at !== 'number')
+        throw new Error('Invalid Instagram auth probe at');
+    if (typeof dataObj.requireAvailable !== 'boolean')
+        throw new Error('Invalid Instagram auth probe requireAvailable');
+    if (
+        typeof dataObj.sources !== 'object' ||
+        dataObj.sources === null ||
+        Array.isArray(dataObj.sources) ||
+        Object.keys(dataObj.sources).length === 0
+    )
+        throw new Error('Invalid Instagram auth probe sources');
+    const sourcesObj = dataObj.sources as Record<string, unknown>;
+    return {
+        fbDtsg: optionalString(dataObj.fbDtsg, 'fbDtsg'),
+        lsd: optionalString(dataObj.lsd, 'lsd'),
+        jazoest: optionalString(dataObj.jazoest, 'jazoest'),
+        deviceId: optionalString(dataObj.deviceId, 'deviceId'),
+        viewerId: optionalString(dataObj.viewerId, 'viewerId'),
+        at: dataObj.at,
+        requireAvailable: dataObj.requireAvailable,
+        sources: {
+            fbDtsg: optionalString(sourcesObj.fbDtsg, 'sources.fbDtsg'),
+            lsd: optionalString(sourcesObj.lsd, 'sources.lsd'),
+            jazoest: optionalString(sourcesObj.jazoest, 'sources.jazoest'),
+            deviceId: optionalString(sourcesObj.deviceId, 'sources.deviceId'),
+            viewerId: optionalString(sourcesObj.viewerId, 'sources.viewerId'),
+        },
+    };
 }
 
 function readProbeToken(key: TokenKey): string | undefined {
-    return str(pageAuthProbe[key]);
+    const value = pageAuthProbe[key];
+    return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
 function source(
@@ -131,13 +163,6 @@ function deviceIdFallback(sources: TokenSources): string {
     return generated;
 }
 
-function masked(value: string | undefined): string | undefined {
-    if (!value) return undefined;
-    if (value.length <= 10)
-        return `${value.slice(0, 2)}…${value.slice(-2)} (${value.length})`;
-    return `${value.slice(0, 4)}…${value.slice(-4)} (${value.length})`;
-}
-
 function cookie(name: string): string | undefined {
     return document.cookie
         .split('; ')
@@ -147,7 +172,7 @@ function cookie(name: string): string | undefined {
         .join('=');
 }
 
-function authDiagnostics(values: Partial<Tokens>, sources: TokenSources) {
+function authError(values: Partial<Tokens>): Error {
     const keys: TokenKey[] = [
         'fbDtsg',
         'lsd',
@@ -156,44 +181,9 @@ function authDiagnostics(values: Partial<Tokens>, sources: TokenSources) {
         'deviceId',
         'viewerId',
     ];
-    return {
-        url: location.href,
-        readyState: document.readyState,
-        scriptCount: document.scripts.length,
-        dataSjsScriptCount:
-            document.querySelectorAll('script[data-sjs]').length,
-        jsonRootCount: pageJson().length,
-        cookies: {
-            csrftoken: Boolean(cookie('csrftoken')),
-            ds_user_id: Boolean(cookie('ds_user_id')),
-            sessionid: Boolean(cookie('sessionid')),
-        },
-        localStorage: {
-            chatdDeviceId: Boolean(localStorage.getItem('chatd-deviceid')),
-        },
-        mainWorldProbe: {
-            received: Boolean(pageAuthProbe.at),
-            ageMs: pageAuthProbe.at ? Date.now() - pageAuthProbe.at : undefined,
-            requireAvailable: pageAuthProbe.requireAvailable,
-        },
-        tokens: Object.fromEntries(
-            keys.map(key => [
-                key,
-                {
-                    found: Boolean(values[key]),
-                    source: sources[key],
-                    sample: masked(values[key]),
-                },
-            ]),
-        ),
-        missing: keys.filter(key => !values[key]),
-    };
-}
-
-function authError(values: Partial<Tokens>, sources: TokenSources): Error {
-    const debug = authDiagnostics(values, sources);
+    const missing = keys.filter(key => !values[key]);
     return new Error(
-        `Instagram auth tokens were not found (${debug.missing.join(', ')}); open or refresh instagram.com/direct/inbox first. Debug: ${JSON.stringify(debug)}`,
+        `Instagram auth tokens were not found (${missing.join(', ')}); open or refresh instagram.com/direct/inbox first.`,
     );
 }
 
@@ -212,29 +202,9 @@ function startAuthProbeListener() {
                 ? event.detail
                 : undefined;
         if (!detail) return;
-        try {
-            const data = JSON.parse(detail) as Json;
-            if (!isObj(data)) return;
-            const sources = isObj(data.sources) ? data.sources : {};
-            pageAuthProbe = {
-                fbDtsg: jsonString(data, 'fbDtsg'),
-                lsd: jsonString(data, 'lsd'),
-                jazoest: jsonString(data, 'jazoest'),
-                deviceId: jsonString(data, 'deviceId'),
-                viewerId: jsonString(data, 'viewerId'),
-                at: typeof data.at === 'number' ? data.at : Date.now(),
-                requireAvailable: Boolean(data.requireAvailable),
-                sources: {
-                    fbDtsg: jsonString(sources, 'fbDtsg'),
-                    lsd: jsonString(sources, 'lsd'),
-                    jazoest: jsonString(sources, 'jazoest'),
-                    deviceId: jsonString(sources, 'deviceId'),
-                    viewerId: jsonString(sources, 'viewerId'),
-                },
-            };
-        } catch {
-            pageAuthProbe = { at: Date.now(), requireAvailable: false };
-        }
+
+        const data = parseAuthProbe(detail);
+        pageAuthProbe = data;
     });
 }
 
@@ -389,10 +359,7 @@ function harvestTokensNow(): Tokens {
         'csrftoken cookie',
     );
     if (!fbDtsg || !lsd || !jazoest || !deviceId || !viewerId || !csrfToken)
-        throw authError(
-            { fbDtsg, lsd, jazoest, deviceId, viewerId, csrfToken },
-            sources,
-        );
+        throw authError({ fbDtsg, lsd, jazoest, deviceId, viewerId, csrfToken });
     return { fbDtsg, lsd, jazoest, csrfToken, deviceId, viewerId };
 }
 
@@ -415,9 +382,9 @@ async function harvestTokens(): Promise<Tokens> {
 async function graphql(
     friendlyName: string,
     docId: string,
-    variables: Obj,
+    variables: Record<string, unknown>,
     endpoint = '/api/graphql',
-): Promise<Json> {
+): Promise<unknown> {
     const tokens = await harvestTokens();
     const body = new URLSearchParams({
         __d: 'www',
@@ -450,57 +417,99 @@ async function graphql(
         throw new Error(
             `Instagram GraphQL ${friendlyName} failed with ${response.status}`,
         );
-    return response.json() as Promise<Json>;
+    return response.json() as Promise<unknown>;
 }
 
-function messageId(node: Obj): string {
-    return (
-        str(node.message_id) ??
-        str(node.item_id) ??
-        str(node.id) ??
-        crypto.randomUUID()
-    );
+function messageId(node: Record<string, unknown>): string {
+    for (const value of [node.message_id, node.item_id, node.id]) {
+        if (typeof value === 'string' && value.length > 0) return value;
+    }
+    return crypto.randomUUID();
 }
-function messageTs(node: Obj): number {
-    return num(node.timestamp_ms) ?? num(node.timestamp) ?? 0;
+function messageTs(node: Record<string, unknown>): number {
+    return typeof node.timestamp_ms === 'number'
+        ? node.timestamp_ms
+        : typeof node.timestamp === 'number'
+          ? node.timestamp
+          : 0;
 }
-function senderId(node: Obj): string {
-    return str(node.sender_id) ?? str(node.user_id) ?? '';
+function senderId(node: Record<string, unknown>): string {
+    return typeof node.sender_id === 'string' && node.sender_id.length > 0
+        ? node.sender_id
+        : typeof node.user_id === 'string' && node.user_id.length > 0
+          ? node.user_id
+          : '';
 }
 function reelShortcode(url: string): string | undefined {
     return /\/reel\/([^/?#]+)/.exec(url)?.[1];
 }
 
-function parseMessage(value: Json | undefined): Message | undefined {
-    if (!isObj(value)) return undefined;
-    const id = messageId(value);
-    const ts = messageTs(value);
-    const sender = senderId(value);
-    const contentType = str(value.content_type) ?? 'UNKNOWN';
-    const content = isObj(value.content) ? value.content : undefined;
+function parseMessage(value: unknown): Message | undefined {
+    if (typeof value !== 'object' || value === null || Array.isArray(value))
+        return undefined;
+    const node = value as Record<string, unknown>;
+    const id = messageId(node);
+    const ts = messageTs(node);
+    const sender = senderId(node);
+    const contentType =
+        typeof node.content_type === 'string' && node.content_type.length > 0
+            ? node.content_type
+            : 'UNKNOWN';
+    const content =
+        typeof node.content === 'object' &&
+        node.content !== null &&
+        !Array.isArray(node.content)
+            ? (node.content as Record<string, unknown>)
+            : undefined;
+    const contentText = content?.text;
+    const textBody = node.text_body;
+    const repliedToMessage =
+        typeof node.replied_to_message === 'object' &&
+        node.replied_to_message !== null &&
+        !Array.isArray(node.replied_to_message)
+            ? (node.replied_to_message as Record<string, unknown>)
+            : undefined;
+    const repliedToMessageId = repliedToMessage?.message_id;
     if (contentType === 'TEXT')
         return {
             kind: 'text',
             id,
             senderId: sender,
             ts,
-            text: str(value.text_body) ?? str(content?.text) ?? '',
-            repliedTo: str(
-                (isObj(value.replied_to_message)
-                    ? value.replied_to_message
-                    : undefined
-                )?.message_id,
-            ),
+            text:
+                typeof textBody === 'string' && textBody.length > 0
+                    ? textBody
+                    : typeof contentText === 'string' && contentText.length > 0
+                      ? contentText
+                      : '',
+            repliedTo:
+                typeof repliedToMessageId === 'string' &&
+                repliedToMessageId.length > 0
+                    ? repliedToMessageId
+                    : undefined,
         };
     if (contentType === 'ACTION_LOG' || contentType === 'REACTION_LOG')
         return {
             kind: 'reaction_log',
             id,
             ts,
-            fragment: str(value.text_body) ?? str(content?.text) ?? 'Activity',
+            fragment:
+                typeof textBody === 'string' && textBody.length > 0
+                    ? textBody
+                    : typeof contentText === 'string' && contentText.length > 0
+                      ? contentText
+                      : 'Activity',
         };
-    const xma = isObj(content?.xma) ? content.xma : undefined;
-    const targetUrl = str(xma?.target_url);
+    const xma =
+        typeof content?.xma === 'object' &&
+        content.xma !== null &&
+        !Array.isArray(content.xma)
+            ? (content.xma as Record<string, unknown>)
+            : undefined;
+    const targetUrl =
+        typeof xma?.target_url === 'string' && xma.target_url.length > 0
+            ? xma.target_url
+            : undefined;
     const shortcode = targetUrl ? reelShortcode(targetUrl) : undefined;
     if (contentType === 'MESSAGE_INLINE_SHARE' && xma && targetUrl && shortcode)
         return {
@@ -511,41 +520,102 @@ function parseMessage(value: Json | undefined): Message | undefined {
             shortcode,
             targetUrl,
             thumbUrl:
-                str(
-                    (isObj(xma.preview_image) ? xma.preview_image : undefined)
-                        ?.url,
-                ) ?? '',
-            author: str(xma.header_title_text) ?? 'Instagram',
-            caption: str(xma.title_text) ?? str(xma.caption_body_text),
+                typeof xma.preview_image === 'object' &&
+                xma.preview_image !== null &&
+                !Array.isArray(xma.preview_image) &&
+                typeof (xma.preview_image as Record<string, unknown>).url ===
+                    'string' &&
+                ((xma.preview_image as Record<string, unknown>).url as string)
+                    .length > 0
+                    ? ((xma.preview_image as Record<string, unknown>)
+                          .url as string)
+                    : '',
+            author:
+                typeof xma.header_title_text === 'string' &&
+                xma.header_title_text.length > 0
+                    ? xma.header_title_text
+                    : 'Instagram',
+            caption:
+                typeof xma.title_text === 'string' && xma.title_text.length > 0
+                    ? xma.title_text
+                    : typeof xma.caption_body_text === 'string' &&
+                        xma.caption_body_text.length > 0
+                      ? xma.caption_body_text
+                      : undefined,
         };
     return { kind: 'unsupported', id, senderId: sender, ts, contentType };
 }
 
-function parseUser(value: Json): User | undefined {
-    if (!isObj(value)) return undefined;
-    const id = str(value.id) ?? str(value.pk) ?? str(value.fbid);
+function parseUser(value: unknown): User | undefined {
+    if (typeof value !== 'object' || value === null || Array.isArray(value))
+        return undefined;
+    const user = value as Record<string, unknown>;
+    const id =
+        typeof user.id === 'string' && user.id.length > 0
+            ? user.id
+            : typeof user.pk === 'string' && user.pk.length > 0
+              ? user.pk
+              : typeof user.fbid === 'string' && user.fbid.length > 0
+                ? user.fbid
+                : undefined;
     if (!id) return undefined;
     return {
         id,
-        username: str(value.username) ?? '',
-        fullName: str(value.full_name) ?? str(value.name) ?? '',
+        username:
+            typeof user.username === 'string' && user.username.length > 0
+                ? user.username
+                : '',
+        fullName:
+            typeof user.full_name === 'string' && user.full_name.length > 0
+                ? user.full_name
+                : typeof user.name === 'string' && user.name.length > 0
+                  ? user.name
+                  : '',
         picUrl:
-            str(value.profile_pic_url) ?? str(value.profile_pic_url_hd) ?? null,
+            typeof user.profile_pic_url === 'string' &&
+            user.profile_pic_url.length > 0
+                ? user.profile_pic_url
+                : typeof user.profile_pic_url_hd === 'string' &&
+                    user.profile_pic_url_hd.length > 0
+                  ? user.profile_pic_url_hd
+                  : null,
     };
 }
 
-function parseThread(value: Json | undefined): Thread | undefined {
-    if (!isObj(value)) return undefined;
+function parseThread(value: unknown): Thread | undefined {
+    if (typeof value !== 'object' || value === null || Array.isArray(value))
+        return undefined;
+    const thread = value as Record<string, unknown>;
     const key =
-        str(value.thread_key) ?? str(value.thread_fbid) ?? str(value.id);
+        typeof thread.thread_key === 'string' && thread.thread_key.length > 0
+            ? thread.thread_key
+            : typeof thread.thread_fbid === 'string' &&
+                thread.thread_fbid.length > 0
+              ? thread.thread_fbid
+              : typeof thread.id === 'string' && thread.id.length > 0
+                ? thread.id
+                : undefined;
     if (!key) return undefined;
-    const users = arr(value.users)
+    const users = (Array.isArray(thread.users) ? thread.users : [])
         .map(parseUser)
         .filter((user): user is User => Boolean(user));
-    const lastMessage = arr(
-        isObj(value.slide_messages) ? value.slide_messages.edges : undefined,
+    const slideMessages =
+        typeof thread.slide_messages === 'object' &&
+        thread.slide_messages !== null &&
+        !Array.isArray(thread.slide_messages)
+            ? (thread.slide_messages as Record<string, unknown>)
+            : undefined;
+    const lastMessage = (Array.isArray(slideMessages?.edges)
+        ? slideMessages.edges
+        : []
     )
-        .map(edge => parseMessage(isObj(edge) ? edge.node : undefined))
+        .map(edge =>
+            parseMessage(
+                typeof edge === 'object' && edge !== null && !Array.isArray(edge)
+                    ? (edge as Record<string, unknown>).node
+                    : undefined,
+            ),
+        )
         .find(Boolean);
     const generatedTitle = users
         .map(u => u.username || u.fullName)
@@ -553,52 +623,99 @@ function parseThread(value: Json | undefined): Thread | undefined {
         .join(', ');
     return {
         key,
-        title: str(value.thread_title) ?? (generatedTitle || 'Untitled'),
-        isGroup: Boolean(value.is_group_thread),
-        isMuted: Boolean(value.muted),
-        folder: (str(value.folder) as Folder | undefined) ?? 'PRIMARY',
+        title:
+            typeof thread.thread_title === 'string' &&
+            thread.thread_title.length > 0
+                ? thread.thread_title
+                : generatedTitle || 'Untitled',
+        isGroup: Boolean(thread.is_group_thread),
+        isMuted: Boolean(thread.muted),
+        folder:
+            typeof thread.folder === 'string' && thread.folder.length > 0
+                ? (thread.folder as Folder)
+                : 'PRIMARY',
         lastActivityMs:
-            num(value.last_activity_at_ms) ?? num(value.last_activity_ms) ?? 0,
-        serverIsPin: Boolean(value.is_pin),
+            typeof thread.last_activity_at_ms === 'number'
+                ? thread.last_activity_at_ms
+                : typeof thread.last_activity_ms === 'number'
+                  ? thread.last_activity_ms
+                  : 0,
+        serverIsPin: Boolean(thread.is_pin),
         users,
         lastMessage,
-        cursor: str(value.thread_fbid) ?? key,
+        cursor:
+            typeof thread.thread_fbid === 'string' &&
+            thread.thread_fbid.length > 0
+                ? thread.thread_fbid
+                : key,
     };
 }
 
-function parseThreads(container: Json | undefined): Page<Thread> {
+function parseThreads(container: unknown): Page<Thread> {
+    const containerObj =
+        typeof container === 'object' && container !== null && !Array.isArray(container)
+            ? (container as Record<string, unknown>)
+            : undefined;
     const pageInfo =
-        isObj(container) && isObj(container.page_info)
-            ? container.page_info
+        typeof containerObj?.page_info === 'object' &&
+        containerObj.page_info !== null &&
+        !Array.isArray(containerObj.page_info)
+            ? (containerObj.page_info as Record<string, unknown>)
             : {};
-    const items = arr(isObj(container) ? container.edges : undefined)
+    const items = (Array.isArray(containerObj?.edges) ? containerObj.edges : [])
         .map(edge =>
             parseThread(
-                isObj(edge) && isObj(edge.node)
-                    ? edge.node.as_ig_direct_thread
+                typeof edge === 'object' &&
+                    edge !== null &&
+                    !Array.isArray(edge) &&
+                    typeof (edge as Record<string, unknown>).node === 'object' &&
+                    (edge as Record<string, unknown>).node !== null &&
+                    !Array.isArray((edge as Record<string, unknown>).node)
+                    ? ((edge as Record<string, unknown>).node as Record<
+                          string,
+                          unknown
+                      >).as_ig_direct_thread
                     : undefined,
             ),
         )
         .filter((thread): thread is Thread => Boolean(thread));
     return {
         items,
-        cursor: str(pageInfo.end_cursor),
+        cursor:
+            typeof pageInfo.end_cursor === 'string' && pageInfo.end_cursor.length > 0
+                ? pageInfo.end_cursor
+                : undefined,
         hasNextPage: Boolean(pageInfo.has_next_page),
     };
 }
 
-function parseMessagePage(container: Json | undefined): ThreadMessages {
+function parseMessagePage(container: unknown): ThreadMessages {
+    const containerObj =
+        typeof container === 'object' && container !== null && !Array.isArray(container)
+            ? (container as Record<string, unknown>)
+            : undefined;
     const pageInfo =
-        isObj(container) && isObj(container.page_info)
-            ? container.page_info
+        typeof containerObj?.page_info === 'object' &&
+        containerObj.page_info !== null &&
+        !Array.isArray(containerObj.page_info)
+            ? (containerObj.page_info as Record<string, unknown>)
             : {};
-    const items = arr(isObj(container) ? container.edges : undefined)
-        .map(edge => parseMessage(isObj(edge) ? edge.node : undefined))
+    const items = (Array.isArray(containerObj?.edges) ? containerObj.edges : [])
+        .map(edge =>
+            parseMessage(
+                typeof edge === 'object' && edge !== null && !Array.isArray(edge)
+                    ? (edge as Record<string, unknown>).node
+                    : undefined,
+            ),
+        )
         .filter((message): message is Message => Boolean(message))
         .reverse();
     return {
         items,
-        cursor: str(pageInfo.end_cursor),
+        cursor:
+            typeof pageInfo.end_cursor === 'string' && pageInfo.end_cursor.length > 0
+                ? pageInfo.end_cursor
+                : undefined,
         hasNextPage: Boolean(pageInfo.has_next_page),
     };
 }
@@ -615,21 +732,37 @@ function fail(error: unknown): Result<never> {
     };
 }
 function inboxPayload(data: unknown): { cursor?: string } {
-    return isObj(data) && typeof data.cursor === 'string'
-        ? { cursor: data.cursor }
+    return typeof data === 'object' &&
+        data !== null &&
+        !Array.isArray(data) &&
+        typeof (data as Record<string, unknown>).cursor === 'string'
+        ? { cursor: (data as Record<string, string>).cursor }
         : {};
 }
 function threadPayload(data: unknown): { threadKey: string; cursor?: string } {
-    if (isObj(data) && typeof data.threadKey === 'string')
+    if (
+        typeof data === 'object' &&
+        data !== null &&
+        !Array.isArray(data) &&
+        typeof (data as Record<string, unknown>).threadKey === 'string'
+    )
         return {
-            threadKey: data.threadKey,
-            cursor: typeof data.cursor === 'string' ? data.cursor : undefined,
+            threadKey: (data as Record<string, string>).threadKey,
+            cursor:
+                typeof (data as Record<string, unknown>).cursor === 'string'
+                    ? (data as Record<string, string>).cursor
+                    : undefined,
         };
     throw new Error('Invalid thread payload');
 }
 function reelPayload(data: unknown): { shortcode: string } {
-    if (isObj(data) && typeof data.shortcode === 'string')
-        return { shortcode: data.shortcode };
+    if (
+        typeof data === 'object' &&
+        data !== null &&
+        !Array.isArray(data) &&
+        typeof (data as Record<string, unknown>).shortcode === 'string'
+    )
+        return { shortcode: (data as Record<string, string>).shortcode };
     throw new Error('Invalid reel payload');
 }
 
@@ -638,23 +771,6 @@ export default defineContentScript({
     runAt: 'document_idle',
     main() {
         startAuthProbeListener();
-        onMessage('debugAuth', async () => {
-            try {
-                const tokens = await harvestTokens();
-                return ok(
-                    authDiagnostics(tokens, {
-                        fbDtsg: 'resolved',
-                        lsd: 'resolved',
-                        jazoest: 'resolved',
-                        csrfToken: 'resolved',
-                        deviceId: 'resolved',
-                        viewerId: 'resolved',
-                    }),
-                );
-            } catch (error) {
-                return fail(error);
-            }
-        });
         onMessage('getInbox', async ({ data }) => {
             try {
                 const tokens = await harvestTokens();
@@ -683,13 +799,38 @@ export default defineContentScript({
                           __relay_internal__pv__PolarisAIGMAccountLabelEnabledrelayprovider: false,
                           __relay_internal__pv__IGDThreadListActionsEnabledGKrelayprovider: false,
                       });
-                const root = isObj(json) && isObj(json.data) ? json.data : {};
-                const box = isObj(root.get_slide_mailbox_for_iris_subscription)
-                    ? root.get_slide_mailbox_for_iris_subscription
-                          .threads_by_folder
-                    : isObj(root.fetch__SlideMailbox)
-                      ? root.fetch__SlideMailbox.threads_by_folder
-                      : undefined;
+                const root =
+                    typeof json === 'object' &&
+                    json !== null &&
+                    !Array.isArray(json) &&
+                    typeof (json as Record<string, unknown>).data ===
+                        'object' &&
+                    (json as Record<string, unknown>).data !== null &&
+                    !Array.isArray((json as Record<string, unknown>).data)
+                        ? ((json as Record<string, unknown>).data as Record<
+                              string,
+                              unknown
+                          >)
+                        : {};
+                const slideMailbox =
+                    typeof root.get_slide_mailbox_for_iris_subscription ===
+                        'object' &&
+                    root.get_slide_mailbox_for_iris_subscription !== null &&
+                    !Array.isArray(root.get_slide_mailbox_for_iris_subscription)
+                        ? (root.get_slide_mailbox_for_iris_subscription as Record<
+                              string,
+                              unknown
+                          >)
+                        : undefined;
+                const fetchMailbox =
+                    typeof root.fetch__SlideMailbox === 'object' &&
+                    root.fetch__SlideMailbox !== null &&
+                    !Array.isArray(root.fetch__SlideMailbox)
+                        ? (root.fetch__SlideMailbox as Record<string, unknown>)
+                        : undefined;
+                const box =
+                    slideMailbox?.threads_by_folder ??
+                    fetchMailbox?.threads_by_folder;
                 return ok(parseThreads(box));
             } catch (error) {
                 return fail(error);
@@ -719,16 +860,45 @@ export default defineContentScript({
                           __relay_internal__pv__IGDInitialMessagePageCountrelayprovider: 20,
                           __relay_internal__pv__PolarisAIGMAccountLabelEnabledrelayprovider: false,
                       });
-                const root = isObj(json) && isObj(json.data) ? json.data : {};
-                const thread = isObj(root.get_slide_thread_nullable)
-                    ? root.get_slide_thread_nullable.as_ig_direct_thread
-                    : isObj(root.fetch__SlideThread)
-                      ? root.fetch__SlideThread.as_ig_direct_thread
-                      : undefined;
+                const root =
+                    typeof json === 'object' &&
+                    json !== null &&
+                    !Array.isArray(json) &&
+                    typeof (json as Record<string, unknown>).data ===
+                        'object' &&
+                    (json as Record<string, unknown>).data !== null &&
+                    !Array.isArray((json as Record<string, unknown>).data)
+                        ? ((json as Record<string, unknown>).data as Record<
+                              string,
+                              unknown
+                          >)
+                        : {};
+                const nullableThread =
+                    typeof root.get_slide_thread_nullable === 'object' &&
+                    root.get_slide_thread_nullable !== null &&
+                    !Array.isArray(root.get_slide_thread_nullable)
+                        ? (root.get_slide_thread_nullable as Record<
+                              string,
+                              unknown
+                          >)
+                        : undefined;
+                const fetchedThread =
+                    typeof root.fetch__SlideThread === 'object' &&
+                    root.fetch__SlideThread !== null &&
+                    !Array.isArray(root.fetch__SlideThread)
+                        ? (root.fetch__SlideThread as Record<string, unknown>)
+                        : undefined;
+                const thread =
+                    nullableThread?.as_ig_direct_thread ??
+                    fetchedThread?.as_ig_direct_thread;
+                const threadObj =
+                    typeof thread === 'object' &&
+                    thread !== null &&
+                    !Array.isArray(thread)
+                        ? (thread as Record<string, unknown>)
+                        : undefined;
                 return ok(
-                    parseMessagePage(
-                        isObj(thread) ? thread.slide_messages : undefined,
-                    ),
+                    parseMessagePage(threadObj?.slide_messages),
                 );
             } catch (error) {
                 return fail(error);
@@ -748,13 +918,33 @@ export default defineContentScript({
                     },
                     '/graphql/query',
                 );
-                const media =
-                    isObj(json) &&
-                    isObj(json.data) &&
-                    isObj(json.data.xdt_shortcode_media)
-                        ? json.data.xdt_shortcode_media
+                const dataObj =
+                    typeof json === 'object' &&
+                    json !== null &&
+                    !Array.isArray(json) &&
+                    typeof (json as Record<string, unknown>).data ===
+                        'object' &&
+                    (json as Record<string, unknown>).data !== null &&
+                    !Array.isArray((json as Record<string, unknown>).data)
+                        ? ((json as Record<string, unknown>).data as Record<
+                              string,
+                              unknown
+                          >)
                         : undefined;
-                const videoUrl = str(media?.video_url);
+                const media =
+                    typeof dataObj?.xdt_shortcode_media === 'object' &&
+                    dataObj.xdt_shortcode_media !== null &&
+                    !Array.isArray(dataObj.xdt_shortcode_media)
+                        ? (dataObj.xdt_shortcode_media as Record<
+                              string,
+                              unknown
+                          >)
+                        : undefined;
+                const videoUrl =
+                    typeof media?.video_url === 'string' &&
+                    media.video_url.length > 0
+                        ? media.video_url
+                        : undefined;
                 if (!videoUrl)
                     throw new Error(
                         'Instagram reel video URL was not returned',
@@ -762,13 +952,21 @@ export default defineContentScript({
                 return ok<ReelMedia>({
                     shortcode: payload.shortcode,
                     videoUrl,
-                    durationSec: num(media?.video_duration) ?? 0,
+                    durationSec:
+                        typeof media?.video_duration === 'number'
+                            ? media.video_duration
+                            : 0,
                     owner:
-                        str(
-                            isObj(media?.owner)
-                                ? media.owner.username
-                                : undefined,
-                        ) ?? '',
+                        typeof media?.owner === 'object' &&
+                        media.owner !== null &&
+                        !Array.isArray(media.owner) &&
+                        typeof (media.owner as Record<string, unknown>)
+                            .username === 'string' &&
+                        ((media.owner as Record<string, unknown>).username as string)
+                            .length > 0
+                            ? ((media.owner as Record<string, unknown>)
+                                  .username as string)
+                            : '',
                 });
             } catch (error) {
                 return fail(error);

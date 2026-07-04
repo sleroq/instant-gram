@@ -40,7 +40,7 @@ async function ensureAnchorTab(): Promise<number> {
 }
 
 async function routeToAnchor<T>(
-    name: 'getInbox' | 'getThread' | 'getReelMedia' | 'debugAuth',
+    name: 'getInbox' | 'getThread' | 'getReelMedia',
     payload: unknown,
 ): Promise<T> {
     const tabId = await ensureAnchorTab();
@@ -73,8 +73,6 @@ export default defineBackground(() => {
     onMessage('getReelMedia', ({ data }) =>
         routeToAnchor('getReelMedia', data),
     );
-    onMessage('debugAuth', ({ data }) => routeToAnchor('debugAuth', data));
-
     onMessage('getPins', async () => ({ pinned: await getPinned() }));
     onMessage('togglePin', async ({ data }) => {
         const payload = pinPayload(data);

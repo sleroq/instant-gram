@@ -67,7 +67,6 @@ export type RpcMap = {
         cursor?: string;
     }) => Result<ThreadMessages>;
     getReelMedia: (payload: { shortcode: string }) => Result<ReelMedia>;
-    debugAuth: () => { ok: true; value: unknown };
     getPins: () => { pinned: string[] };
     togglePin: (payload: { threadKey: string }) => { pinned: string[] };
 };

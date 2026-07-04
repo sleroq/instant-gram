@@ -12,7 +12,6 @@
   let messages = $state<View<Page<Message>>>({ state: 'idle' });
   let pinned = $state<string[]>([]);
   let reel = $state<View<ReelMedia> & { shortcode?: string }>({ state: 'idle' });
-  let authDebug = $state<View<unknown>>({ state: 'idle' });
 
   const sortedThreads = $derived(inbox.state === 'ready' ? [...inbox.data.items].sort((a, b) => {
     const ap = pinned.indexOf(a.key); const bp = pinned.indexOf(b.key);
@@ -49,12 +48,6 @@
   }
 
   async function loadPins() { pinned = (await rpc<{ pinned: string[] }>('getPins', null)).pinned; }
-
-  async function debugAuth() {
-    authDebug = { state: 'loading' };
-    try { authDebug = { state: 'ready', data: unwrap(await rpc<Result<unknown>>('debugAuth', null)) }; }
-    catch (error) { authDebug = { state: 'error', message: error instanceof Error ? error.message : String(error) }; }
-  }
 
   async function togglePin(threadKey: string, event: MouseEvent) {
     event.stopPropagation();
@@ -93,10 +86,6 @@
     {#if inbox.state === 'loading'}<p class="empty">Loading chats…</p>
     {:else if inbox.state === 'error'}
       <p class="error">{inbox.message}</p>
-      <button class="load" onclick={debugAuth}>Debug auth</button>
-      {#if authDebug.state === 'loading'}<p class="empty">Checking auth…</p>
-      {:else if authDebug.state === 'error'}<pre class="debug">{authDebug.message}</pre>
-      {:else if authDebug.state === 'ready'}<pre class="debug">{JSON.stringify(authDebug.data, null, 2)}</pre>{/if}
     {:else if inbox.state === 'ready'}
       {#each sortedThreads as thread (thread.key)}
         <div class:selected={selected?.key === thread.key} class="thread" role="button" tabindex="0" onclick={() => selectThread(thread)} onkeydown={(event) => event.key === 'Enter' && selectThread(thread)}>
