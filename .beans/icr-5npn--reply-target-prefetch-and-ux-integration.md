@@ -1,7 +1,7 @@
 ---
 # icr-5npn
 title: Reply-target prefetch and UX integration
-status: todo
+status: in-progress
 type: milestone
 priority: normal
 tags:
@@ -9,7 +9,7 @@ tags:
     - replies
     - preload
 created_at: 2026-07-04T17:30:15Z
-updated_at: 2026-07-04T17:30:15Z
+updated_at: 2026-07-04T17:54:51Z
 blocked_by:
     - icr-pdaz
 ---
@@ -30,14 +30,20 @@ Implementation notes:
 - Connect to existing/planned reply rendering milestone icr-3br2 when reply UI is implemented.
 
 Checklist:
-- [ ] Detect visible/near-visible messages that have repliedTo ids once reply rendering exposes them.
-- [ ] Add passive prepareMessageTarget(threadKey, messageId) built on scrollToMessage search internals without scrolling.
-- [ ] Prioritize nearest visible reply targets and dedupe repeated target ids.
-- [ ] Add concurrency/rate limits for passive target preparation.
-- [ ] Cache target resolution status: loaded, found after fetch, not found, pending.
-- [ ] Wire explicit reply click to scrollToMessage with animation/highlight.
-- [ ] Ensure passive preparation does not fight the 500-message older-buffer preload loop.
+- [x] Detect visible/near-visible messages that have repliedTo ids once reply rendering exposes them.
+- [x] Add passive prepareMessageTarget(threadKey, messageId) built on scrollToMessage search internals without scrolling.
+- [x] Prioritize nearest visible reply targets and dedupe repeated target ids.
+- [x] Add concurrency/rate limits for passive target preparation.
+- [x] Cache target resolution status: loaded, found after fetch, not found, pending.
+- [x] Wire explicit reply click to scrollToMessage with animation/highlight.
+- [x] Ensure passive preparation does not fight the 200-message older-buffer preload loop.
 - [ ] Verify explicit reply click is fast when passive preparation has already resolved the target.
+
+Implementation checkpoint:
+- Visible virtual reply rows report their `repliedTo` ids to App.
+- App passively resolves one target at a time and caches pending/found/missing state per thread.
+- Reply preview is clickable and uses active `scrollToMessage` with highlight.
+- Verified with `npm run check` and `npm run build`; speed/smoothness needs manual browser testing.
 
 Acceptance criteria:
 - Visible reply messages can passively prepare their targets without moving the viewport.

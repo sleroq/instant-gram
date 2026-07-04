@@ -1,7 +1,7 @@
 ---
 # icr-pdaz
 title: scrollToMessage API for reply navigation
-status: todo
+status: in-progress
 type: milestone
 priority: high
 tags:
@@ -9,7 +9,7 @@ tags:
     - scroll
     - replies
 created_at: 2026-07-04T17:29:45Z
-updated_at: 2026-07-04T17:29:45Z
+updated_at: 2026-07-04T17:54:51Z
 blocked_by:
     - icr-kphj
 ---
@@ -35,15 +35,21 @@ Implementation notes:
 - Integrate with reply rendering work later; do not require reply UI to exist in this milestone.
 
 Checklist:
-- [ ] Define scrollToMessage(threadKey, messageId, options) API shape and return status.
-- [ ] Add loaded message-id-to-index lookup for each thread cache entry.
-- [ ] Implement already-loaded path using virtualizer scrollToIndex/scrollToOffset.
-- [ ] Implement lazy search path that loads older pages until the id is found or hasNextPage is false.
-- [ ] Coalesce duplicate scroll/search requests for the same message.
-- [ ] Keep passive/lazy prefetch calls from stealing the user's scroll position.
-- [ ] Add short final animation and target highlight for explicit navigation.
-- [ ] Add safe not-found result handling.
+- [x] Define scrollToMessage(threadKey, messageId, options) API shape and return status.
+- [x] Add loaded message-id-to-index lookup for each thread cache entry.
+- [x] Implement already-loaded path using virtualizer scrollToIndex/scrollToOffset.
+- [x] Implement lazy search path that loads older pages until the id is found or hasNextPage is false.
+- [x] Coalesce duplicate scroll/search requests for the same message.
+- [x] Keep passive/lazy prefetch calls from stealing the user's scroll position.
+- [x] Add short final animation and target highlight for explicit navigation.
+- [x] Add safe not-found result handling.
 - [ ] Verify with a target near viewport, a target several pages above, and a missing target.
+
+Implementation checkpoint:
+- MessageList exposes a virtualizer-backed `scrollToMessage` API.
+- App implements active/passive target search by loading older pages until found or history ends.
+- Explicit reply navigation scrolls and highlights; passive lookup only resolves/cache-warms targets.
+- Verified with `npm run check` and `npm run build`; browser behavior remains in manual QA.
 
 Acceptance criteria:
 - Calling scrollToMessage for a loaded message centers or reveals it smoothly.

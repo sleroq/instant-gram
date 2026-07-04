@@ -1,7 +1,7 @@
 ---
 # icr-5uvl
 title: 'Chat history UX: manual QA and performance verification'
-status: todo
+status: completed
 type: milestone
 priority: normal
 tags:
@@ -24,10 +24,10 @@ Checklist:
 - [x] Run `npm run check` and fix any type/Svelte errors introduced by the refactor.
 - [x] Manually verify switching between at least two chats preserves each chat scroll position.
 - [x] Manually verify returning to a cached chat does not refetch its initial message page.
-- [ ] Manually verify older-history preload starts before reaching the top.
+- [x] Manually verify older-history preload starts before reaching the top.
 - [x] Manually verify prepending older messages keeps the same visible message anchored.
 - [x] Manually verify initial open of a thread scrolls to bottom once.
-- [ ] Manually verify the down-arrow appears away from bottom, scrolls to bottom, and then hides.
+- [x] Manually verify the down-arrow appears away from bottom, scrolls to bottom, and then hides.
 - [x] Inspect the implementation to confirm loading older messages never replaces the whole message list with a loading screen.
 
 Done criteria:
