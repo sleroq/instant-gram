@@ -48,12 +48,14 @@ type ReelMedia = { shortcode:string; videoUrl:string; durationSec:number; owner:
 
 | purpose | endpoint | friendly_name | doc_id | variables |
 |---|---|---|---|---|
-| chat list | `/api/graphql` | `PolarisDirectInboxQuery` | `27262915580045003` | `{device_id_for_iris_subscription, …GK flags}` + cursor |
+| chat list | `/api/graphql` | `PolarisDirectInboxQuery` | `27262915580045003` | `{device_id_for_iris_subscription, …GK flags}` |
+| chat list pagination | `/api/graphql` | `IGDThreadListOffMsysPaginationQuery` | `27712934271665380` | `{count:5, cursor, folder:'INBOX', newer_than_timestamp_ms:null, id:viewer_fbid, …GK flags}` |
 | thread header (optional) | `/api/graphql` | `IGDInboxHeaderOffMsysQuery` | `27358538347096449` | `{thread_fbid}` |
-| message history | `/api/graphql` | `IGDMessageListOffMsysQuery` | `25255103937520139` | `{id:thread_key, first:20, after?:cursor}` |
+| initial message history | `/api/graphql` | `IGDThreadDetailQuery` | `27852254574460474` | `{thread_fbid, …GK flags}` → first 20 messages + cursor |
+| older message history | `/api/graphql` | `IGDMessageListOffMsysQuery` | `25255103937520139` | `{id:thread_fbid, first:20, after:cursor, before:null, last:null, newer_than_message_id:null, older_than_message_id:null}` |
 | **reel video** | `/graphql/query` | `PolarisPostActionLoadPostQueryQuery` | `8845758582119845` | `{shortcode, fetch_tagged_user_count:null, hoisted_comment_id:null, hoisted_reply_id:null}` → `data.xdt_shortcode_media.video_url` |
 
-Request build (content script): form-encoded body = `doc_id`+`variables`+`fb_api_req_friendly_name`+`fb_api_caller_class=RelayModern`+`lsd`+`fb_dtsg`+`jazoest`+`__d=www`+`__a=1`+`__comet_req=7`+`dpr=2`+`server_timestamps=true`; headers = `x-ig-app-id:936619743392459`, `x-csrftoken`, `x-fb-lsd`, `x-fb-friendly-name`, `x-asbd-id:359341`, `content-type:application/x-www-form-urlencoded`. Threads identified by `thread_key` (passed as `thread_fbid`/`id`).
+Request build (content script): form-encoded body = `doc_id`+`variables`+`fb_api_req_friendly_name`+`fb_api_caller_class=RelayModern`+`lsd`+`fb_dtsg`+`jazoest`+`__d=www`+`__a=1`+`__comet_req=7`+`dpr=2`+`server_timestamps=true`; headers = `x-ig-app-id:936619743392459`, `x-csrftoken`, `x-fb-lsd`, `x-fb-friendly-name`, `x-asbd-id:359341`, `content-type:application/x-www-form-urlencoded`. Inbox/thread response paths and parser notes are extracted in `instagram-methods.md`. Threads are usually selected by `thread_fbid`; the inbox row also exposes `thread_key` for local identity.
 
 ## UI (3 panes)
 
@@ -82,9 +84,8 @@ Request build (content script): form-encoded body = `doc_id`+`variables`+`fb_api
 
 ## Open risks / verification before each lands
 
-- **Inbox pagination param name** (`after`? `first`?) not in the HAR — first "load more" may 400; capture a scroll-to-bottom inbox HAR if so. Message-list pagination *is* confirmed (`after`/`first`).
-- **`doc_id`s rotate** with IG bundle bumps — keep in `config.ts`; verify live in DevTools when something 400s. Response key paths (`xdt_shortcode_media`, `as_ig_direct_thread`) are stable.
-- **`device_id_for_iris_subscription`** must be harvested from page config (present in same `data-sjs` blob as `fb_dtsg`) — confirm key path on first run.
-- Verify inline `<video>` actually plays the signed CDN URL from the extension origin (should; if blocked, add `refer`-policy or proxy via content script `fetch` → `URL.createObjectURL`).
+- **`doc_id`s rotate** with IG bundle bumps — keep in `config.ts`; verify live in DevTools when something 400s. HAR-confirmed response key paths are stable: `threads_by_folder.edges[].node.as_ig_direct_thread`, `slide_messages.edges[].node`, and XMA reel shares at `content.xma.target_url`/`preview_image.url`.
+- **Token harvest key paths still need first-run verification.** The HARs confirm request-time values for `device_id_for_iris_subscription`, `fb_dtsg`, `lsd`, `jazoest`, `csrftoken`, and viewer FBID, but they do not include the initial HTML/data-sjs blob that proves exact DOM key paths.
+- **Reel video lookup still needs a live replay check.** The HARs confirm reel-share parsing from DM XMA (`target_url` contains `/reel/<shortcode>/`, thumbnail is `preview_image.url`), but they do not include the `/graphql/query` `PolarisPostActionLoadPostQueryQuery` video lookup itself. Verify the doc_id once before wiring the viewer; then verify inline `<video>` plays the signed CDN URL from the extension origin (fallback: proxy via content script `fetch` → `URL.createObjectURL`).
 
 Want me to start on milestone 1 (scaffold + typed message map + manifest), or expand any section first?
