@@ -8,7 +8,8 @@
   import type { ThreadCacheEntry, View } from './types';
 
   type JsonPayload = null | boolean | number | string | JsonPayload[] | { [key: string]: JsonPayload };
-  const TOP_PRELOAD_BUFFER_PX = 200;
+  const OLDER_MESSAGE_BUFFER_TARGET = 200;
+  const OLDER_MESSAGE_PRELOAD_PAGE_LIMIT = 50;
   const BOTTOM_SCROLL_MS = 180;
 
   let inbox = $state<View<Page<Thread>>>({ state: 'loading' });
@@ -57,11 +58,13 @@
     return {
       state: 'idle',
       loadingOlder: false,
+      preloadingOlder: false,
       hasNextPage: false,
       scrollTop: 0,
       scrollHeight: 0,
       clientHeight: 0,
       isAtBottom: true,
+      visibleStartIndex: 0,
       didInitialScroll: false,
     };
   }
@@ -125,13 +128,29 @@
   function handleMessagesScroll() {
     saveActiveScroll();
     if (jumpingToBottom) return;
-    void maybePreloadOlder();
+    void ensureOlderBuffer();
   }
 
-  async function maybePreloadOlder() {
-    if (!messagesEl) return;
-    if (messagesEl.scrollTop > TOP_PRELOAD_BUFFER_PX) return;
-    await loadOlder();
+  function handleVisibleRangeChange(startIndex: number) {
+    if (!selectedKey) return;
+    const entry = threadCache[selectedKey];
+    if (!entry || entry.visibleStartIndex === startIndex) return;
+    threadCache[selectedKey] = { ...entry, visibleStartIndex: startIndex };
+    if (!jumpingToBottom) void ensureOlderBuffer();
+  }
+
+  async function ensureOlderBuffer() {
+    if (!selectedKey) return;
+    const key = selectedKey;
+    let loadedPages = 0;
+    while (selectedKey === key) {
+      const entry = threadCache[key];
+      if (!entry?.data || !entry.cursor || !entry.hasNextPage || entry.loadingOlder) return;
+      if (entry.visibleStartIndex >= OLDER_MESSAGE_BUFFER_TARGET) return;
+      if (loadedPages >= OLDER_MESSAGE_PRELOAD_PAGE_LIMIT) return;
+      await loadOlder({ preload: true });
+      loadedPages += 1;
+    }
   }
 
   async function restoreThreadScroll(key: string) {
@@ -210,12 +229,14 @@
         state: 'ready',
         data,
         loadingOlder: false,
+        preloadingOlder: false,
         cursor: data.cursor,
         hasNextPage: data.hasNextPage,
         scrollTop: 0,
         scrollHeight: 0,
         clientHeight: 0,
         isAtBottom: true,
+        visibleStartIndex: 0,
         didInitialScroll: false,
       };
       if (selectedKey === thread.key) await scrollThreadToBottom(thread.key);
@@ -226,30 +247,35 @@
         state: 'error',
         error: error instanceof Error ? error.message : String(error),
         loadingOlder: false,
+        preloadingOlder: false,
       };
     }
   }
 
-  async function loadOlder() {
+  async function loadOlder(options: { preload?: boolean } = {}) {
     if (!selected || !selectedKey) return;
     const key = selectedKey;
     const threadKey = selected.cursor ?? selected.key;
     const entry = threadCache[key];
     if (!entry?.data || !entry.cursor || !entry.hasNextPage || entry.loadingOlder) return;
     const anchor = firstVisibleMessageAnchor();
-    threadCache[key] = { ...entry, loadingOlder: true, error: undefined };
+    threadCache[key] = { ...entry, loadingOlder: true, preloadingOlder: Boolean(options.preload), error: undefined };
     try {
       const page = unwrap(await rpc<Result<ThreadMessages>>('getThread', { threadKey, cursor: entry.cursor }));
       const latest = threadCache[key];
       if (!latest?.data) return;
+      const previousCount = latest.data.items.length;
       const data = mergeOlderMessages(latest.data, page);
+      const addedOlderCount = data.items.length - previousCount;
       threadCache[key] = {
         ...latest,
         state: 'ready',
         data,
         loadingOlder: false,
+        preloadingOlder: false,
         cursor: data.cursor,
         hasNextPage: data.hasNextPage,
+        visibleStartIndex: latest.visibleStartIndex + addedOlderCount,
       };
       await tick();
       if (messagesEl) {
@@ -257,7 +283,6 @@
         const scroll = readScrollState();
         if (scroll) threadCache[key] = { ...threadCache[key], ...scroll };
       }
-      if (selectedKey === key) void maybePreloadOlder();
     } catch (error) {
       const latest = threadCache[key];
       if (!latest) return;
@@ -266,6 +291,7 @@
         state: latest.data ? 'ready' : 'error',
         error: error instanceof Error ? error.message : String(error),
         loadingOlder: false,
+        preloadingOlder: false,
       };
     }
   }
@@ -281,7 +307,7 @@
 
 <main class="app">
   <ThreadList {inbox} threads={sortedThreads} {selected} {pinned} onselect={selectThread} ontogglepin={togglePin} onloadmore={() => loadInbox(inbox.state === 'ready' ? inbox.data.cursor : undefined)} />
-  <MessageList {selected} entry={activeMessages} bind:messagesEl onscroll={handleMessagesScroll} onopenreel={openReel} onscrollbottom={scrollActiveThreadToBottom} />
+  <MessageList {selected} entry={activeMessages} bind:messagesEl onscroll={handleMessagesScroll} onrangechange={handleVisibleRangeChange} onopenreel={openReel} onscrollbottom={scrollActiveThreadToBottom} />
 </main>
 
 {#if reel.state !== 'idle'}

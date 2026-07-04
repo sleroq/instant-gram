@@ -11,6 +11,7 @@ export type ThreadCacheEntry = {
   data?: ThreadMessages;
   error?: string;
   loadingOlder: boolean;
+  preloadingOlder: boolean;
   cursor?: string;
   hasNextPage: boolean;
   requestId?: number;
@@ -18,5 +19,6 @@ export type ThreadCacheEntry = {
   scrollHeight: number;
   clientHeight: number;
   isAtBottom: boolean;
+  visibleStartIndex: number;
   didInitialScroll: boolean;
 };

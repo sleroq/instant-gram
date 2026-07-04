@@ -12,6 +12,7 @@
     entry,
     messagesEl = $bindable(),
     onscroll,
+    onrangechange,
     onopenreel,
     onscrollbottom,
   }: {
@@ -19,6 +20,7 @@
     entry?: ThreadCacheEntry;
     messagesEl?: HTMLDivElement;
     onscroll: () => void;
+    onrangechange: (startIndex: number) => void;
     onopenreel: (shortcode: string, mediaId?: string) => void;
     onscrollbottom: () => void;
   } = $props();
@@ -44,6 +46,12 @@
       count: virtualCount,
       getScrollElement: () => messagesEl ?? null,
     });
+  });
+
+  $effect(() => {
+    const firstVirtualRow = $rowVirtualizer.getVirtualItems()[0];
+    if (!firstVirtualRow) return;
+    onrangechange(Math.max(0, firstVirtualRow.index - (hasHistoryLoader ? 1 : 0)));
   });
 
   function measureVirtualRow(node: HTMLDivElement) {
@@ -89,7 +97,7 @@
               >
                 {#if hasHistoryLoader && virtualRow.index === 0}
                   <div class="history-loader" aria-live="polite">
-                    {#if entry.loadingOlder}Loading older…{:else}Scroll up for older messages{/if}
+                    {#if entry.loadingOlder && !entry.preloadingOlder}Loading older…{:else}Scroll up for older messages{/if}
                   </div>
                 {:else}
                   {@const index = virtualRow.index - (hasHistoryLoader ? 1 : 0)}
@@ -106,6 +114,7 @@
                         {#if message.kind === 'text'}<span class="message-text">{message.text}</span>
                         {:else if message.kind === 'reaction_log'}<span class="message-text">{message.fragment}</span>
                         {:else if message.kind === 'reel_share'}<button class="reel" onclick={() => onopenreel(message.shortcode, message.mediaId)}><img class="avatar" src={message.thumbUrl} alt="" /> Open reel by {message.author}</button>
+                        {:else if message.kind === 'inline_share'}<a class="reel" href={message.targetUrl} target="_blank" rel="noreferrer"><img class="avatar" src={message.thumbUrl} alt="" /> {message.title}{#if message.subtitle}: {message.subtitle}{/if}</a>
                         {:else}<em>Unsupported: {message.contentType}</em>{/if}
                       </div>
                     </div>
