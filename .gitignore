@@ -1,1 +1,3 @@
-*.har
+node_modules/
+.wxt/
+.output/

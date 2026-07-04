@@ -1,0 +1,148 @@
+:root {
+    font-family: Inter, system-ui, sans-serif;
+    color: #171717;
+    background: #fafafa;
+}
+body {
+    margin: 0;
+}
+.app {
+    height: 100vh;
+    display: grid;
+    grid-template-columns: 340px 1fr;
+    background: #fff;
+}
+.sidebar {
+    border-right: 1px solid #ddd;
+    overflow: auto;
+}
+.top {
+    position: sticky;
+    top: 0;
+    background: #fff;
+    padding: 14px;
+    border-bottom: 1px solid #eee;
+    z-index: 1;
+}
+.thread {
+    display: grid;
+    grid-template-columns: 44px 1fr auto;
+    gap: 10px;
+    align-items: center;
+    width: 100%;
+    padding: 10px 12px;
+    border: 0;
+    background: #fff;
+    text-align: left;
+    cursor: pointer;
+}
+.thread:hover,
+.thread.selected {
+    background: #f3f3f3;
+}
+.avatar {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    object-fit: cover;
+    background: #ddd;
+}
+.title {
+    font-weight: 700;
+}
+.snippet {
+    font-size: 13px;
+    color: #666;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.pin {
+    border: 0;
+    background: transparent;
+    font-size: 18px;
+    cursor: pointer;
+}
+.main {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+.messages {
+    flex: 1;
+    overflow: auto;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.bubble {
+    max-width: 620px;
+    padding: 10px 12px;
+    border-radius: 14px;
+    background: #eee;
+}
+.mine {
+    align-self: flex-end;
+    background: #dbeafe;
+}
+.meta {
+    font-size: 12px;
+    color: #666;
+    margin-bottom: 4px;
+}
+.reel {
+    border: 0;
+    background: #111;
+    color: #fff;
+    border-radius: 10px;
+    padding: 8px 10px;
+    cursor: pointer;
+}
+.actions {
+    padding: 12px;
+    border-top: 1px solid #eee;
+}
+.error {
+    color: #b91c1c;
+    padding: 12px;
+    overflow-wrap: anywhere;
+}
+.debug {
+    margin: 8px 12px;
+    padding: 8px;
+    overflow: auto;
+    background: #f4f4f5;
+    border-radius: 8px;
+    font-size: 12px;
+    white-space: pre-wrap;
+}
+.empty {
+    margin: auto;
+    color: #777;
+}
+.modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.65);
+    display: grid;
+    place-items: center;
+}
+.modal-card {
+    background: #111;
+    color: #fff;
+    padding: 14px;
+    border-radius: 12px;
+    max-width: min(900px, 90vw);
+}
+video {
+    max-width: 80vw;
+    max-height: 80vh;
+}
+button {
+    font: inherit;
+}
+.load {
+    margin: 8px auto;
+    padding: 8px 12px;
+}

@@ -1,0 +1,23 @@
+{
+    "name": "instagram-dm-client-extension",
+    "version": "0.1.0",
+    "type": "module",
+    "scripts": {
+        "dev": "wxt",
+        "build": "wxt build",
+        "check": "svelte-check --tsconfig ./tsconfig.json && tsc --noEmit"
+    },
+    "dependencies": {
+        "@wxt-dev/module-svelte": "latest",
+        "svelte": "latest",
+        "webextension-polyfill": "latest",
+        "webext-bridge": "latest",
+        "wxt": "latest"
+    },
+    "devDependencies": {
+        "@tsconfig/svelte": "latest",
+        "svelte-check": "latest",
+        "typescript": "latest",
+        "vite": "latest"
+    }
+}
