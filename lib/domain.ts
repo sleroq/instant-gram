@@ -15,6 +15,7 @@ export type Message =
           ts: number;
           text: string;
           repliedTo?: string;
+          replyPreview?: ReplyPreview;
       }
     | { kind: 'reaction_log'; id: string; ts: number; fragment: string }
     | {
@@ -28,6 +29,8 @@ export type Message =
           thumbUrl: string;
           author: string;
           caption?: string;
+          repliedTo?: string;
+          replyPreview?: ReplyPreview;
       }
     | {
           kind: 'inline_share';
@@ -38,6 +41,8 @@ export type Message =
           thumbUrl: string;
           title: string;
           subtitle?: string;
+          repliedTo?: string;
+          replyPreview?: ReplyPreview;
       }
     | {
           kind: 'unsupported';
@@ -45,7 +50,14 @@ export type Message =
           senderId: string;
           ts: number;
           contentType: string;
+          repliedTo?: string;
+          replyPreview?: ReplyPreview;
       };
+
+export type ReplyPreview =
+    | { kind: 'text'; text: string }
+    | { kind: 'media'; title: string; thumbUrl?: string; subtitle?: string }
+    | { kind: 'unavailable'; label: string };
 
 export type Thread = {
     key: string;

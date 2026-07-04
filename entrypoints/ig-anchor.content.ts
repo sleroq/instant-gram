@@ -13,6 +13,7 @@ import type {
     Message,
     Page,
     ReelMedia,
+    ReplyPreview,
     Result,
     RpcMap,
     Thread,
@@ -205,6 +206,39 @@ function textFragments(value: unknown): string | undefined {
     return text.length > 0 ? text : undefined;
 }
 
+function objectProp(value: unknown): Record<string, unknown> | undefined {
+    return typeof value === "object" && value !== null && !Array.isArray(value)
+        ? (value as Record<string, unknown>)
+        : undefined;
+}
+
+function replyPreview(value: Record<string, unknown> | undefined): ReplyPreview | undefined {
+    if (!value) return undefined;
+    const content = objectProp(value.content);
+    const text =
+        stringProp(value.text_body) ??
+        stringProp(content?.text) ??
+        textFragments(content?.text_fragments);
+    if (text) return { kind: "text", text };
+
+    const xma = objectProp(content?.xma);
+    if (xma) {
+        const title =
+            stringProp(xma.header_title_text) ??
+            stringProp(xma.title_text) ??
+            stringProp(content?.xma_text_body);
+        if (title)
+            return {
+                kind: "media",
+                title,
+                subtitle: stringProp(xma.caption_body_text),
+                thumbUrl: imageUrl(xma.preview_image) || undefined,
+            };
+    }
+
+    return { kind: "unavailable", label: "Original message unavailable" };
+}
+
 function parseMessage(value: unknown): Message | undefined {
     if (typeof value !== "object" || value === null || Array.isArray(value))
         return undefined;
@@ -216,21 +250,12 @@ function parseMessage(value: unknown): Message | undefined {
         typeof node.content_type === "string" && node.content_type.length > 0
             ? node.content_type
             : "UNKNOWN";
-    const content =
-        typeof node.content === "object" &&
-        node.content !== null &&
-        !Array.isArray(node.content)
-            ? (node.content as Record<string, unknown>)
-            : undefined;
+    const content = objectProp(node.content);
     const contentText = content?.text;
     const textBody = node.text_body;
-    const repliedToMessage =
-        typeof node.replied_to_message === "object" &&
-        node.replied_to_message !== null &&
-        !Array.isArray(node.replied_to_message)
-            ? (node.replied_to_message as Record<string, unknown>)
-            : undefined;
+    const repliedToMessage = objectProp(node.replied_to_message);
     const repliedToMessageId = repliedToMessage?.message_id;
+    const reply = replyPreview(repliedToMessage);
     if (contentType === "REACTION_LOG_XMAT")
         // Instagram emits this as a separate "Liked a message" history row; actual
         // reaction state lives on the target message's `reactions` field.
@@ -252,6 +277,7 @@ function parseMessage(value: unknown): Message | undefined {
                 repliedToMessageId.length > 0
                     ? repliedToMessageId
                     : undefined,
+            replyPreview: reply,
         };
     if (contentType === "ACTION_LOG" || contentType === "REACTION_LOG")
         return {
@@ -295,6 +321,12 @@ function parseMessage(value: unknown): Message | undefined {
                 thumbUrl,
                 author: title,
                 caption: subtitle,
+                repliedTo:
+                    typeof repliedToMessageId === "string" &&
+                    repliedToMessageId.length > 0
+                        ? repliedToMessageId
+                        : undefined,
+                replyPreview: reply,
             };
         return {
             kind: "inline_share",
@@ -309,9 +341,25 @@ function parseMessage(value: unknown): Message | undefined {
                 (stringProp(xma.__typename) === "SlideMessagePlaceholderXMA"
                     ? "Unavailable attachment"
                     : undefined),
+            repliedTo:
+                typeof repliedToMessageId === "string" && repliedToMessageId.length > 0
+                    ? repliedToMessageId
+                    : undefined,
+            replyPreview: reply,
         };
     }
-    return { kind: "unsupported", id, senderId: sender, ts, contentType };
+    return {
+        kind: "unsupported",
+        id,
+        senderId: sender,
+        ts,
+        contentType,
+        repliedTo:
+            typeof repliedToMessageId === "string" && repliedToMessageId.length > 0
+                ? repliedToMessageId
+                : undefined,
+        replyPreview: reply,
+    };
 }
 
 function parseUser(value: unknown): User | undefined {

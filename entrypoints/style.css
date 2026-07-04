@@ -127,6 +127,19 @@ body {
     color: #777;
     font-size: 13px;
 }
+.date-separator {
+    display: flex;
+    justify-content: center;
+    margin: 8px 0 16px;
+    color: #71717a;
+    font-size: 12px;
+    font-weight: 600;
+}
+.date-separator span {
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: #f4f4f5;
+}
 .jump-bottom {
     position: absolute;
     right: 20px;
@@ -153,6 +166,9 @@ body {
     margin-left: auto;
     flex-direction: row-reverse;
 }
+.message-row.highlighted .bubble {
+    animation: message-highlight 1.4s ease-out;
+}
 .bubble {
     max-width: 620px;
     min-width: 0;
@@ -163,6 +179,12 @@ body {
 }
 .message-row.mine .bubble {
     background: #dbeafe;
+}
+.sender-name {
+    margin-bottom: 4px;
+    color: #52525b;
+    font-size: 12px;
+    font-weight: 700;
 }
 .sender-avatar-slot {
     width: 24px;
@@ -183,17 +205,79 @@ body {
     text-overflow: ellipsis;
     white-space: nowrap;
 }
+.reply-preview {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    margin-bottom: 8px;
+    padding: 6px 8px;
+    border: 0;
+    border-left: 3px solid rgba(0, 0, 0, 0.22);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.55);
+    color: #52525b;
+    font: inherit;
+    font-size: 12px;
+    text-align: left;
+    cursor: pointer;
+}
+.message-row.mine .reply-preview {
+    background: rgba(255, 255, 255, 0.45);
+}
+.reply-thumb {
+    width: 28px;
+    height: 28px;
+    flex: 0 0 28px;
+    border-radius: 6px;
+    object-fit: cover;
+}
+.reply-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+@keyframes message-highlight {
+    0% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.55); }
+    35% { box-shadow: 0 0 0 6px rgba(37, 99, 235, 0.22); }
+    100% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0); }
+}
 .reel {
+    display: block;
     border: 0;
     background: #111;
     color: #fff;
     border-radius: 10px;
-    padding: 8px 10px;
+    padding: 0;
     cursor: pointer;
     max-width: 100%;
     overflow: hidden;
+    text-decoration: none;
+    text-align: left;
+}
+.reel-card span,
+.reel-card small {
+    display: block;
+    padding: 0 10px;
+    overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+.reel-card span {
+    padding-top: 8px;
+    font-weight: 700;
+}
+.reel-card small {
+    padding-bottom: 8px;
+    color: #d4d4d8;
+}
+.reel-banner {
+    display: block;
+    width: 100%;
+    max-height: 180px;
+    object-fit: cover;
+    background: #27272a;
 }
 .message-text {
     display: block;

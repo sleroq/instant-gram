@@ -21,4 +21,9 @@ export type ThreadCacheEntry = {
   isAtBottom: boolean;
   visibleStartIndex: number;
   didInitialScroll: boolean;
+  replyTargetStatus: Record<string, 'pending' | 'found' | 'missing'>;
+};
+
+export type MessageListApi = {
+  scrollToMessage: (messageId: string, behavior?: ScrollBehavior) => boolean;
 };

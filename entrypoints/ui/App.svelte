@@ -5,7 +5,7 @@
   import type { Page, ReelMedia, Result, Thread, ThreadMessages } from '../../lib/domain';
   import MessageList from './MessageList.svelte';
   import ThreadList from './ThreadList.svelte';
-  import type { ThreadCacheEntry, View } from './types';
+  import type { MessageListApi, ThreadCacheEntry, View } from './types';
 
   type JsonPayload = null | boolean | number | string | JsonPayload[] | { [key: string]: JsonPayload };
   const OLDER_MESSAGE_BUFFER_TARGET = 200;
@@ -19,7 +19,10 @@
   let pinned = $state<string[]>([]);
   let reel = $state<View<ReelMedia> & { shortcode?: string }>({ state: 'idle' });
   let messagesEl = $state<HTMLDivElement>();
+  let messageListApi = $state<MessageListApi>();
+  let highlightedMessageId = $state<string | undefined>();
   let jumpingToBottom = false;
+  let preparingReplyTarget = false;
   let nextThreadRequestId = 0;
 
   const sortedThreads = $derived(inbox.state === 'ready' ? [...inbox.data.items].sort((a, b) => {
@@ -66,6 +69,7 @@
       isAtBottom: true,
       visibleStartIndex: 0,
       didInitialScroll: false,
+      replyTargetStatus: {},
     };
   }
 
@@ -148,9 +152,69 @@
       if (!entry?.data || !entry.cursor || !entry.hasNextPage || entry.loadingOlder) return;
       if (entry.visibleStartIndex >= OLDER_MESSAGE_BUFFER_TARGET) return;
       if (loadedPages >= OLDER_MESSAGE_PRELOAD_PAGE_LIMIT) return;
-      await loadOlder({ preload: true });
+      if (!await loadOlder({ preload: true })) return;
       loadedPages += 1;
     }
+  }
+
+  function hasLoadedMessage(key: string, messageId: string): boolean {
+    return Boolean(threadCache[key]?.data?.items.some(message => message.id === messageId));
+  }
+
+  function updateReplyTargetStatus(key: string, messageId: string, status: ThreadCacheEntry['replyTargetStatus'][string]) {
+    const entry = threadCache[key];
+    if (!entry) return;
+    threadCache[key] = { ...entry, replyTargetStatus: { ...entry.replyTargetStatus, [messageId]: status } };
+  }
+
+  async function scrollToMessage(messageId: string, options: { passive?: boolean } = {}): Promise<'found' | 'missing' | 'cancelled'> {
+    if (!selectedKey) return 'cancelled';
+    const key = selectedKey;
+    if (hasLoadedMessage(key, messageId)) {
+      updateReplyTargetStatus(key, messageId, 'found');
+      if (!options.passive && messageListApi?.scrollToMessage(messageId, 'smooth')) {
+        highlightedMessageId = messageId;
+        window.setTimeout(() => {
+          if (highlightedMessageId === messageId) highlightedMessageId = undefined;
+        }, 1400);
+      }
+      return 'found';
+    }
+
+    updateReplyTargetStatus(key, messageId, 'pending');
+    while (selectedKey === key) {
+      const entry = threadCache[key];
+      if (!entry?.data || !entry.cursor || !entry.hasNextPage) {
+        updateReplyTargetStatus(key, messageId, 'missing');
+        return 'missing';
+      }
+      if (!await loadOlder({ preload: options.passive })) return 'cancelled';
+      if (hasLoadedMessage(key, messageId)) {
+        updateReplyTargetStatus(key, messageId, 'found');
+        if (!options.passive) {
+          await tick();
+          if (messageListApi?.scrollToMessage(messageId, 'auto')) {
+            await tick();
+            messageListApi.scrollToMessage(messageId, 'smooth');
+            highlightedMessageId = messageId;
+            window.setTimeout(() => {
+              if (highlightedMessageId === messageId) highlightedMessageId = undefined;
+            }, 1400);
+          }
+        }
+        return 'found';
+      }
+    }
+    return 'cancelled';
+  }
+
+  function handleVisibleReplyTargets(messageIds: string[]) {
+    if (!selectedKey || preparingReplyTarget) return;
+    const key = selectedKey;
+    const target = messageIds.find(messageId => !threadCache[key]?.replyTargetStatus[messageId]);
+    if (!target || hasLoadedMessage(key, target)) return;
+    preparingReplyTarget = true;
+    void scrollToMessage(target, { passive: true }).finally(() => { preparingReplyTarget = false; });
   }
 
   async function restoreThreadScroll(key: string) {
@@ -238,6 +302,7 @@
         isAtBottom: true,
         visibleStartIndex: 0,
         didInitialScroll: false,
+        replyTargetStatus: {},
       };
       if (selectedKey === thread.key) await scrollThreadToBottom(thread.key);
     } catch (error) {
@@ -252,18 +317,18 @@
     }
   }
 
-  async function loadOlder(options: { preload?: boolean } = {}) {
-    if (!selected || !selectedKey) return;
+  async function loadOlder(options: { preload?: boolean } = {}): Promise<boolean> {
+    if (!selected || !selectedKey) return false;
     const key = selectedKey;
     const threadKey = selected.cursor ?? selected.key;
     const entry = threadCache[key];
-    if (!entry?.data || !entry.cursor || !entry.hasNextPage || entry.loadingOlder) return;
+    if (!entry?.data || !entry.cursor || !entry.hasNextPage || entry.loadingOlder) return false;
     const anchor = firstVisibleMessageAnchor();
     threadCache[key] = { ...entry, loadingOlder: true, preloadingOlder: Boolean(options.preload), error: undefined };
     try {
       const page = unwrap(await rpc<Result<ThreadMessages>>('getThread', { threadKey, cursor: entry.cursor }));
       const latest = threadCache[key];
-      if (!latest?.data) return;
+      if (!latest?.data) return false;
       const previousCount = latest.data.items.length;
       const data = mergeOlderMessages(latest.data, page);
       const addedOlderCount = data.items.length - previousCount;
@@ -283,9 +348,10 @@
         const scroll = readScrollState();
         if (scroll) threadCache[key] = { ...threadCache[key], ...scroll };
       }
+      return true;
     } catch (error) {
       const latest = threadCache[key];
-      if (!latest) return;
+      if (!latest) return false;
       threadCache[key] = {
         ...latest,
         state: latest.data ? 'ready' : 'error',
@@ -293,6 +359,7 @@
         loadingOlder: false,
         preloadingOlder: false,
       };
+      return false;
     }
   }
 
@@ -307,7 +374,7 @@
 
 <main class="app">
   <ThreadList {inbox} threads={sortedThreads} {selected} {pinned} onselect={selectThread} ontogglepin={togglePin} onloadmore={() => loadInbox(inbox.state === 'ready' ? inbox.data.cursor : undefined)} />
-  <MessageList {selected} entry={activeMessages} bind:messagesEl onscroll={handleMessagesScroll} onrangechange={handleVisibleRangeChange} onopenreel={openReel} onscrollbottom={scrollActiveThreadToBottom} />
+  <MessageList {selected} entry={activeMessages} bind:messagesEl bind:api={messageListApi} {highlightedMessageId} onscroll={handleMessagesScroll} onrangechange={handleVisibleRangeChange} onvisiblereplytargets={handleVisibleReplyTargets} onreplyclick={(messageId) => void scrollToMessage(messageId)} onopenreel={openReel} onscrollbottom={scrollActiveThreadToBottom} />
 </main>
 
 {#if reel.state !== 'idle'}
