@@ -1,6 +1,6 @@
 # Instagram DM live communication
 
-Source: `www.instagram.com-live-communication.har`. Use the same common GraphQL form fields and headers as `instagram-har-useful-requests.md`; all calls below are `POST https://www.instagram.com/api/graphql`.
+Source: `examples/www.instagram.com-live-communication.har`. Use the same common GraphQL form fields and headers as `instagram-har-useful-requests.md`; all calls below are `POST https://www.instagram.com/api/graphql`.
 
 ## Listen for new messages
 

@@ -1,6 +1,6 @@
 # Instagram DM MVP methods
 
-Source captures: `www.instagram.com.har`, `www.instagram.com-the-second.har`. Values below omit live auth tokens; use the current page's harvested `fb_dtsg`, `lsd`, `jazoest`, `csrftoken`, `device_id_for_iris_subscription`, and viewer FBID. All rows except `getReelMedia` are HAR-backed; `getReelMedia` is carried over from the plan because the HARs contain reel-share XMA data but not the video lookup request. See `instagram-har-useful-requests.md` for copyable request examples.
+Source captures: `examples/www.instagram.com.har`, `examples/www.instagram.com-the-second.har`. Values below omit live auth tokens; use the current page's harvested `fb_dtsg`, `lsd`, `jazoest`, `csrftoken`, `device_id_for_iris_subscription`, and viewer FBID. All rows except `getReelMedia` are HAR-backed; `getReelMedia` is carried over from the plan because the HARs contain reel-share XMA data but not the video lookup request. See `instagram-har-useful-requests.md` for copyable request examples.
 
 ## Common request shape
 

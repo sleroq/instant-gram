@@ -1,6 +1,6 @@
 # Useful HAR request examples
 
-Sanitized extracts from `www.instagram.com.har` and `www.instagram.com-the-second.har`. Auth/session fields are intentionally placeholders; fill them from the live Instagram anchor tab before replaying.
+Sanitized extracts from `examples/www.instagram.com.har` and `examples/www.instagram.com-the-second.har`. Auth/session fields are intentionally placeholders; fill them from the live Instagram anchor tab before replaying.
 
 ## Common POST form fields
 
@@ -31,7 +31,7 @@ x-csrftoken: <live csrftoken cookie>
 
 ## 1. Initial inbox
 
-Source: `www.instagram.com.har`, entry `3` and `www.instagram.com-the-second.har`, entry `3`.
+Source: `examples/www.instagram.com.har`, entry `3` and `examples/www.instagram.com-the-second.har`, entry `3`.
 
 ```txt
 POST https://www.instagram.com/api/graphql
@@ -60,7 +60,7 @@ data.get_slide_mailbox_for_iris_subscription.threads_by_folder.page_info.has_nex
 
 ## 2. Inbox pagination
 
-Source: `www.instagram.com-the-second.har`, entry `44`. This was the missing request in the original plan.
+Source: `examples/www.instagram.com-the-second.har`, entry `44`. This was the missing request in the original plan.
 
 ```txt
 POST https://www.instagram.com/api/graphql
@@ -92,7 +92,7 @@ data.fetch__SlideMailbox.threads_by_folder.page_info.has_next_page
 
 ## 3. Thread header
 
-Source: `www.instagram.com.har`, entries `8`, `57`; `www.instagram.com-the-second.har`, entry `8`.
+Source: `examples/www.instagram.com.har`, entries `8`, `57`; `examples/www.instagram.com-the-second.har`, entry `8`.
 
 ```txt
 POST https://www.instagram.com/api/graphql
@@ -115,7 +115,7 @@ data.get_slide_thread_nullable.as_ig_direct_thread
 
 ## 4. Initial thread messages
 
-Source: `www.instagram.com.har`, entry `9`; `www.instagram.com-the-second.har`, entry `9`.
+Source: `examples/www.instagram.com.har`, entry `9`; `examples/www.instagram.com-the-second.har`, entry `9`.
 
 ```txt
 POST https://www.instagram.com/api/graphql
@@ -142,7 +142,7 @@ data.get_slide_thread_nullable.as_ig_direct_thread.slide_messages.page_info.has_
 
 ## 5. Older thread messages
 
-Source: `www.instagram.com.har`, entry `67`.
+Source: `examples/www.instagram.com.har`, entry `67`.
 
 ```txt
 POST https://www.instagram.com/api/graphql
