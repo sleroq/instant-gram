@@ -178,6 +178,33 @@ function reelMediaId(xma: Record<string, unknown>, targetUrl: string): string | 
     }
 }
 
+function stringProp(value: unknown): string | undefined {
+    return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function imageUrl(value: unknown): string {
+    if (typeof value !== "object" || value === null || Array.isArray(value))
+        return "";
+    const url = (value as Record<string, unknown>).url;
+    return typeof url === "string" && url.length > 0 ? url : "";
+}
+
+function textFragments(value: unknown): string | undefined {
+    if (!Array.isArray(value)) return undefined;
+    const text = value
+        .map((fragment) =>
+            typeof fragment === "object" &&
+            fragment !== null &&
+            !Array.isArray(fragment) &&
+            typeof (fragment as Record<string, unknown>).plaintext === "string"
+                ? ((fragment as Record<string, unknown>).plaintext as string)
+                : "",
+        )
+        .join("")
+        .trim();
+    return text.length > 0 ? text : undefined;
+}
+
 function parseMessage(value: unknown): Message | undefined {
     if (typeof value !== "object" || value === null || Array.isArray(value))
         return undefined;
@@ -204,6 +231,10 @@ function parseMessage(value: unknown): Message | undefined {
             ? (node.replied_to_message as Record<string, unknown>)
             : undefined;
     const repliedToMessageId = repliedToMessage?.message_id;
+    if (contentType === "REACTION_LOG_XMAT")
+        // Instagram emits this as a separate "Liked a message" history row; actual
+        // reaction state lives on the target message's `reactions` field.
+        return undefined;
     if (contentType === "TEXT")
         return {
             kind: "text",
@@ -232,7 +263,7 @@ function parseMessage(value: unknown): Message | undefined {
                     ? textBody
                     : typeof contentText === "string" && contentText.length > 0
                       ? contentText
-                      : "Activity",
+                      : textFragments(content?.text_fragments) ?? "Activity",
         };
     const xma =
         typeof content?.xma === "object" &&
@@ -245,39 +276,41 @@ function parseMessage(value: unknown): Message | undefined {
             ? xma.target_url
             : undefined;
     const shortcode = targetUrl ? reelShortcode(targetUrl) : undefined;
-    if (contentType === "MESSAGE_INLINE_SHARE" && xma && targetUrl && shortcode)
+    if (contentType === "MESSAGE_INLINE_SHARE" && xma) {
+        const thumbUrl = imageUrl(xma.preview_image);
+        const title = stringProp(xma.header_title_text) ?? "Instagram share";
+        const subtitle =
+            stringProp(xma.title_text) ??
+            stringProp(xma.caption_body_text) ??
+            stringProp(content?.xma_text_body);
+        if (targetUrl && shortcode)
+            return {
+                kind: "reel_share",
+                id,
+                senderId: sender,
+                ts,
+                shortcode,
+                mediaId: reelMediaId(xma, targetUrl),
+                targetUrl,
+                thumbUrl,
+                author: title,
+                caption: subtitle,
+            };
         return {
-            kind: "reel_share",
+            kind: "inline_share",
             id,
             senderId: sender,
             ts,
-            shortcode,
-            mediaId: reelMediaId(xma, targetUrl),
             targetUrl,
-            thumbUrl:
-                typeof xma.preview_image === "object" &&
-                xma.preview_image !== null &&
-                !Array.isArray(xma.preview_image) &&
-                typeof (xma.preview_image as Record<string, unknown>).url ===
-                    "string" &&
-                ((xma.preview_image as Record<string, unknown>).url as string)
-                    .length > 0
-                    ? ((xma.preview_image as Record<string, unknown>)
-                          .url as string)
-                    : "",
-            author:
-                typeof xma.header_title_text === "string" &&
-                xma.header_title_text.length > 0
-                    ? xma.header_title_text
-                    : "Instagram",
-            caption:
-                typeof xma.title_text === "string" && xma.title_text.length > 0
-                    ? xma.title_text
-                    : typeof xma.caption_body_text === "string" &&
-                        xma.caption_body_text.length > 0
-                      ? xma.caption_body_text
-                      : undefined,
+            thumbUrl,
+            title,
+            subtitle:
+                subtitle ??
+                (stringProp(xma.__typename) === "SlideMessagePlaceholderXMA"
+                    ? "Unavailable attachment"
+                    : undefined),
         };
+    }
     return { kind: "unsupported", id, senderId: sender, ts, contentType };
 }
 

@@ -30,6 +30,16 @@ export type Message =
           caption?: string;
       }
     | {
+          kind: 'inline_share';
+          id: string;
+          senderId: string;
+          ts: number;
+          targetUrl?: string;
+          thumbUrl: string;
+          title: string;
+          subtitle?: string;
+      }
+    | {
           kind: 'unsupported';
           id: string;
           senderId: string;

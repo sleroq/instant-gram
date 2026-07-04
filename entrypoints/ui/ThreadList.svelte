@@ -26,6 +26,7 @@
       case 'text': return message.text;
       case 'reaction_log': return message.fragment;
       case 'reel_share': return `Reel from ${message.author}`;
+      case 'inline_share': return message.title;
       case 'unsupported': return message.contentType;
     }
   }
