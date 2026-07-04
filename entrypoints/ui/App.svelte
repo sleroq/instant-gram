@@ -1,7 +1,7 @@
 <script lang="ts">
   import '../../lib/bridge';
   import { sendMessage } from 'webext-bridge/popup';
-  import type { Message, Page, ReelMedia, Result, Thread } from '../../lib/domain';
+  import type { Message, Page, ReelMedia, Result, Thread, ThreadMessages } from '../../lib/domain';
 
   type JsonPayload = null | boolean | number | string | JsonPayload[] | { [key: string]: JsonPayload };
 
@@ -9,7 +9,7 @@
 
   let inbox = $state<View<Page<Thread>>>({ state: 'loading' });
   let selected = $state<Thread | undefined>();
-  let messages = $state<View<Page<Message>>>({ state: 'idle' });
+  let messages = $state<View<ThreadMessages>>({ state: 'idle' });
   let pinned = $state<string[]>([]);
   let reel = $state<View<ReelMedia> & { shortcode?: string }>({ state: 'idle' });
 
@@ -35,6 +35,24 @@
     return result.value;
   }
 
+  function senderId(message: Message | undefined): string | undefined {
+    return message && 'senderId' in message && message.senderId.length > 0 ? message.senderId : undefined;
+  }
+
+  function isMine(message: Message, viewerId: string): boolean {
+    return senderId(message) === viewerId;
+  }
+
+  function senderAvatar(message: Message, thread?: Thread): string | undefined {
+    const id = senderId(message);
+    return id ? thread?.users.find(user => user.id === id)?.picUrl ?? undefined : undefined;
+  }
+
+  function showSenderAvatar(message: Message, next: Message | undefined, data: ThreadMessages): boolean {
+    const id = senderId(message);
+    return Boolean(id && id !== data.viewerId && id !== senderId(next));
+  }
+
   async function rpc<T>(name: string, payload: JsonPayload): Promise<T> {
     return sendMessage(name, payload, 'background') as Promise<T>;
   }
@@ -56,7 +74,7 @@
 
   async function selectThread(thread: Thread) {
     selected = thread; messages = { state: 'loading' };
-    try { messages = { state: 'ready', data: unwrap(await rpc<Result<Page<Message>>>('getThread', { threadKey: thread.cursor ?? thread.key })) }; }
+    try { messages = { state: 'ready', data: unwrap(await rpc<Result<ThreadMessages>>('getThread', { threadKey: thread.cursor ?? thread.key })) }; }
     catch (error) { messages = { state: 'error', message: error instanceof Error ? error.message : String(error) }; }
   }
 
@@ -66,8 +84,8 @@
     messages = { state: 'loading' };
     try {
       const threadKey = selected.cursor ?? selected.key;
-      const page = unwrap(await rpc<Result<Page<Message>>>('getThread', current.cursor ? { threadKey, cursor: current.cursor } : { threadKey }));
-      messages = { state: 'ready', data: { ...page, items: [...page.items, ...current.items] } };
+      const page = unwrap(await rpc<Result<ThreadMessages>>('getThread', current.cursor ? { threadKey, cursor: current.cursor } : { threadKey }));
+      messages = { state: 'ready', data: { ...page, viewerId: current.viewerId, items: [...page.items, ...current.items] } };
     } catch (error) { messages = { state: 'error', message: error instanceof Error ? error.message : String(error) }; }
   }
 
@@ -105,13 +123,20 @@
       {:else if messages.state === 'ready'}
         <div class="messages">
           {#if messages.data.hasNextPage}<button class="load" onclick={loadOlder}>Load older</button>{/if}
-          {#each messages.data.items as message (message.id)}
-            <div class:mine={message.kind !== 'reaction_log' && message.senderId !== selected.users[0]?.id} class="bubble">
-              <div class="meta">{new Date(message.ts).toLocaleString()}</div>
-              {#if message.kind === 'text'}<span class="message-text">{message.text}</span>
-              {:else if message.kind === 'reaction_log'}<span class="message-text">{message.fragment}</span>
-              {:else if message.kind === 'reel_share'}<button class="reel" onclick={() => openReel(message.shortcode)}><img class="avatar" src={message.thumbUrl} alt="" /> Open reel by {message.author}</button>
-              {:else}<em>Unsupported: {message.contentType}</em>{/if}
+          {#each messages.data.items as message, index (message.id)}
+            <div class:mine={isMine(message, messages.data.viewerId)} class="message-row">
+              <div class="sender-avatar-slot">
+                {#if showSenderAvatar(message, messages.data.items[index + 1], messages.data)}
+                  <img class="sender-avatar" src={senderAvatar(message, messages.data.thread) ?? ''} alt="" />
+                {/if}
+              </div>
+              <div class="bubble">
+                <div class="meta">{new Date(message.ts).toLocaleString()}</div>
+                {#if message.kind === 'text'}<span class="message-text">{message.text}</span>
+                {:else if message.kind === 'reaction_log'}<span class="message-text">{message.fragment}</span>
+                {:else if message.kind === 'reel_share'}<button class="reel" onclick={() => openReel(message.shortcode)}><img class="avatar" src={message.thumbUrl} alt="" /> Open reel by {message.author}</button>
+                {:else}<em>Unsupported: {message.contentType}</em>{/if}
+              </div>
             </div>
           {/each}
         </div>

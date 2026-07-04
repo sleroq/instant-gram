@@ -55,7 +55,7 @@ export type ReelMedia = {
     owner: string;
 };
 export type Page<T> = { items: T[]; cursor?: string; hasNextPage: boolean };
-export type ThreadMessages = Page<Message> & { thread?: Thread };
+export type ThreadMessages = Page<Message> & { thread?: Thread; viewerId: string };
 
 export type ApiError = { message: string };
 export type Result<T> = { ok: true; value: T } | { ok: false; error: ApiError };

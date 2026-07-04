@@ -47,11 +47,15 @@ type ThreadResponse = {
         get_slide_thread_nullable?: {
             as_ig_direct_thread?: {
                 slide_messages?: unknown;
+                viewer_id?: unknown;
+                viewer?: unknown;
             };
         };
         fetch__SlideThread?: {
             as_ig_direct_thread?: {
                 slide_messages?: unknown;
+                viewer_id?: unknown;
+                viewer?: unknown;
             };
         };
     };
@@ -126,14 +130,16 @@ function messageId(node: Record<string, unknown>): string {
     return crypto.randomUUID();
 }
 function messageTs(node: Record<string, unknown>): number {
-    return typeof node.timestamp_ms === "number"
-        ? node.timestamp_ms
-        : typeof node.timestamp === "number"
-          ? node.timestamp
-          : 0;
+    for (const value of [node.timestamp_ms, node.timestamp]) {
+        if (typeof value === "number") return value;
+        if (typeof value === "string" && /^\d+$/.test(value)) return Number(value);
+    }
+    return 0;
 }
 function senderId(node: Record<string, unknown>): string {
-    return typeof node.sender_id === "string" && node.sender_id.length > 0
+    return typeof node.sender_fbid === "string" && node.sender_fbid.length > 0
+        ? node.sender_fbid
+        : typeof node.sender_id === "string" && node.sender_id.length > 0
         ? node.sender_id
         : typeof node.user_id === "string" && node.user_id.length > 0
           ? node.user_id
@@ -250,13 +256,18 @@ function parseUser(value: unknown): User | undefined {
         return undefined;
     const user = value as Record<string, unknown>;
     const id =
-        typeof user.id === "string" && user.id.length > 0
-            ? user.id
-            : typeof user.pk === "string" && user.pk.length > 0
-              ? user.pk
-              : typeof user.fbid === "string" && user.fbid.length > 0
-                ? user.fbid
-                : undefined;
+        typeof user.interop_messaging_user_fbid === "string" &&
+        user.interop_messaging_user_fbid.length > 0
+            ? user.interop_messaging_user_fbid
+            : typeof user.fbid === "string" && user.fbid.length > 0
+              ? user.fbid
+              : typeof user.fbid_v2 === "string" && user.fbid_v2.length > 0
+                ? user.fbid_v2
+                : typeof user.id === "string" && user.id.length > 0
+                  ? user.id
+                  : typeof user.pk === "string" && user.pk.length > 0
+                    ? user.pk
+                    : undefined;
     if (!id) return undefined;
     return {
         id,
@@ -395,7 +406,7 @@ function parseThreads(container: unknown): Page<Thread> {
     };
 }
 
-function parseMessagePage(container: unknown): ThreadMessages {
+function parseMessagePage(container: unknown): Page<Message> {
     const containerObj =
         typeof container === "object" &&
         container !== null &&
@@ -537,12 +548,29 @@ function parseInboxResponse(json: unknown): Page<Thread> {
     return parseThreads(box);
 }
 
-function parseThreadResponse(json: unknown): ThreadMessages {
+function parseThreadResponse(json: unknown, viewerId: string): ThreadMessages {
     const root = (json as ThreadResponse).data;
     const thread =
         root?.get_slide_thread_nullable?.as_ig_direct_thread ??
         root?.fetch__SlideThread?.as_ig_direct_thread;
-    return parseMessagePage(thread?.slide_messages);
+    const threadViewerId = thread?.viewer_id;
+    const viewer =
+        typeof thread?.viewer === "object" &&
+        thread.viewer !== null &&
+        !Array.isArray(thread.viewer)
+            ? (thread.viewer as Record<string, unknown>)
+            : undefined;
+    const viewerSenderId = viewer?.interop_messaging_user_fbid;
+    return {
+        ...parseMessagePage(thread?.slide_messages),
+        thread: parseThread(thread),
+        viewerId:
+            typeof viewerSenderId === "string" && viewerSenderId.length > 0
+                ? viewerSenderId
+                : typeof threadViewerId === "string" && threadViewerId.length > 0
+                  ? threadViewerId
+                  : viewerId,
+    };
 }
 
 function parseReelMediaResponse(
@@ -585,8 +613,9 @@ export default defineContentScript({
         onMessage("getThread", async ({ data }) => {
             try {
                 const payload = data as ThreadPayload;
+                const tokens = await harvestTokens();
                 const json = await sendGraphqlRequest(threadRequest(payload));
-                return ok(parseThreadResponse(json));
+                return ok(parseThreadResponse(json, tokens.viewerId));
             } catch (error) {
                 return fail(error);
             }

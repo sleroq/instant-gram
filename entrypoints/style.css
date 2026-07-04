@@ -106,17 +106,39 @@ body {
     gap: 8px;
     overflow-x: hidden;
 }
+.message-row {
+    flex-shrink: 0;
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+    max-width: calc(620px + 32px);
+    min-width: 0;
+}
+.message-row.mine {
+    align-self: flex-end;
+    flex-direction: row-reverse;
+}
 .bubble {
     max-width: 620px;
     min-width: 0;
     padding: 10px 12px;
     border-radius: 14px;
     background: #eee;
-    overflow: hidden;
+    overflow-wrap: anywhere;
 }
-.mine {
-    align-self: flex-end;
+.message-row.mine .bubble {
     background: #dbeafe;
+}
+.sender-avatar-slot {
+    width: 24px;
+    flex: 0 0 24px;
+}
+.sender-avatar {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    object-fit: cover;
+    background: #ddd;
 }
 .meta {
     font-size: 12px;
@@ -140,9 +162,8 @@ body {
 }
 .message-text {
     display: block;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
 }
 .actions {
     padding: 12px;

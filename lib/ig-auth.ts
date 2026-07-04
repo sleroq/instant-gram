@@ -403,7 +403,7 @@ function moduleUserId(): string | undefined {
     for (const name of ['CurrentUserInitialData', 'PolarisViewer', 'Viewer']) {
         const value = requireModule(name);
         if (!isRecord(value)) continue;
-        for (const key of ['USER_ID', 'ACCOUNT_ID', 'actorID', 'viewer_fbid']) {
+        for (const key of ['viewer_fbid', 'actorID', 'USER_ID', 'ACCOUNT_ID']) {
             const found = value[key];
             if (typeof found === 'string' && found.length > 0) return found;
         }
