@@ -1,4 +1,4 @@
-import { defineContentScript } from "wxt/utils/define-content-script";
+import { defineContentScript } from 'wxt/utils/define-content-script';
 
 type PageRequire = (name: string) => unknown;
 type PageWindow = Window & { require?: PageRequire };
@@ -10,18 +10,20 @@ type Probe = {
     viewerId?: string;
     at: number;
     requireAvailable: boolean;
-    sources: Partial<Record<"fbDtsg" | "lsd" | "jazoest" | "deviceId" | "viewerId", string>>;
+    sources: Partial<
+        Record<'fbDtsg' | 'lsd' | 'jazoest' | 'deviceId' | 'viewerId', string>
+    >;
 };
 
-const AUTH_PROBE_EVENT = "icr:ig-auth-probe";
-const AUTH_PROBE_REQUEST_EVENT = "icr:ig-auth-probe-request";
+const AUTH_PROBE_EVENT = 'icr:ig-auth-probe';
+const AUTH_PROBE_REQUEST_EVENT = 'icr:ig-auth-probe-request';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-    return typeof value === "object" && value !== null;
+    return typeof value === 'object' && value !== null;
 }
 
 function str(value: unknown): string | undefined {
-    return typeof value === "string" && value.length > 0 ? value : undefined;
+    return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
 function requireModule(name: string): unknown {
@@ -39,10 +41,10 @@ function moduleToken(name: string): string | undefined {
 }
 
 function moduleUserId(): string | undefined {
-    for (const name of ["CurrentUserInitialData", "PolarisViewer", "Viewer"]) {
+    for (const name of ['CurrentUserInitialData', 'PolarisViewer', 'Viewer']) {
         const value = requireModule(name);
         if (!isRecord(value)) continue;
-        for (const key of ["USER_ID", "ACCOUNT_ID", "actorID", "viewer_fbid"]) {
+        for (const key of ['USER_ID', 'ACCOUNT_ID', 'actorID', 'viewer_fbid']) {
             const found = str(value[key]);
             if (found) return found;
         }
@@ -56,19 +58,19 @@ function deriveJazoest(fbDtsg: string | undefined): string | undefined {
 }
 
 function deviceId(): string {
-    const stored = localStorage.getItem("chatd-deviceid");
+    const stored = localStorage.getItem('chatd-deviceid');
     if (stored) return stored;
     const generated = crypto.randomUUID();
-    localStorage.setItem("chatd-deviceid", generated);
+    localStorage.setItem('chatd-deviceid', generated);
     return generated;
 }
 
 function emitProbe() {
     const pageWindow = window as PageWindow;
-    const fbDtsg = moduleToken("DTSGInitialData");
-    const lsd = moduleToken("LSD") ?? moduleToken("LSDToken");
+    const fbDtsg = moduleToken('DTSGInitialData');
+    const lsd = moduleToken('LSD') ?? moduleToken('LSDToken');
     const jazoest = deriveJazoest(fbDtsg);
-    const viewerId = moduleUserId() ?? fbDtsg?.split(":")[1];
+    const viewerId = moduleUserId() ?? fbDtsg?.split(':')[1];
     const probe: Probe = {
         fbDtsg,
         lsd,
@@ -76,22 +78,26 @@ function emitProbe() {
         deviceId: deviceId(),
         viewerId,
         at: Date.now(),
-        requireAvailable: typeof pageWindow.require === "function",
+        requireAvailable: typeof pageWindow.require === 'function',
         sources: {
             fbDtsg: fbDtsg ? "require('DTSGInitialData').token" : undefined,
             lsd: lsd ? "require('LSD'|'LSDToken').token" : undefined,
-            jazoest: jazoest ? "derived from fb_dtsg" : undefined,
-            deviceId: "localStorage.chatd-deviceid",
-            viewerId: viewerId ? "CurrentUserInitialData or fb_dtsg segment" : undefined,
+            jazoest: jazoest ? 'derived from fb_dtsg' : undefined,
+            deviceId: 'localStorage.chatd-deviceid',
+            viewerId: viewerId
+                ? 'CurrentUserInitialData or fb_dtsg segment'
+                : undefined,
         },
     };
-    window.dispatchEvent(new CustomEvent(AUTH_PROBE_EVENT, { detail: JSON.stringify(probe) }));
+    window.dispatchEvent(
+        new CustomEvent(AUTH_PROBE_EVENT, { detail: JSON.stringify(probe) }),
+    );
 }
 
 export default defineContentScript({
-    matches: ["https://www.instagram.com/*"],
-    runAt: "document_idle",
-    world: "MAIN",
+    matches: ['https://www.instagram.com/*'],
+    runAt: 'document_idle',
+    world: 'MAIN',
     main() {
         window.addEventListener(AUTH_PROBE_REQUEST_EVENT, emitProbe);
         emitProbe();

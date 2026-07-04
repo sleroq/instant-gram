@@ -27,17 +27,52 @@ instagram.com tab (anchor)          background SW              UI tab (extension
 Single boundary parser in the content script turns raw GraphQL JSON into narrow domain types; the UI sees only these:
 
 ```ts
-type Thread = { key: string; title: string; isGroup: boolean; isMuted: boolean;
-  folder: 'PRIMARY'|'GENERAL'|'REQUESTS'; lastActivityMs: number; serverIsPin: boolean;
-  users: User[]; lastMessage?: Message; cursor?: string }
-type User = { id: string; username: string; fullName: string; picUrl: string|null }
+type Thread = {
+    key: string;
+    title: string;
+    isGroup: boolean;
+    isMuted: boolean;
+    folder: 'PRIMARY' | 'GENERAL' | 'REQUESTS';
+    lastActivityMs: number;
+    serverIsPin: boolean;
+    users: User[];
+    lastMessage?: Message;
+    cursor?: string;
+};
+type User = {
+    id: string;
+    username: string;
+    fullName: string;
+    picUrl: string | null;
+};
 type Message =
-  | { kind:'text'; id:string; senderId:string; ts:number; text:string; repliedTo?:string }
-  | { kind:'reaction_log'; id:string; ts:number; fragment:string }
-  | { kind:'reel_share'; id:string; senderId:string; ts:number; shortcode:string;
-      targetUrl:string; thumbUrl:string; author:string; caption?:string }
-  // …extend union as new content_types appear; UI switch is exhaustive
-type ReelMedia = { shortcode:string; videoUrl:string; durationSec:number; owner:string }
+    | {
+          kind: 'text';
+          id: string;
+          senderId: string;
+          ts: number;
+          text: string;
+          repliedTo?: string;
+      }
+    | { kind: 'reaction_log'; id: string; ts: number; fragment: string }
+    | {
+          kind: 'reel_share';
+          id: string;
+          senderId: string;
+          ts: number;
+          shortcode: string;
+          targetUrl: string;
+          thumbUrl: string;
+          author: string;
+          caption?: string;
+      };
+// …extend union as new content_types appear; UI switch is exhaustive
+type ReelMedia = {
+    shortcode: string;
+    videoUrl: string;
+    durationSec: number;
+    owner: string;
+};
 ```
 
 - Discriminated unions for `Message` keyed by `content_type`/`content.__typename`; no `any`, no `as`, no `?.`-ladder. New `content_type` → compiler forces a UI branch.
@@ -46,14 +81,14 @@ type ReelMedia = { shortcode:string; videoUrl:string; durationSec:number; owner:
 
 ## GraphQL call table (pin `doc_id`s in `config.ts` — they rotate with IG bundles)
 
-| purpose | endpoint | friendly_name | doc_id | variables |
-|---|---|---|---|---|
-| chat list | `/api/graphql` | `PolarisDirectInboxQuery` | `27262915580045003` | `{device_id_for_iris_subscription, …GK flags}` |
-| chat list pagination | `/api/graphql` | `IGDThreadListOffMsysPaginationQuery` | `27712934271665380` | `{count:5, cursor, folder:'INBOX', newer_than_timestamp_ms:null, id:viewer_fbid, …GK flags}` |
-| thread header (optional) | `/api/graphql` | `IGDInboxHeaderOffMsysQuery` | `27358538347096449` | `{thread_fbid}` |
-| initial message history | `/api/graphql` | `IGDThreadDetailQuery` | `27852254574460474` | `{thread_fbid, …GK flags}` → first 20 messages + cursor |
-| older message history | `/api/graphql` | `IGDMessageListOffMsysQuery` | `25255103937520139` | `{id:thread_fbid, first:20, after:cursor, before:null, last:null, newer_than_message_id:null, older_than_message_id:null}` |
-| **reel video** | `/graphql/query` | `PolarisPostActionLoadPostQueryQuery` | `8845758582119845` | `{shortcode, fetch_tagged_user_count:null, hoisted_comment_id:null, hoisted_reply_id:null}` → `data.xdt_shortcode_media.video_url` |
+| purpose                  | endpoint         | friendly_name                         | doc_id              | variables                                                                                                                          |
+| ------------------------ | ---------------- | ------------------------------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| chat list                | `/api/graphql`   | `PolarisDirectInboxQuery`             | `27262915580045003` | `{device_id_for_iris_subscription, …GK flags}`                                                                                     |
+| chat list pagination     | `/api/graphql`   | `IGDThreadListOffMsysPaginationQuery` | `27712934271665380` | `{count:5, cursor, folder:'INBOX', newer_than_timestamp_ms:null, id:viewer_fbid, …GK flags}`                                       |
+| thread header (optional) | `/api/graphql`   | `IGDInboxHeaderOffMsysQuery`          | `27358538347096449` | `{thread_fbid}`                                                                                                                    |
+| initial message history  | `/api/graphql`   | `IGDThreadDetailQuery`                | `27852254574460474` | `{thread_fbid, …GK flags}` → first 20 messages + cursor                                                                            |
+| older message history    | `/api/graphql`   | `IGDMessageListOffMsysQuery`          | `25255103937520139` | `{id:thread_fbid, first:20, after:cursor, before:null, last:null, newer_than_message_id:null, older_than_message_id:null}`         |
+| **reel video**           | `/graphql/query` | `PolarisPostActionLoadPostQueryQuery` | `8845758582119845`  | `{shortcode, fetch_tagged_user_count:null, hoisted_comment_id:null, hoisted_reply_id:null}` → `data.xdt_shortcode_media.video_url` |
 
 Request build (content script): form-encoded body = `doc_id`+`variables`+`fb_api_req_friendly_name`+`fb_api_caller_class=RelayModern`+`lsd`+`fb_dtsg`+`jazoest`+`__d=www`+`__a=1`+`__comet_req=7`+`dpr=2`+`server_timestamps=true`; headers = `x-ig-app-id:936619743392459`, `x-csrftoken`, `x-fb-lsd`, `x-fb-friendly-name`, `x-asbd-id:359341`, `content-type:application/x-www-form-urlencoded`. Inbox/thread response paths and parser notes are extracted in `instagram-methods.md`. Threads are usually selected by `thread_fbid`; the inbox row also exposes `thread_key` for local identity.
 

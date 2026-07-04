@@ -41,12 +41,12 @@ doc_id=27262915580045003
 
 ```json
 {
-  "device_id_for_iris_subscription": "<live device_id_for_iris_subscription>",
-  "__relay_internal__pv__IGDIsProfessionalAccountGKrelayprovider": false,
-  "__relay_internal__pv__IGDPinnedThreadsRenderEnabledGKrelayprovider": true,
-  "__relay_internal__pv__IGDMaxUnreadMessagesCountrelayprovider": 5,
-  "__relay_internal__pv__PolarisAIGMAccountLabelEnabledrelayprovider": false,
-  "__relay_internal__pv__IGDThreadListActionsEnabledGKrelayprovider": false
+    "device_id_for_iris_subscription": "<live device_id_for_iris_subscription>",
+    "__relay_internal__pv__IGDIsProfessionalAccountGKrelayprovider": false,
+    "__relay_internal__pv__IGDPinnedThreadsRenderEnabledGKrelayprovider": true,
+    "__relay_internal__pv__IGDMaxUnreadMessagesCountrelayprovider": 5,
+    "__relay_internal__pv__PolarisAIGMAccountLabelEnabledrelayprovider": false,
+    "__relay_internal__pv__IGDThreadListActionsEnabledGKrelayprovider": false
 }
 ```
 
@@ -70,15 +70,15 @@ doc_id=27712934271665380
 
 ```json
 {
-  "count": 5,
-  "cursor": "<threads_by_folder.page_info.end_cursor from getInbox/getInboxPage>",
-  "folder": "INBOX",
-  "newer_than_timestamp_ms": null,
-  "id": "<viewer_fbid>",
-  "__relay_internal__pv__IGDPinnedThreadsRenderEnabledGKrelayprovider": true,
-  "__relay_internal__pv__IGDMaxUnreadMessagesCountrelayprovider": 5,
-  "__relay_internal__pv__PolarisAIGMAccountLabelEnabledrelayprovider": false,
-  "__relay_internal__pv__IGDThreadListActionsEnabledGKrelayprovider": false
+    "count": 5,
+    "cursor": "<threads_by_folder.page_info.end_cursor from getInbox/getInboxPage>",
+    "folder": "INBOX",
+    "newer_than_timestamp_ms": null,
+    "id": "<viewer_fbid>",
+    "__relay_internal__pv__IGDPinnedThreadsRenderEnabledGKrelayprovider": true,
+    "__relay_internal__pv__IGDMaxUnreadMessagesCountrelayprovider": 5,
+    "__relay_internal__pv__PolarisAIGMAccountLabelEnabledrelayprovider": false,
+    "__relay_internal__pv__IGDThreadListActionsEnabledGKrelayprovider": false
 }
 ```
 
@@ -102,8 +102,8 @@ doc_id=27358538347096449
 
 ```json
 {
-  "thread_fbid": "<thread_fbid>",
-  "__relay_internal__pv__PolarisAIGMAccountLabelEnabledrelayprovider": false
+    "thread_fbid": "<thread_fbid>",
+    "__relay_internal__pv__PolarisAIGMAccountLabelEnabledrelayprovider": false
 }
 ```
 
@@ -125,10 +125,10 @@ doc_id=27852254574460474
 
 ```json
 {
-  "thread_fbid": "<thread_fbid>",
-  "__relay_internal__pv__IGDEnableOffMsysChatThemesQErelayprovider": false,
-  "__relay_internal__pv__IGDInitialMessagePageCountrelayprovider": 20,
-  "__relay_internal__pv__PolarisAIGMAccountLabelEnabledrelayprovider": false
+    "thread_fbid": "<thread_fbid>",
+    "__relay_internal__pv__IGDEnableOffMsysChatThemesQErelayprovider": false,
+    "__relay_internal__pv__IGDInitialMessagePageCountrelayprovider": 20,
+    "__relay_internal__pv__PolarisAIGMAccountLabelEnabledrelayprovider": false
 }
 ```
 
@@ -152,14 +152,14 @@ doc_id=25255103937520139
 
 ```json
 {
-  "after": "<slide_messages.page_info.end_cursor from getThread/getOlderMessages>",
-  "before": null,
-  "first": 20,
-  "last": null,
-  "newer_than_message_id": null,
-  "older_than_message_id": null,
-  "id": "<thread_fbid>",
-  "__relay_internal__pv__IGDInitialMessagePageCountrelayprovider": 20
+    "after": "<slide_messages.page_info.end_cursor from getThread/getOlderMessages>",
+    "before": null,
+    "first": 20,
+    "last": null,
+    "newer_than_message_id": null,
+    "older_than_message_id": null,
+    "id": "<thread_fbid>",
+    "__relay_internal__pv__IGDInitialMessagePageCountrelayprovider": 20
 }
 ```
 
