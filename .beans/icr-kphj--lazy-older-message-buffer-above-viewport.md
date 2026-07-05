@@ -43,7 +43,9 @@ Checklist:
 Implementation checkpoint:
 - MessageList reports the first visible virtual message index to App.
 - App maintains a 200-message older buffer above the visible range when history is available.
-- Background preloads use the existing anchor-preserving prepend path and a passive `preloadingOlder` flag.
+- Background preloads fetch into `bufferedOlder` and do not mutate rendered `data.items`, so passive network loads cannot change scroll height or virtual indexes.
+- Replaced spacer staging with Telegram-style anchor-preserved prepends: passive preload remains buffer-only, top scroll prepends one chunk while preserving a stable visible DOM anchor, and range/scroll callbacks are suppressed during restoration.
+- Explicit reply navigation prepends buffered chunks until the target is rendered, then scrolls to the target.
 - Verified with `npm run check` and `npm run build`; manual browser/network behavior still belongs to the QA milestone.
 
 Acceptance criteria:

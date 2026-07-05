@@ -41,7 +41,7 @@ Checklist:
 
 Implementation checkpoint:
 - Visible virtual reply rows report their `repliedTo` ids to App.
-- App passively resolves one target at a time and caches pending/found/missing state per thread.
+- App passively resolves one target at a time into the non-rendered older-message buffer and caches pending/found/missing state per thread.
 - Reply preview is clickable and uses active `scrollToMessage` with highlight.
 - Verified with `npm run check` and `npm run build`; speed/smoothness needs manual browser testing.
 

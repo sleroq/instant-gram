@@ -47,7 +47,7 @@ Checklist:
 
 Implementation checkpoint:
 - MessageList exposes a virtualizer-backed `scrollToMessage` API.
-- App implements active/passive target search by loading older pages until found or history ends.
+- App implements active/passive target search by loading older pages into the non-rendered older-message buffer until found or history ends.
 - Explicit reply navigation scrolls and highlights; passive lookup only resolves/cache-warms targets.
 - Verified with `npm run check` and `npm run build`; browser behavior remains in manual QA.
 
