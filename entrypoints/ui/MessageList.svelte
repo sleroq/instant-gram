@@ -13,7 +13,9 @@
 
   const LOAD_EARLIER_THRESHOLD = 480;
   const EARLIER_BATCH_SIZE = 5;
-  const EARLIER_PAGE_RESERVED_HEIGHT = 4000;
+  const FALLBACK_BATCH_RESERVED_HEIGHT = 3600;
+  const MIN_BATCH_RESERVED_HEIGHT = 2400;
+  const MAX_BATCH_RESERVED_HEIGHT = 8000;
 
   let {
     selected,
@@ -34,6 +36,9 @@
   let earlierBucketHeight = $state(0);
   let earlierContentHeight = $state(0);
   let earlierItems = $state<Message[]>([]);
+  let earlierContentEl = $state<HTMLDivElement>();
+  let lastBatchContentHeight = $state(0);
+  let pendingBatchStartHeight: number | undefined;
 
   function messageEntries(items: Message[], nextMessage?: Message): MessageRenderEntry[] {
     const out: MessageRenderEntry[] = [];
@@ -113,6 +118,56 @@
     return reply.label;
   }
 
+  function clamp(n: number, min: number, max: number): number {
+    return Math.max(min, Math.min(max, n));
+  }
+
+  function historyWhitespaceBuffer(): number {
+    return clamp(messagesEl?.clientHeight ?? 1200, 800, 1600);
+  }
+
+  function nextBatchReservation(): number {
+    const estimate = lastBatchContentHeight > 0
+      ? lastBatchContentHeight + historyWhitespaceBuffer()
+      : FALLBACK_BATCH_RESERVED_HEIGHT;
+    return Math.ceil(clamp(estimate, MIN_BATCH_RESERVED_HEIGHT, MAX_BATCH_RESERVED_HEIGHT));
+  }
+
+  async function setHistoryBucketHeight(height: number, preserveScroll: boolean) {
+    const nextHeight = Math.max(0, Math.ceil(height));
+    const previousHeight = earlierBucketHeight;
+    const delta = nextHeight - previousHeight;
+    if (delta === 0) return;
+
+    const previousOffset = get(virtualizer).scrollOffset ?? 0;
+    earlierBucketHeight = nextHeight;
+    await tick();
+    if (earlierBucketHeight > 0 && entries[0]?.kind === 'history') {
+      get(virtualizer).resizeItem(0, earlierBucketHeight);
+    }
+    if (preserveScroll && previousHeight > 0) {
+      get(virtualizer).scrollToOffset(Math.max(0, previousOffset + delta));
+    }
+  }
+
+  function applyMeasuredEarlierContent(height: number) {
+    if (height < 0) return;
+
+    earlierContentHeight = height;
+    if (pendingBatchStartHeight !== undefined) {
+      const batchHeight = height - pendingBatchStartHeight;
+      if (batchHeight <= 0) return;
+      lastBatchContentHeight = batchHeight;
+      pendingBatchStartHeight = undefined;
+    }
+
+    const maxWhitespace = data?.state === 'ready' && !data.data.hasNextPage ? 0 : historyWhitespaceBuffer();
+    const desiredHeight = height + maxWhitespace;
+    if (earlierBucketHeight > 0 && Math.abs(earlierBucketHeight - desiredHeight) > 1) {
+      void setHistoryBucketHeight(desiredHeight, true);
+    }
+  }
+
   // Flatten messages into a single virtualized stream, interleaving day
   // separators so each row has one measurable height.
   const entries = $derived.by<Entry[]>(() => {
@@ -166,22 +221,17 @@
   const totalSize = $derived($virtualizer.getTotalSize());
   const earlierEntries = $derived(data?.state === 'ready' ? messageEntries(earlierItems, data.data.items[0]) : []);
 
-  $effect(() => {
-    if (earlierBucketHeight > 0 && entries[0]?.kind === 'history') {
-      get(virtualizer).resizeItem(0, earlierBucketHeight);
-    }
-  });
-
   function measureItem(node: HTMLElement, entry: Entry) {
     if (entry.kind === 'history') return;
     get(virtualizer).measureElement(node);
   }
 
   function measureEarlierContent(node: HTMLElement) {
+    earlierContentEl = node as HTMLDivElement;
     let frame = 0;
 
     const measure = () => {
-      earlierContentHeight = node.offsetHeight;
+      applyMeasuredEarlierContent(node.offsetHeight);
     };
 
     tick().then(measure);
@@ -195,6 +245,7 @@
       update: measure,
       destroy() {
         cancelAnimationFrame(frame);
+        if (earlierContentEl === node) earlierContentEl = undefined;
         observer.disconnect();
       },
     };
@@ -205,26 +256,15 @@
 
     loadingEarlier = true;
     earlierError = undefined;
-    const reserved = EARLIER_BATCH_SIZE * EARLIER_PAGE_RESERVED_HEIGHT;
+    const reserved = nextBatchReservation();
     const previousHeight = earlierBucketHeight;
     const shouldPreserveExistingBucket = previousHeight > 0;
-    const previousOffset = get(virtualizer).scrollOffset ?? 0;
-    earlierBucketHeight += reserved;
-    await tick();
-    get(virtualizer).resizeItem(0, earlierBucketHeight);
-    if (shouldPreserveExistingBucket) {
-      get(virtualizer).scrollToOffset(previousOffset + reserved);
-    }
+    pendingBatchStartHeight = earlierContentHeight;
+    await setHistoryBucketHeight(previousHeight + reserved, shouldPreserveExistingBucket);
 
     async function rollbackReservation() {
-      earlierBucketHeight = previousHeight;
-      await tick();
-      if (earlierBucketHeight > 0 && entries[0]?.kind === 'history') {
-        get(virtualizer).resizeItem(0, earlierBucketHeight);
-      }
-      if (shouldPreserveExistingBucket) {
-        get(virtualizer).scrollToOffset(Math.max(0, (get(virtualizer).scrollOffset ?? 0) - reserved));
-      }
+      pendingBatchStartHeight = undefined;
+      await setHistoryBucketHeight(previousHeight, shouldPreserveExistingBucket);
     }
 
     try {
@@ -241,6 +281,8 @@
         }
         if (items.length > 0) {
           earlierItems = [...items, ...earlierItems];
+          await tick();
+          if (earlierContentEl) applyMeasuredEarlierContent(earlierContentEl.offsetHeight);
         } else {
           await rollbackReservation();
         }
