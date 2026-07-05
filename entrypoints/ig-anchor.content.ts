@@ -761,48 +761,42 @@ export default defineContentScript({
     runAt: "document_idle",
     main() {
         startAuthProbeListener();
-        onMessage("getInbox", async ({ data }) => {
+        onMessage<InboxPayload, "getInbox">("getInbox", async ({ data }) => {
             try {
                 const tokens = await harvestTokens();
-                const payload = data as InboxPayload;
-                const json = await sendGraphqlRequest(
-                    inboxRequest(payload, tokens),
-                    tokens,
-                );
+                const json = await sendGraphqlRequest(inboxRequest(data, tokens), tokens);
                 return ok(parseInboxResponse(json));
             } catch (error) {
                 return fail(error);
             }
         });
-        onMessage("getThread", async ({ data }) => {
+        onMessage<ThreadPayload, "getThread">("getThread", async ({ data }) => {
             try {
-                const payload = data as ThreadPayload;
                 const tokens = await harvestTokens();
-                const json = await sendGraphqlRequest(threadRequest(payload));
+                const json = await sendGraphqlRequest(threadRequest(data));
                 return ok(parseThreadResponse(json, tokens.viewerId));
             } catch (error) {
                 return fail(error);
             }
         });
-        onMessage("getReelMedia", async ({ data }) => {
+        onMessage<ReelPayload, "getReelMedia">("getReelMedia", async ({ data }) => {
             try {
-                const payload = data as ReelPayload;
-                if (payload.mediaId)
+                if (data.mediaId)
                     return ok(
                         parseReelInfoResponse(
-                            await fetchReelInfo(payload.mediaId),
-                            payload,
+                            await fetchReelInfo(data.mediaId),
+                            data,
                         ),
                     );
                 const json = await sendGraphqlRequest(
-                    reelMediaRequest(payload),
+                    reelMediaRequest(data),
                 );
-                const parsed = parseReelMediaResponse(json, payload);
+                const parsed = parseReelMediaResponse(json, data);
                 if ("mediaId" in parsed)
                     return ok(
                         parseReelInfoResponse(
                             await fetchReelInfo(parsed.mediaId),
-                            payload,
+                            data,
                         ),
                     );
                 return ok(parsed);

@@ -1,4 +1,6 @@
 {
     "extends": "./.wxt/tsconfig.json",
-    "compilerOptions": { "allowJs": false, "checkJs": false, "strict": true }
+    "compilerOptions": { "allowJs": false, "checkJs": false, "strict": true },
+    "include": ["**/*", ".wxt/wxt.d.ts", "shim.d.ts"],
+    "exclude": [".output"]
 }

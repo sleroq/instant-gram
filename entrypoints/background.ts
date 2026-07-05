@@ -2,14 +2,7 @@ import '../lib/bridge';
 import { defineBackground } from 'wxt/utils/define-background';
 import { onMessage, sendMessage } from 'webext-bridge/background';
 import browser from 'webextension-polyfill';
-
-type JsonPayload =
-    | null
-    | boolean
-    | number
-    | string
-    | JsonPayload[]
-    | { [key: string]: JsonPayload };
+import type { Page, ReelMedia, Result, Thread, ThreadMessages } from '../lib/domain';
 
 type PinStore = { pinned?: string[] };
 
@@ -39,27 +32,31 @@ async function ensureAnchorTab(): Promise<number> {
     return created.id;
 }
 
-async function routeToAnchor<T>(
+async function routeToAnchor(
+    name: 'getInbox',
+    payload: { cursor?: string },
+): Promise<Result<Page<Thread>>>;
+async function routeToAnchor(
+    name: 'getThread',
+    payload: { threadKey: string; cursor?: string },
+): Promise<Result<ThreadMessages>>;
+async function routeToAnchor(
+    name: 'getReelMedia',
+    payload: { shortcode: string; mediaId?: string },
+): Promise<Result<ReelMedia>>;
+async function routeToAnchor(
     name: 'getInbox' | 'getThread' | 'getReelMedia',
-    payload: unknown,
-): Promise<T> {
+    payload:
+        | { cursor?: string }
+        | { threadKey: string; cursor?: string }
+        | { shortcode: string; mediaId?: string },
+) {
     const tabId = await ensureAnchorTab();
-    return sendMessage(
-        name,
-        payload as JsonPayload,
-        `content-script@${tabId}`,
-    ) as Promise<T>;
-}
-
-function pinPayload(data: unknown): { threadKey: string } {
-    if (
-        typeof data === 'object' &&
-        data !== null &&
-        'threadKey' in data &&
-        typeof data.threadKey === 'string'
-    )
-        return { threadKey: data.threadKey };
-    throw new Error('Invalid pin payload');
+    if (name === 'getInbox')
+        return sendMessage<Result<Page<Thread>>, 'getInbox'>(name, payload, `content-script@${tabId}`);
+    if (name === 'getThread')
+        return sendMessage<Result<ThreadMessages>, 'getThread'>(name, payload, `content-script@${tabId}`);
+    return sendMessage<Result<ReelMedia>, 'getReelMedia'>(name, payload, `content-script@${tabId}`);
 }
 
 export default defineBackground(() => {
@@ -68,18 +65,17 @@ export default defineBackground(() => {
         await browser.tabs.create({ url: browser.runtime.getURL('/ui.html') });
     });
 
-    onMessage('getInbox', ({ data }) => routeToAnchor('getInbox', data));
-    onMessage('getThread', ({ data }) => routeToAnchor('getThread', data));
-    onMessage('getReelMedia', ({ data }) =>
+    onMessage<{ cursor?: string }, 'getInbox'>('getInbox', ({ data }) => routeToAnchor('getInbox', data));
+    onMessage<{ threadKey: string; cursor?: string }, 'getThread'>('getThread', ({ data }) => routeToAnchor('getThread', data));
+    onMessage<{ shortcode: string; mediaId?: string }, 'getReelMedia'>('getReelMedia', ({ data }) =>
         routeToAnchor('getReelMedia', data),
     );
-    onMessage('getPins', async () => ({ pinned: await getPinned() }));
-    onMessage('togglePin', async ({ data }) => {
-        const payload = pinPayload(data);
+    onMessage<null, 'getPins'>('getPins', async () => ({ pinned: await getPinned() }));
+    onMessage<{ threadKey: string }, 'togglePin'>('togglePin', async ({ data }) => {
         const pinned = await getPinned();
-        const next = pinned.includes(payload.threadKey)
-            ? pinned.filter(key => key !== payload.threadKey)
-            : [payload.threadKey, ...pinned];
+        const next = pinned.includes(data.threadKey)
+            ? pinned.filter(key => key !== data.threadKey)
+            : [data.threadKey, ...pinned];
         await browser.storage.local.set({ pinned: next });
         return { pinned: next };
     });
