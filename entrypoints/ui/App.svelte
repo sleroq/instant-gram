@@ -75,6 +75,32 @@
     }
   }
 
+  function mergeOlderMessages(current: ThreadMessages, page: ThreadMessages): ThreadMessages {
+    const existingIds = new Set(current.items.map(item => item.id));
+    return {
+      ...current,
+      items: [...page.items.filter(item => !existingIds.has(item.id)), ...current.items],
+      cursor: page.cursor,
+      hasNextPage: page.hasNextPage,
+      thread: current.thread ?? page.thread,
+      viewerId: current.viewerId,
+    };
+  }
+
+  async function loadEarlierMessages(thread: Thread, beforePrepend: () => void) {
+    const key = thread.key;
+    const current = threads[key];
+    if (current?.state !== 'ready' || !current.data.hasNextPage || !current.data.cursor) return;
+
+    const threadKey = current.data.thread?.cursor ?? thread.cursor ?? thread.key;
+    const page = unwrap(await rpc('getThread', { threadKey, cursor: current.data.cursor }));
+    const latest = threads[key];
+    if (latest?.state !== 'ready') return;
+
+    beforePrepend();
+    threads[key] = { state: 'ready', data: mergeOlderMessages(latest.data, page) };
+  }
+
   async function openReel(shortcode: string, mediaId?: string) {
     reel = { state: 'loading', shortcode };
     try {
@@ -90,7 +116,7 @@
 <main class="app">
   <ThreadList {inbox} threads={sortedThreads} {selected} {pinned} onselect={selectThread} ontogglepin={togglePin} onloadmore={() => loadInbox(inbox.state === 'ready' ? inbox.data.cursor : undefined)} />
   {#key selected?.key}
-    <MessageList {selected} data={selected ? threads[selected.key] : undefined} onopenreel={openReel} />
+    <MessageList {selected} data={selected ? threads[selected.key] : undefined} onopenreel={openReel} onloadearlier={(beforePrepend) => selected ? loadEarlierMessages(selected, beforePrepend) : Promise.resolve()} />
   {/key}
 </main>
 

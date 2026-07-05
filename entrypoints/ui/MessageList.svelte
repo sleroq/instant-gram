@@ -9,17 +9,27 @@
     | { kind: 'day'; day: string; key: string }
     | { kind: 'message'; message: Message; index: number; prev?: Message; next?: Message; key: string };
 
+  type ScrollAnchor = { key?: string; offset: number; scrollTop: number; totalSize: number };
+
+  const LOAD_EARLIER_THRESHOLD = 480;
+
   let {
     selected,
     data,
     onopenreel,
+    onloadearlier,
   }: {
     selected?: Thread;
     data?: View<ThreadMessages>;
     onopenreel: (shortcode: string, mediaId?: string) => void;
+    onloadearlier?: (beforePrepend: () => void) => Promise<void>;
   } = $props();
 
   let messagesEl = $state<HTMLDivElement>();
+  let didInitialScroll = $state(false);
+  let loadingEarlier = $state(false);
+  let earlierError = $state<string>();
+  let pendingScrollAnchor: ScrollAnchor | undefined;
 
   function senderId(message: Message | undefined): string | undefined {
     return message && 'senderId' in message && message.senderId.length > 0 ? message.senderId : undefined;
@@ -147,6 +157,60 @@
     get(virtualizer).measureElement(node);
   }
 
+  function captureScrollAnchor(): ScrollAnchor | undefined {
+    if (!messagesEl) return undefined;
+
+    const instance = get(virtualizer);
+    const scrollTop = instance.scrollOffset ?? 0;
+    const anchorRow = instance.getVirtualItems()
+      .filter(row => row.end >= scrollTop)
+      .find(row => entries[row.index]?.kind === 'message');
+    const anchorEntry = anchorRow ? entries[anchorRow.index] : undefined;
+
+    return {
+      key: anchorEntry?.key,
+      offset: anchorRow ? anchorRow.start - scrollTop : 0,
+      scrollTop,
+      totalSize: instance.getTotalSize(),
+    };
+  }
+
+  async function restoreScrollAnchor(anchor: ScrollAnchor | undefined) {
+    if (!anchor) return;
+
+    await tick();
+
+    const instance = get(virtualizer);
+    const anchorIndex = anchor.key ? entries.findIndex(entry => entry.key === anchor.key) : -1;
+    const anchorItem = anchorIndex === -1 ? undefined : instance.measurementsCache[anchorIndex];
+    if (anchorItem) {
+      instance.scrollToOffset(Math.max(0, anchorItem.start - anchor.offset));
+      return;
+    }
+
+    instance.scrollToOffset(Math.max(0, anchor.scrollTop + instance.getTotalSize() - anchor.totalSize));
+  }
+
+  async function loadEarlierMessages() {
+    if (!onloadearlier || loadingEarlier || data?.state !== 'ready' || !data.data.hasNextPage || !data.data.cursor) return;
+
+    const threadKey = selected?.key;
+    loadingEarlier = true;
+    earlierError = undefined;
+    pendingScrollAnchor = undefined;
+
+    try {
+      await onloadearlier(() => {
+        pendingScrollAnchor = captureScrollAnchor();
+      });
+      if (selected?.key === threadKey) await restoreScrollAnchor(pendingScrollAnchor);
+    } catch (error) {
+      earlierError = error instanceof Error ? error.message : String(error);
+    } finally {
+      loadingEarlier = false;
+    }
+  }
+
   // Scroll to the latest message once data is ready. Wait for tick() so the
   // spacer div has its estimated height in the DOM before scrollToEnd reads
   // scrollHeight — otherwise the browser clamps scrollTop to 0. The
@@ -154,8 +218,17 @@
   $effect(() => {
     const ready = data?.state === 'ready';
     const count = entries.length;
-    if (!ready || count === 0) return;
-    tick().then(() => get(virtualizer).scrollToEnd());
+    if (!ready || count === 0 || didInitialScroll) return;
+    tick().then(() => {
+      get(virtualizer).scrollToEnd();
+      didInitialScroll = true;
+    });
+  });
+
+  $effect(() => {
+    const offset = $virtualizer.scrollOffset ?? 0;
+    const canLoadEarlier = didInitialScroll && data?.state === 'ready' && data.data.hasNextPage && data.data.cursor && !loadingEarlier && !earlierError && onloadearlier;
+    if (canLoadEarlier && offset <= LOAD_EARLIER_THRESHOLD) void loadEarlierMessages();
   });
 </script>
 
@@ -165,6 +238,7 @@
   {:else if data?.state === 'error'}<p class="error">{data.message}</p>
   {:else if data?.state === 'ready'}
     <div class="top"><strong>{selected.title}</strong></div>
+    {#if earlierError}<p class="error">Could not load earlier messages: {earlierError} <button onclick={() => { earlierError = undefined; void loadEarlierMessages(); }}>Retry</button></p>{/if}
     <div class="messages" bind:this={messagesEl}>
       <div class="message-list-spacer" style="height: {totalSize}px;">
         {#each virtualItems as row (row.key)}
