@@ -1,6 +1,5 @@
 import "../lib/bridge";
 import { defineContentScript } from "wxt/utils/define-content-script";
-import { onMessage } from "webext-bridge/content-script";
 import { DOC_IDS, FRIENDLY_NAMES } from "../lib/config";
 import {
     clearTokenCache,
@@ -759,7 +758,10 @@ function parseReelInfoResponse(json: unknown, payload: ReelPayload): ReelMedia {
 export default defineContentScript({
     matches: ["https://www.instagram.com/*"],
     runAt: "document_idle",
-    main() {
+    async main() {
+        // Keep webext-bridge out of top-level imports: WXT evaluates this module
+        // during build with a fake browser that does not implement runtime.onConnect.
+        const { onMessage } = await import("webext-bridge/content-script");
         startAuthProbeListener();
         onMessage<InboxPayload, "getInbox">("getInbox", async ({ data }) => {
             try {
