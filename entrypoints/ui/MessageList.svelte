@@ -6,12 +6,14 @@
   import type { View } from './types';
 
   type Entry =
+    | { kind: 'history'; key: string }
     | { kind: 'day'; day: string; key: string }
     | { kind: 'message'; message: Message; index: number; prev?: Message; next?: Message; key: string };
-
-  type ScrollAnchor = { key?: string; offset: number; scrollTop: number; totalSize: number };
+  type MessageRenderEntry = Extract<Entry, { kind: 'day' | 'message' }>;
 
   const LOAD_EARLIER_THRESHOLD = 480;
+  const EARLIER_BATCH_SIZE = 5;
+  const EARLIER_PAGE_RESERVED_HEIGHT = 4000;
 
   let {
     selected,
@@ -22,14 +24,29 @@
     selected?: Thread;
     data?: View<ThreadMessages>;
     onopenreel: (shortcode: string, mediaId?: string) => void;
-    onloadearlier?: (beforePrepend: () => void) => Promise<void>;
+    onloadearlier?: (beforeLoad: () => Promise<void>, limit: number) => Promise<ThreadMessages[]>;
   } = $props();
 
   let messagesEl = $state<HTMLDivElement>();
   let didInitialScroll = $state(false);
   let loadingEarlier = $state(false);
   let earlierError = $state<string>();
-  let pendingScrollAnchor: ScrollAnchor | undefined;
+  let earlierBucketHeight = $state(0);
+  let earlierContentHeight = $state(0);
+  let earlierItems = $state<Message[]>([]);
+
+  function messageEntries(items: Message[], nextMessage?: Message): MessageRenderEntry[] {
+    const out: MessageRenderEntry[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const m = items[i];
+      const prev = items[i - 1];
+      if (showDay(m, prev)) {
+        out.push({ kind: 'day', day: day(m.ts), key: `day-${day(m.ts)}-${m.id}` });
+      }
+      out.push({ kind: 'message', message: m, index: i, prev, next: items[i + 1] ?? nextMessage, key: `msg-${m.id}` });
+    }
+    return out;
+  }
 
   function senderId(message: Message | undefined): string | undefined {
     return message && 'senderId' in message && message.senderId.length > 0 ? message.senderId : undefined;
@@ -101,21 +118,16 @@
   const entries = $derived.by<Entry[]>(() => {
     if (data?.state !== 'ready') return [];
     const items = data.data.items;
-    const out: Entry[] = [];
-    for (let i = 0; i < items.length; i++) {
-      const m = items[i];
-      const prev = items[i - 1];
-      if (showDay(m, prev)) {
-        out.push({ kind: 'day', day: day(m.ts), key: `day-${day(m.ts)}` });
-      }
-      out.push({ kind: 'message', message: m, index: i, prev, next: items[i + 1], key: `msg-${m.id}` });
-    }
-    return out;
+    return [
+      ...(earlierBucketHeight > 0 ? [{ kind: 'history' as const, key: 'history-bucket' }] : []),
+      ...messageEntries(items),
+    ];
   });
 
   function estimateEntrySize(i: number): number {
     const entry = entries[i];
     if (!entry) return 64;
+    if (entry.kind === 'history') return earlierBucketHeight;
     return entry.kind === 'day' ? 36 : 64;
   }
 
@@ -152,59 +164,91 @@
 
   const virtualItems = $derived($virtualizer.getVirtualItems());
   const totalSize = $derived($virtualizer.getTotalSize());
+  const earlierEntries = $derived(data?.state === 'ready' ? messageEntries(earlierItems, data.data.items[0]) : []);
 
-  function measureItem(node: HTMLElement) {
+  $effect(() => {
+    if (earlierBucketHeight > 0 && entries[0]?.kind === 'history') {
+      get(virtualizer).resizeItem(0, earlierBucketHeight);
+    }
+  });
+
+  function measureItem(node: HTMLElement, entry: Entry) {
+    if (entry.kind === 'history') return;
     get(virtualizer).measureElement(node);
   }
 
-  function captureScrollAnchor(): ScrollAnchor | undefined {
-    if (!messagesEl) return undefined;
+  function measureEarlierContent(node: HTMLElement) {
+    let frame = 0;
 
-    const instance = get(virtualizer);
-    const scrollTop = instance.scrollOffset ?? 0;
-    const anchorRow = instance.getVirtualItems()
-      .filter(row => row.end >= scrollTop)
-      .find(row => entries[row.index]?.kind === 'message');
-    const anchorEntry = anchorRow ? entries[anchorRow.index] : undefined;
+    const measure = () => {
+      earlierContentHeight = node.offsetHeight;
+    };
+
+    tick().then(measure);
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(measure);
+    });
+    observer.observe(node);
 
     return {
-      key: anchorEntry?.key,
-      offset: anchorRow ? anchorRow.start - scrollTop : 0,
-      scrollTop,
-      totalSize: instance.getTotalSize(),
+      update: measure,
+      destroy() {
+        cancelAnimationFrame(frame);
+        observer.disconnect();
+      },
     };
-  }
-
-  async function restoreScrollAnchor(anchor: ScrollAnchor | undefined) {
-    if (!anchor) return;
-
-    await tick();
-
-    const instance = get(virtualizer);
-    const anchorIndex = anchor.key ? entries.findIndex(entry => entry.key === anchor.key) : -1;
-    const anchorItem = anchorIndex === -1 ? undefined : instance.measurementsCache[anchorIndex];
-    if (anchorItem) {
-      instance.scrollToOffset(Math.max(0, anchorItem.start - anchor.offset));
-      return;
-    }
-
-    instance.scrollToOffset(Math.max(0, anchor.scrollTop + instance.getTotalSize() - anchor.totalSize));
   }
 
   async function loadEarlierMessages() {
     if (!onloadearlier || loadingEarlier || data?.state !== 'ready' || !data.data.hasNextPage || !data.data.cursor) return;
 
-    const threadKey = selected?.key;
     loadingEarlier = true;
     earlierError = undefined;
-    pendingScrollAnchor = undefined;
+    const reserved = EARLIER_BATCH_SIZE * EARLIER_PAGE_RESERVED_HEIGHT;
+    const previousHeight = earlierBucketHeight;
+    const shouldPreserveExistingBucket = previousHeight > 0;
+    const previousOffset = get(virtualizer).scrollOffset ?? 0;
+    earlierBucketHeight += reserved;
+    await tick();
+    get(virtualizer).resizeItem(0, earlierBucketHeight);
+    if (shouldPreserveExistingBucket) {
+      get(virtualizer).scrollToOffset(previousOffset + reserved);
+    }
+
+    async function rollbackReservation() {
+      earlierBucketHeight = previousHeight;
+      await tick();
+      if (earlierBucketHeight > 0 && entries[0]?.kind === 'history') {
+        get(virtualizer).resizeItem(0, earlierBucketHeight);
+      }
+      if (shouldPreserveExistingBucket) {
+        get(virtualizer).scrollToOffset(Math.max(0, (get(virtualizer).scrollOffset ?? 0) - reserved));
+      }
+    }
 
     try {
-      await onloadearlier(() => {
-        pendingScrollAnchor = captureScrollAnchor();
-      });
-      if (selected?.key === threadKey) await restoreScrollAnchor(pendingScrollAnchor);
+      const pages = await onloadearlier(async () => { await tick(); }, EARLIER_BATCH_SIZE);
+      if (pages.length > 0) {
+        const loadedIds = new Set([...earlierItems.map(message => message.id), ...data.data.items.map(message => message.id)]);
+        const items: Message[] = [];
+        for (const page of [...pages].reverse()) {
+          for (const message of page.items) {
+            if (loadedIds.has(message.id)) continue;
+            loadedIds.add(message.id);
+            items.push(message);
+          }
+        }
+        if (items.length > 0) {
+          earlierItems = [...items, ...earlierItems];
+        } else {
+          await rollbackReservation();
+        }
+      } else {
+        await rollbackReservation();
+      }
     } catch (error) {
+      await rollbackReservation();
       earlierError = error instanceof Error ? error.message : String(error);
     } finally {
       loadingEarlier = false;
@@ -228,7 +272,9 @@
   $effect(() => {
     const offset = $virtualizer.scrollOffset ?? 0;
     const canLoadEarlier = didInitialScroll && data?.state === 'ready' && data.data.hasNextPage && data.data.cursor && !loadingEarlier && !earlierError && onloadearlier;
-    if (canLoadEarlier && offset <= LOAD_EARLIER_THRESHOLD) void loadEarlierMessages();
+    const contentStart = earlierBucketHeight === 0 ? 0 : Math.max(0, earlierBucketHeight - earlierContentHeight);
+    const canUseHistoryTrigger = earlierBucketHeight === 0 || earlierContentHeight > 0;
+    if (canLoadEarlier && canUseHistoryTrigger && offset <= contentStart + LOAD_EARLIER_THRESHOLD) void loadEarlierMessages();
   });
 </script>
 
@@ -244,8 +290,44 @@
         {#each virtualItems as row (row.key)}
           {@const entry = entries[row.index]}
           {#if entry}
-            <div class="virtual-message-row" data-index={row.index} style="transform: translateY({row.start}px);" use:measureItem>
-              {#if entry.kind === 'day'}
+            <div class="virtual-message-row" data-index={row.index} style="transform: translateY({row.start}px);" use:measureItem={entry}>
+              {#if entry.kind === 'history'}
+                <div class="earlier-page" style="height: {earlierBucketHeight}px;">
+                    <div class="earlier-page-content" use:measureEarlierContent>
+                      {#each earlierEntries as pageEntry (pageEntry.key)}
+                        {#if pageEntry.kind === 'day'}
+                          <div class="date-separator"><span>{pageEntry.day}</span></div>
+                        {:else}
+                          {@const message = pageEntry.message}
+                          {@const reply = replyFor(message, [...earlierItems, ...data.data.items])}
+                          <div class:mine={isMine(message, data.data.viewerId)} class="message-row" data-message-id={message.id}>
+                            <div class="sender-avatar-slot">
+                              {#if showSenderAvatar(message, pageEntry.next, data.data)}
+                                <img class="sender-avatar" src={senderAvatar(message, data.data.thread)} alt="" />
+                              {/if}
+                            </div>
+                            <div class="bubble" title={time(message)} aria-label={`Sent ${time(message)}`}>
+                              {#if showSenderName(message, pageEntry.prev, data.data)}
+                                <div class="sender-name">{senderName(message, data.data.thread)}</div>
+                              {/if}
+                              {#if reply}
+                                <div class="reply-preview">
+                                  {#if replyThumb(reply)}<img class="reply-thumb" src={replyThumb(reply)} alt="" />{/if}
+                                  <span class="reply-text">{replyText(reply)}</span>
+                                </div>
+                              {/if}
+                              {#if message.kind === 'text'}<span class="message-text">{message.text}</span>
+                              {:else if message.kind === 'reaction_log'}<span class="message-text">{message.fragment}</span>
+                              {:else if message.kind === 'reel_share'}<button class="reel reel-card" onclick={() => onopenreel(message.shortcode, message.mediaId)}>{#if message.thumbUrl}<img class="reel-banner" src={message.thumbUrl} alt="" />{/if}<span>Open reel by {message.author}</span>{#if message.caption}<small>{message.caption}</small>{/if}</button>
+                              {:else if message.kind === 'inline_share'}<a class="reel reel-card" href={message.targetUrl} target="_blank" rel="noreferrer">{#if message.thumbUrl}<img class="reel-banner" src={message.thumbUrl} alt="" />{/if}<span>{message.title}</span>{#if message.subtitle}<small>{message.subtitle}</small>{/if}</a>
+                              {:else}<em>Unsupported: {message.contentType}</em>{/if}
+                            </div>
+                          </div>
+                        {/if}
+                      {/each}
+                    </div>
+                </div>
+              {:else if entry.kind === 'day'}
                 <div class="date-separator"><span>{entry.day}</span></div>
               {:else}
                 {@const message = entry.message}

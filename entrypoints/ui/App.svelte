@@ -75,11 +75,9 @@
     }
   }
 
-  function mergeOlderMessages(current: ThreadMessages, page: ThreadMessages): ThreadMessages {
-    const existingIds = new Set(current.items.map(item => item.id));
+  function updateThreadPageInfo(current: ThreadMessages, page: ThreadMessages): ThreadMessages {
     return {
       ...current,
-      items: [...page.items.filter(item => !existingIds.has(item.id)), ...current.items],
       cursor: page.cursor,
       hasNextPage: page.hasNextPage,
       thread: current.thread ?? page.thread,
@@ -87,18 +85,29 @@
     };
   }
 
-  async function loadEarlierMessages(thread: Thread, beforePrepend: () => void) {
+  async function loadEarlierMessages(thread: Thread, beforeLoad: () => Promise<void>, limit: number): Promise<ThreadMessages[]> {
     const key = thread.key;
     const current = threads[key];
-    if (current?.state !== 'ready' || !current.data.hasNextPage || !current.data.cursor) return;
+    if (current?.state !== 'ready' || !current.data.hasNextPage || !current.data.cursor) return [];
 
+    await beforeLoad();
     const threadKey = current.data.thread?.cursor ?? thread.cursor ?? thread.key;
-    const page = unwrap(await rpc('getThread', { threadKey, cursor: current.data.cursor }));
-    const latest = threads[key];
-    if (latest?.state !== 'ready') return;
+    let cursor: string | undefined = current.data.cursor;
+    let pageInfo = current.data;
+    const pages: ThreadMessages[] = [];
 
-    beforePrepend();
-    threads[key] = { state: 'ready', data: mergeOlderMessages(latest.data, page) };
+    for (let i = 0; i < limit && pageInfo.hasNextPage && cursor; i++) {
+      const page: ThreadMessages = unwrap(await rpc('getThread', { threadKey, cursor }));
+      pages.push(page);
+      pageInfo = updateThreadPageInfo(pageInfo, page);
+      cursor = page.cursor;
+    }
+
+    const latest = threads[key];
+    if (latest?.state !== 'ready') return pages;
+
+    threads[key] = { state: 'ready', data: { ...latest.data, cursor: pageInfo.cursor, hasNextPage: pageInfo.hasNextPage, thread: latest.data.thread ?? pageInfo.thread } };
+    return pages;
   }
 
   async function openReel(shortcode: string, mediaId?: string) {
@@ -116,7 +125,7 @@
 <main class="app">
   <ThreadList {inbox} threads={sortedThreads} {selected} {pinned} onselect={selectThread} ontogglepin={togglePin} onloadmore={() => loadInbox(inbox.state === 'ready' ? inbox.data.cursor : undefined)} />
   {#key selected?.key}
-    <MessageList {selected} data={selected ? threads[selected.key] : undefined} onopenreel={openReel} onloadearlier={(beforePrepend) => selected ? loadEarlierMessages(selected, beforePrepend) : Promise.resolve()} />
+    <MessageList {selected} data={selected ? threads[selected.key] : undefined} onopenreel={openReel} onloadearlier={(beforePrepend, limit) => selected ? loadEarlierMessages(selected, beforePrepend, limit) : Promise.resolve([])} />
   {/key}
 </main>
 

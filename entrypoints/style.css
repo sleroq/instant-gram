@@ -127,6 +127,12 @@ body {
     color: #777;
     font-size: 13px;
 }
+.earlier-page {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    overflow: hidden;
+}
 .date-separator {
     display: flex;
     justify-content: center;
