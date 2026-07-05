@@ -107,7 +107,7 @@ body {
     min-height: 0;
     overflow: auto;
     overflow-anchor: none;
-    padding: 16px;
+    padding: 0 16px;
     position: relative;
     overflow-x: hidden;
 }
@@ -130,7 +130,7 @@ body {
 .date-separator {
     display: flex;
     justify-content: center;
-    margin: 8px 0 16px;
+    padding: 8px 0 16px;
     color: #71717a;
     font-size: 12px;
     font-weight: 600;

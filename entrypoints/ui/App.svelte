@@ -1,7 +1,6 @@
 <script lang="ts">
   import '../../lib/bridge';
   import { sendMessage } from 'webext-bridge/popup';
-  import { tick } from 'svelte';
   import type { Page, ReelMedia, Result, Thread, ThreadMessages } from '../../lib/domain';
   import MessageList from './MessageList.svelte';
   import ThreadList from './ThreadList.svelte';
@@ -14,7 +13,6 @@
   let threads = $state<Record<string, View<ThreadMessages>>>({});
   let pinned = $state<string[]>([]);
   let reel = $state<View<ReelMedia> & { shortcode?: string }>({ state: 'idle' });
-  let messagesEl = $state<HTMLDivElement>();
 
   function unwrap<T>(result: Result<T>): T {
     if (!result.ok) throw new Error(result.error.message);
@@ -64,8 +62,6 @@
         threads[key] = { state: 'error', message: error instanceof Error ? error.message : String(error) };
       }
     }
-    await tick();
-    if (messagesEl) messagesEl.scrollTop = messagesEl.scrollHeight;
   }
 
   async function openReel(shortcode: string, mediaId?: string) {
@@ -82,7 +78,9 @@
 
 <main class="app">
   <ThreadList {inbox} threads={sortedThreads} {selected} {pinned} onselect={selectThread} ontogglepin={togglePin} onloadmore={() => loadInbox(inbox.state === 'ready' ? inbox.data.cursor : undefined)} />
-  <MessageList {selected} data={selected ? threads[selected.key] : undefined} bind:messagesEl onopenreel={openReel} />
+  {#key selected?.key}
+    <MessageList {selected} data={selected ? threads[selected.key] : undefined} onopenreel={openReel} />
+  {/key}
 </main>
 
 {#if reel.state !== 'idle'}
