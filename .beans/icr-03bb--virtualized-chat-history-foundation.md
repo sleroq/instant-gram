@@ -21,6 +21,7 @@ Why:
 The current message list manually restores scrollTop after prepending older messages, which can still jump due to async rendering, loader height changes, image sizing, and future far-history reply jumps. Virtualization gives stable offsets, bounded DOM size, and a natural API for scrolling to loaded messages by id/index.
 
 Implementation notes:
+
 - Add TanStack Virtual for Svelte after confirming the package name/version and Svelte 5 usage.
 - Keep message identity keyed by message.id.
 - Measure dynamic row heights; reserve known media dimensions where possible.
@@ -28,6 +29,7 @@ Implementation notes:
 - Preserve current behavior for selecting threads and jumping to bottom.
 
 Checklist:
+
 - [x] Verify TanStack Virtual Svelte package/API and add dependency.
 - [x] Refactor MessageList.svelte so message row rendering is separable from list virtualization.
 - [x] Replace direct {#each entry.data.items} rendering with virtual rows and overscan.
@@ -38,6 +40,7 @@ Checklist:
 - [x] Run typecheck/build verification.
 
 Acceptance criteria:
+
 - Loading older messages while reading does not visibly jump.
 - A thread with hundreds of loaded messages renders only a bounded DOM window.
 - Existing open reel and jump-to-bottom interactions still work.

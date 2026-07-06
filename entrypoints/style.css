@@ -245,9 +245,15 @@ body {
     white-space: nowrap;
 }
 @keyframes message-highlight {
-    0% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.55); }
-    35% { box-shadow: 0 0 0 6px rgba(37, 99, 235, 0.22); }
-    100% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0); }
+    0% {
+        box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.55);
+    }
+    35% {
+        box-shadow: 0 0 0 6px rgba(37, 99, 235, 0.22);
+    }
+    100% {
+        box-shadow: 0 0 0 0 rgba(37, 99, 235, 0);
+    }
 }
 .reel {
     display: block;

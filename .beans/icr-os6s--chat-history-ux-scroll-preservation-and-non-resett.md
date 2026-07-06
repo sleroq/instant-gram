@@ -16,11 +16,13 @@ blocked_by:
 Large milestone for making scroll position durable and preventing unexpected jumps while switching chats or loading older history.
 
 Context:
+
 - Current `entrypoints/ui/App.svelte` conditionally mounts the message list only for ready state.
 - Loading older messages replaces the whole message view with a loading state, which resets the DOM and scroll position.
 - The most important product requirement is to avoid resetting scroll position unexpectedly.
 
 Checklist:
+
 - [x] Keep the message scroll container mounted while a thread is selected.
 - [x] Bind the message scroll element and track `scrollTop`, `scrollHeight`, `clientHeight`, and `isAtBottom` per thread.
 - [x] Save the current thread scroll state before switching to another thread.
@@ -31,6 +33,7 @@ Checklist:
 - [x] Use Svelte `tick()` for post-render scroll restoration.
 
 Done criteria:
+
 - Loading older messages does not move the currently visible message.
 - Switching between chats restores each chat to its previous scroll position.
 - No pagination path unmounts the message scroll container.

@@ -15,6 +15,7 @@ parent: icr-0tpu
 Add scroll-controlled buttons/controls for audio volume and playback speed in the reel player.
 
 Checklist:
+
 - [ ] Design volume and playback-speed controls that support wheel/scroll adjustment.
 - [ ] Wire volume changes to the video element and update mute state consistently.
 - [ ] Wire playback-rate changes to the video element with sensible bounds/steps.

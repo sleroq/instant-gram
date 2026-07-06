@@ -1,7 +1,13 @@
 import '../lib/bridge';
 import { defineBackground } from 'wxt/utils/define-background';
 import browser from 'webextension-polyfill';
-import type { Page, ReelMedia, Result, Thread, ThreadMessages } from '../lib/domain';
+import type {
+    Page,
+    ReelMedia,
+    Result,
+    Thread,
+    ThreadMessages,
+} from '../lib/domain';
 
 type PinStore = { pinned?: string[] };
 
@@ -55,10 +61,22 @@ async function routeToAnchor(
     const { sendMessage } = await import('webext-bridge/background');
     const tabId = await ensureAnchorTab();
     if (name === 'getInbox')
-        return sendMessage<Result<Page<Thread>>, 'getInbox'>(name, payload, `content-script@${tabId}`);
+        return sendMessage<Result<Page<Thread>>, 'getInbox'>(
+            name,
+            payload,
+            `content-script@${tabId}`,
+        );
     if (name === 'getThread')
-        return sendMessage<Result<ThreadMessages>, 'getThread'>(name, payload, `content-script@${tabId}`);
-    return sendMessage<Result<ReelMedia>, 'getReelMedia'>(name, payload, `content-script@${tabId}`);
+        return sendMessage<Result<ThreadMessages>, 'getThread'>(
+            name,
+            payload,
+            `content-script@${tabId}`,
+        );
+    return sendMessage<Result<ReelMedia>, 'getReelMedia'>(
+        name,
+        payload,
+        `content-script@${tabId}`,
+    );
 }
 
 export default defineBackground(() => {
@@ -70,19 +88,30 @@ export default defineBackground(() => {
     // Keep webext-bridge out of top-level imports: WXT evaluates this module
     // during build with a fake browser that does not implement runtime.onConnect.
     import('webext-bridge/background').then(({ onMessage }) => {
-        onMessage<{ cursor?: string }, 'getInbox'>('getInbox', ({ data }) => routeToAnchor('getInbox', data));
-        onMessage<{ threadKey: string; cursor?: string }, 'getThread'>('getThread', ({ data }) => routeToAnchor('getThread', data));
-        onMessage<{ shortcode: string; mediaId?: string }, 'getReelMedia'>('getReelMedia', ({ data }) =>
-            routeToAnchor('getReelMedia', data),
+        onMessage<{ cursor?: string }, 'getInbox'>('getInbox', ({ data }) =>
+            routeToAnchor('getInbox', data),
         );
-        onMessage<null, 'getPins'>('getPins', async () => ({ pinned: await getPinned() }));
-        onMessage<{ threadKey: string }, 'togglePin'>('togglePin', async ({ data }) => {
-            const pinned = await getPinned();
-            const next = pinned.includes(data.threadKey)
-                ? pinned.filter(key => key !== data.threadKey)
-                : [data.threadKey, ...pinned];
-            await browser.storage.local.set({ pinned: next });
-            return { pinned: next };
-        });
+        onMessage<{ threadKey: string; cursor?: string }, 'getThread'>(
+            'getThread',
+            ({ data }) => routeToAnchor('getThread', data),
+        );
+        onMessage<{ shortcode: string; mediaId?: string }, 'getReelMedia'>(
+            'getReelMedia',
+            ({ data }) => routeToAnchor('getReelMedia', data),
+        );
+        onMessage<null, 'getPins'>('getPins', async () => ({
+            pinned: await getPinned(),
+        }));
+        onMessage<{ threadKey: string }, 'togglePin'>(
+            'togglePin',
+            async ({ data }) => {
+                const pinned = await getPinned();
+                const next = pinned.includes(data.threadKey)
+                    ? pinned.filter(key => key !== data.threadKey)
+                    : [data.threadKey, ...pinned];
+                await browser.storage.local.set({ pinned: next });
+                return { pinned: next };
+            },
+        );
     });
 });

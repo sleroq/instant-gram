@@ -21,6 +21,7 @@ Provide a first-class API for reply navigation and future deep-linking:
 scrollToMessage(threadKey, messageId, options).
 
 Behavior:
+
 - If the target message is already loaded, scroll to it via the virtualizer and briefly highlight it.
 - If it is not loaded, load older pages until the message is found or history ends.
 - While searching, keep the user's current viewport stable unless the user explicitly initiated navigation.
@@ -28,6 +29,7 @@ Behavior:
 - The API must be callable from user clicks and from lazy/non-interactive triggers when the user scrolls near a message that contains a reply target they may click.
 
 Implementation notes:
+
 - Add a small message index map: message id -> loaded array index.
 - Add pending target state per thread so repeated calls coalesce.
 - Add abort/race protection for selected thread changes.
@@ -35,6 +37,7 @@ Implementation notes:
 - Integrate with reply rendering work later; do not require reply UI to exist in this milestone.
 
 Checklist:
+
 - [x] Define scrollToMessage(threadKey, messageId, options) API shape and return status.
 - [x] Add loaded message-id-to-index lookup for each thread cache entry.
 - [x] Implement already-loaded path using virtualizer scrollToIndex/scrollToOffset.
@@ -46,12 +49,14 @@ Checklist:
 - [ ] Verify with a target near viewport, a target several pages above, and a missing target.
 
 Implementation checkpoint:
+
 - MessageList exposes a virtualizer-backed `scrollToMessage` API.
 - App implements active/passive target search by loading older pages into the non-rendered older-message buffer until found or history ends.
 - Explicit reply navigation scrolls and highlights; passive lookup only resolves/cache-warms targets.
 - Verified with `npm run check` and `npm run build`; browser behavior remains in manual QA.
 
 Acceptance criteria:
+
 - Calling scrollToMessage for a loaded message centers or reveals it smoothly.
 - Calling scrollToMessage for an unloaded older message loads pages until found and then navigates without buggy teleports.
 - Passive preparation for reply targets can run without moving the user's viewport.

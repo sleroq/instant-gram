@@ -13,6 +13,7 @@ updated_at: 2026-07-04T17:35:15Z
 Implement a foldable chats side-bar with user-configurable width via dragging.
 
 Checklist:
+
 - [ ] Locate the chats side-bar component and current layout constraints.
 - [ ] Add collapse/expand behavior for the chats side-bar.
 - [ ] Add drag-to-resize width behavior with sensible min/max limits.

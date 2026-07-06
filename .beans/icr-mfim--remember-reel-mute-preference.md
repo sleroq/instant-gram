@@ -15,6 +15,7 @@ parent: icr-0tpu
 Remember whether reels should open muted or unmuted instead of always forcing muted playback.
 
 Checklist:
+
 - [ ] Add persisted player audio preference storage.
 - [ ] Initialize new reel modals from the saved mute/unmute preference.
 - [ ] Update the preference when the user changes mute state in the player.

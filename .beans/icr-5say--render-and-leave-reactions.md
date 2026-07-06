@@ -16,9 +16,11 @@ blocked_by:
 Large milestone for structured reactions, emoji selection, and creating/changing reactions from the UI.
 
 ## Scope
+
 Render reactions on messages and support creating/changing reactions with a small emoji picker.
 
 ## Checklist
+
 - [ ] Inspect live/HAR message payloads enough to identify structured reaction fields and update parser accordingly.
 - [ ] Add `MessageReaction` domain type and group reactions by emoji for display.
 - [ ] Extract `ReactionBar.svelte` to show grouped emoji counts and whether the viewer reacted.
@@ -30,4 +32,5 @@ Render reactions on messages and support creating/changing reactions with a smal
 - [ ] Verify with `npm run check` and manual reaction QA.
 
 ## Notes
+
 Existing `reaction_log` messages can remain as activity logs until structured reactions are reliable; avoid using them as the source of truth for bubble reactions.

@@ -15,6 +15,7 @@ parent: icr-0tpu
 Implement a custom in-app reel player instead of relying on the browser default video controls.
 
 Checklist:
+
 - [ ] Define the player control layout and interaction states for loading, error, playing, paused, and ended.
 - [ ] Replace default `<video controls>` usage with custom controls around the video element.
 - [ ] Preserve keyboard and pointer interactions for play/pause, seek, close, and focus handling.

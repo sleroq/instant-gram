@@ -14,9 +14,11 @@ updated_at: 2026-07-04T16:57:29Z
 Large milestone for making the read-only DM client ready for sending, replies, and reactions without bloating App.svelte or the anchor content script.
 
 ## Scope
+
 Refactor current read-only Instagram communication and UI state boundaries before adding mutations.
 
 ## Checklist
+
 - [ ] Split Instagram GraphQL transport/auth retry code out of `entrypoints/ig-anchor.content.ts` into a reusable module.
 - [ ] Move thread/message parsing into a focused parser module with existing behavior preserved.
 - [ ] Add mutation-oriented domain types in `lib/domain.ts` for message status, reply previews, reactions, and RPC payload/results.
@@ -26,4 +28,5 @@ Refactor current read-only Instagram communication and UI state boundaries befor
 - [ ] Verify with `npm run check`.
 
 ## Notes
+
 Use the existing docs in `docs/instagram-live-communication.md` and preserve the current WXT + Svelte 5 patterns.

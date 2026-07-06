@@ -23,6 +23,7 @@ Why:
 Reply navigation and smooth upward browsing need old messages to already be present before the user asks for them. The current TOP_PRELOAD_BUFFER_PX trigger only loads when the user is already near the top, which is too late for seamless interactions.
 
 Implementation notes:
+
 - Introduce a preload controller separate from scroll event handlers.
 - Use throttled/debounced scroll state from the virtualizer to determine how many loaded messages exist above the viewport.
 - Fetch pages until the older-buffer target is met, a request is already in flight, or the thread has no older cursor.
@@ -31,6 +32,7 @@ Implementation notes:
 - Keep request cancellation/race checks for selected thread changes.
 
 Checklist:
+
 - [x] Add constants for target older-message buffer and preload batch limits.
 - [x] Track visible virtual range and count loaded messages before it.
 - [x] Implement ensureOlderBuffer(threadKey) that fetches older pages until the target is satisfied or history ends.
@@ -41,6 +43,7 @@ Checklist:
 - [x] Verify that scrolling upward into preloaded history does not require immediate network fetches in the common case.
 
 Implementation checkpoint:
+
 - MessageList reports the first visible virtual message index to App.
 - App maintains a 200-message older buffer above the visible range when history is available.
 - Background preloads fetch into `bufferedOlder` and do not mutate rendered `data.items`, so passive network loads cannot change scroll height or virtual indexes.
@@ -49,6 +52,7 @@ Implementation checkpoint:
 - Verified with `npm run check` and `npm run build`; manual browser/network behavior still belongs to the QA milestone.
 
 Acceptance criteria:
+
 - When a thread has enough history, the app lazily loads about 200 messages above the visible range.
 - User can continue reading while background older-page loads happen with no visible jump.
 - Preload stops cleanly at the oldest page or when switching threads.

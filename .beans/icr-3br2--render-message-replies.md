@@ -16,9 +16,11 @@ blocked_by:
 Large milestone for making replies first-class in parsed messages and rendered bubbles.
 
 ## Scope
+
 Render quoted reply context for existing messages before implementing reply sending.
 
 ## Checklist
+
 - [ ] Extend message parsing to turn `replied_to_message` into a compact reply preview, not only an id.
 - [ ] Update `Message` domain types to support reply previews on text, reel-share, and unsupported messages where applicable.
 - [ ] Extract message bubble rendering into a component that can show reply preview + body content.
@@ -28,4 +30,5 @@ Render quoted reply context for existing messages before implementing reply send
 - [ ] Verify with `npm run check` and manual thread inspection.
 
 ## Notes
+
 This milestone is display-only. Do not add composer/reply sending here.

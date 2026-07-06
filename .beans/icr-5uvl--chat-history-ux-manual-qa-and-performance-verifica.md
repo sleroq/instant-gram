@@ -17,10 +17,12 @@ blocked_by:
 Large milestone for validating the completed chat-history refactor against the user-facing UX requirements.
 
 Context:
+
 - The core requirement is not just functional pagination; it is that scroll position never resets unexpectedly.
 - Automated type checks are necessary but not sufficient for scroll behavior.
 
 Checklist:
+
 - [x] Run `npm run check` and fix any type/Svelte errors introduced by the refactor.
 - [x] Manually verify switching between at least two chats preserves each chat scroll position.
 - [x] Manually verify returning to a cached chat does not refetch its initial message page.
@@ -31,6 +33,7 @@ Checklist:
 - [x] Inspect the implementation to confirm loading older messages never replaces the whole message list with a loading screen.
 
 Done criteria:
+
 - All manual checks pass in the extension UI.
 - `npm run check` passes.
 - Any residual UX limitations are documented in this bean before closing.

@@ -20,11 +20,13 @@ Goal:
 Make the new scroll system reliable enough for long Instagram DM threads, dynamic content, and reply navigation.
 
 Implementation notes:
+
 - Coordinate with existing chat-history UX verification milestone icr-5uvl rather than duplicating any manual QA already tracked there.
 - Use browser HAR/example data from docs/examples if request/response shape is needed for realistic scenarios.
 - Prefer focused regression coverage for anchor preservation and API outcomes where feasible.
 
 Checklist:
+
 - [ ] Define manual QA scenarios for initial open, thread switch/restore, jump bottom, older prepend, background preload, and reply target navigation.
 - [ ] Test long threads with hundreds/thousands of loaded messages and confirm bounded DOM nodes.
 - [ ] Test dynamic-height rows: long text, reels, avatars/images loading after render.
@@ -35,6 +37,7 @@ Checklist:
 - [ ] Run build/typecheck and document any residual manual-only risks.
 
 Acceptance criteria:
+
 - No visible jump when older messages are inserted above the viewport.
 - DOM size remains bounded under large loaded history.
 - scrollToMessage behavior is deterministic across loaded/unloaded/missing targets.

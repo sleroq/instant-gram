@@ -95,7 +95,8 @@ function optionalString(value: unknown, field: string): string | undefined {
 
 function parseAuthProbe(detail: string): AuthProbePayload {
     const data = JSON.parse(detail) as unknown;
-    if (!isRecord(data)) throw new Error('Invalid Instagram auth probe payload');
+    if (!isRecord(data))
+        throw new Error('Invalid Instagram auth probe payload');
     if (typeof data.at !== 'number')
         throw new Error('Invalid Instagram auth probe at');
     if (typeof data.requireAvailable !== 'boolean')
@@ -195,7 +196,10 @@ export function startAuthProbeListener() {
     });
 }
 
-function waitForAuthProbe(afterSequence: number, timeoutMs: number): Promise<void> {
+function waitForAuthProbe(
+    afterSequence: number,
+    timeoutMs: number,
+): Promise<void> {
     if (authProbeSequence > afterSequence) return Promise.resolve();
     return new Promise(resolve => {
         let timeoutId: number | undefined;
@@ -301,7 +305,9 @@ function harvestTokensNow(): Tokens {
             sources,
             'deviceId',
             roots
-                .map(root => findString(root, ['device_id_for_iris_subscription']))
+                .map(root =>
+                    findString(root, ['device_id_for_iris_subscription']),
+                )
                 .find(Boolean),
             'script[data-sjs] JSON',
         ) ??
@@ -347,7 +353,12 @@ function harvestTokensNow(): Tokens {
             ]),
             'page text',
         ) ??
-        source(sources, 'viewerId', cookie('ds_user_id'), 'ds_user_id cookie') ??
+        source(
+            sources,
+            'viewerId',
+            cookie('ds_user_id'),
+            'ds_user_id cookie',
+        ) ??
         source(sources, 'viewerId', fbDtsg?.split(':')[1], 'fb_dtsg segment');
     const csrfToken = source(
         sources,
@@ -356,7 +367,14 @@ function harvestTokensNow(): Tokens {
         'csrftoken cookie',
     );
     if (!fbDtsg || !lsd || !jazoest || !deviceId || !viewerId || !csrfToken)
-        throw authError({ fbDtsg, lsd, jazoest, deviceId, viewerId, csrfToken });
+        throw authError({
+            fbDtsg,
+            lsd,
+            jazoest,
+            deviceId,
+            viewerId,
+            csrfToken,
+        });
     return { fbDtsg, lsd, jazoest, csrfToken, deviceId, viewerId };
 }
 
@@ -394,7 +412,9 @@ function requireModule(name: string): unknown {
 
 function moduleToken(name: string): string | undefined {
     const mod = requireModule(name);
-    return isRecord(mod) && typeof mod.token === 'string' && mod.token.length > 0
+    return isRecord(mod) &&
+        typeof mod.token === 'string' &&
+        mod.token.length > 0
         ? mod.token
         : undefined;
 }
