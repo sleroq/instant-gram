@@ -26,6 +26,15 @@ Non-negotiable frontend rules:
   assets into this unlicensed repository. Independently implement documented
   behavior unless the repository's licensing boundary is explicitly changed.
 
+For complex, performance-sensitive, or controversial frontend behavior, check
+the pinned Telegram Web A source referenced in `docs/frontend-rewrite-plan.md`
+for concrete examples before choosing an implementation. Inspect only the
+relevant paths, verify the behavior against our smaller API and scope, and
+record any lasting architectural decision in `docs/frontend-architecture.md`.
+Use Telegram as a behavioral reference, not as source to paste: preserve the
+GPL clean-room boundary and omit machinery that our measured requirements do
+not need.
+
 Instagram API/query documentation is in `docs/instagram-*.md`. Browser request
 examples are in `docs/examples/*.har`; consult them when request or response
 shape is relevant, and keep Instagram protocol knowledge out of UI components.
