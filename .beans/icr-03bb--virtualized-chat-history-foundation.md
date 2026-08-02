@@ -1,7 +1,7 @@
 ---
 # icr-03bb
 title: Virtualized chat history foundation
-status: in-progress
+status: scrapped
 type: milestone
 priority: high
 tags:
@@ -9,7 +9,7 @@ tags:
     - scroll
     - virtualization
 created_at: 2026-07-04T17:28:57Z
-updated_at: 2026-07-04T17:32:26Z
+updated_at: 2026-08-02T23:18:33Z
 ---
 
 Large-size milestone: introduce TanStack virtual scrolling as the foundation for stable long chat history.
@@ -44,3 +44,7 @@ Acceptance criteria:
 - Loading older messages while reading does not visibly jump.
 - A thread with hundreds of loaded messages renders only a bounded DOM window.
 - Existing open reel and jump-to-bottom interactions still work.
+
+
+
+Superseded by the Teact rewrite in docs/frontend-rewrite-plan.md. The Svelte/TanStack implementation was removed; its remaining behavioral requirements are carried by Milestone 2 of that plan.

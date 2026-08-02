@@ -1,7 +1,9 @@
 # Frontend MVP rewrite plan
 
-Status: planned  
-Telegram reference: [`Ajaxy/telegram-tt@a323b1f`](https://github.com/Ajaxy/telegram-tt/tree/a323b1f29f5b91e9a32b8c14866234e925fb0bfa)  
+Status: Milestone 1 complete and reviewed; Milestone 2 ready for implementation
+
+Telegram reference: [`Ajaxy/telegram-tt@a323b1f`](https://github.com/Ajaxy/telegram-tt/tree/a323b1f29f5b91e9a32b8c14866234e925fb0bfa)
+
 Scope: chat list, message history, and low-latency infinite history scrolling
 
 This plan supersedes the Svelte/TanStack implementation described in `.beans/icr-03bb--virtualized-chat-history-foundation.md`.
@@ -80,7 +82,10 @@ type FrontendState = {
     cursor?: string;
     hasNextPage: boolean;
     status: 'idle' | 'loading' | 'ready' | 'error';
+    isLoadingMore: boolean;
+    failedCursor?: string;
   };
+  pinnedIds: string[];
   selectedThreadId?: string;
   histories: Record<string, {
     byId: Record<string, Message>;
@@ -91,7 +96,8 @@ type FrontendState = {
     viewerId?: string;
     status: 'idle' | 'loading' | 'ready' | 'error';
     isLoadingOlder: boolean;
-    isPreloading: boolean;
+    isPreloading: boolean;      // existing initial chat-list warmup
+    isPreloadingOlder: boolean;
     scrollAnchor?: { id: string; offset: number };
   }>;
 };
@@ -99,7 +105,24 @@ type FrontendState = {
 
 Actions own RPC calls and stale-response checks. Components receive IDs and select individual entities so an appended page does not rerender every row. Each thread has one initial request and one older-page request at a time.
 
-## Milestone 1 — Teact shell and virtualized chat list
+## Implemented baseline and handoff
+
+Milestone 1 is implemented in `entrypoints/ui/` and was independently reviewed after its blocking findings were fixed.
+
+- `main.tsx` mounts one application-scoped store through the vendored Teact runtime.
+- `store.ts` already owns normalized inbox/history entities, cursor pagination, explicit retries, request-generation guards, pin deduplication, selection, one-time initial history loading, and the two-chat warmup budget.
+- `virtual-list.ts` provides the bounded 25-row chat window with three rows of overscan on each side. Keep chat-list geometry independent from variable-height history geometry.
+- `App.tsx` contains the current shell, virtualized chat list, and temporary one-page `MessagePane`. Milestone 2 should replace only the message-pane implementation, not rewrite the shell or inbox path.
+- `rpc.ts` is the typed frontend transport. Older history must call `getThread({ threadKey: thread.cursor ?? thread.key, cursor: history.cursor })`; do not confuse the stable thread request key with the page cursor.
+- `vendor/teact/` is pinned MIT code with local modifications documented in its README. Teact already exports `useLayoutEffect`, `useRef`, and `memo`, which are sufficient for anchor correction and bounded message rendering. Do not add React as a runtime.
+- `HistoryState.isPreloading` currently means an initial page is being warmed from the chat list. Do not overload it for older-page lookahead; add distinct `isLoadingOlder` and `isPreloadingOlder` state in Milestone 2.
+- A warmed history is already `ready` when selected. Selection must reuse it, then run the selected-chat viewport-fill/older-load logic without refetching the initial page.
+- Failed inbox cursors remain blocked until explicit retry. Preserve this behavior when adding history pagination; failed older cursors must likewise not retrigger continuously while the sentinel remains visible.
+- Current focused checks use Node's test runner through `npm test`. There is no component/browser test harness yet; Milestone 2 must add the narrow browser-level anchor regression required below.
+
+Milestone 1 verification at handoff: typecheck passed, 8 state/window tests passed, production WXT build generated `/ui.html`, and the review verdict was **approved with no release blocker**.
+
+## Milestone 1 — Teact shell and virtualized chat list (complete)
 
 ### Deliverables
 
@@ -131,12 +154,13 @@ Actions own RPC calls and stale-response checks. Components receive IDs and sele
 - A page cursor is never requested twice concurrently, and duplicate thread IDs do not render.
 - Selecting an already cached chat starts no duplicate initial-history request.
 
-## Milestone 2 — Bounded history, preloading, and stable infinite scroll
+## Milestone 2 — Bounded history, preloading, and stable infinite scroll (next)
 
 ### Deliverables
 
-1. **Implement the history cache**
-   - On first open, call `getThread({ threadKey: thread.cursor ?? thread.key })` and normalize the page.
+1. **Extend the existing history cache**
+   - Keep the implemented initial-page path: `getThread({ threadKey: thread.cursor ?? thread.key })` already normalizes and caches the page.
+   - Add `viewportIds`, `isLoadingOlder`, `isPreloadingOlder`, failed-older-cursor gating, and per-thread logical scroll state to the existing `HistoryState`; do not introduce a second store.
    - Keep all contiguous loaded IDs in `listedIds`, but expose at most 40–80 IDs through `viewportIds`.
    - Merge older pages before existing IDs, deduplicate by `message.id`, and retain the newest response's cursor/`hasNextPage` metadata.
    - Switching chats renders cached history synchronously and restores an ID-plus-offset anchor; stale responses may update their own cache but never change the selected view.
@@ -146,6 +170,7 @@ Actions own RPC calls and stale-response checks. Components receive IDs and sele
    - Use a leading 1s debounce plus per-thread single-flight protection.
    - After a user-visible older fetch, request exactly one additional older Instagram page as a low-priority preload, merge it into `listedIds`, and do not expand `viewportIds` until needed.
    - If the initial history is shorter than the viewport, continue page-by-page until it fills or `hasOlder` is false.
+   - Apply automatic viewport filling only to the selected chat. Unopened warm histories remain one page until selected.
 3. **Preserve the viewport across prepends and dynamic content**
    - Before changing `viewportIds`, choose the second surviving visible message (fallback to the first), and record its DOM top.
    - Mark history replacement active so the sentinel cannot retrigger.
@@ -161,6 +186,7 @@ Actions own RPC calls and stale-response checks. Components receive IDs and sele
    - State test: overlapping pages deduplicate and retain chronological order/cursor state.
    - Browser test: prepend an older page containing variable-height rows and verify the anchor's viewport top changes by less than 1px.
    - Browser test: repeated sentinel intersections create one request and preload at most one adjacent page.
+   - Preserve the existing inbox retry, history retry, warmup, pin-ordering, and chat-window tests.
 
 ### Acceptance criteria
 

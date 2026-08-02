@@ -1,6 +1,16 @@
 import { defineConfig } from 'wxt';
+import { fileURLToPath } from 'node:url';
 
 export default defineConfig({
+    vite: () => ({
+        resolve: {
+            alias: {
+                teact: fileURLToPath(
+                    new URL('./vendor/teact/src/teact', import.meta.url),
+                ),
+            },
+        },
+    }),
     webExt: {
         binaries: {
             chrome: '/Applications/Helium.app/Contents/MacOS/Helium',
