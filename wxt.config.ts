@@ -1,7 +1,11 @@
 import { defineConfig } from 'wxt';
 
 export default defineConfig({
-    modules: ['@wxt-dev/module-svelte'],
+    webExt: {
+        binaries: {
+            chrome: '/Applications/Helium.app/Contents/MacOS/Helium',
+        },
+    },
     manifest: {
         permissions: ['storage', 'tabs'],
         host_permissions: [

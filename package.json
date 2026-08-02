@@ -5,19 +5,14 @@
     "scripts": {
         "dev": "wxt",
         "build": "wxt build",
-        "check": "svelte-check --tsconfig ./tsconfig.json && tsc --noEmit"
+        "check": "tsc --noEmit"
     },
     "dependencies": {
-        "@tanstack/svelte-virtual": "3.13.31",
-        "@wxt-dev/module-svelte": "2.0.5",
-        "svelte": "5.56.4",
         "webext-bridge": "6.0.1",
         "webextension-polyfill": "0.12.0",
         "wxt": "0.20.27"
     },
     "devDependencies": {
-        "@tsconfig/svelte": "5.0.8",
-        "svelte-check": "4.7.1",
         "typescript": "6.0.3",
         "vite": "8.1.3"
     }

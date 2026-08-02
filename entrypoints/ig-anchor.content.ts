@@ -1,6 +1,7 @@
 import '../lib/bridge';
 import { defineContentScript } from 'wxt/utils/define-content-script';
 import { DOC_IDS, FRIENDLY_NAMES } from '../lib/config';
+import { getErrorMessage } from '../lib/errors';
 import {
     clearTokenCache,
     harvestTokens,
@@ -567,7 +568,7 @@ function fail(error: unknown): Result<never> {
     return {
         ok: false,
         error: {
-            message: error instanceof Error ? error.message : String(error),
+            message: getErrorMessage(error),
         },
     };
 }
