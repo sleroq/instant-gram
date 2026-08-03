@@ -112,6 +112,193 @@ test('image messages render with reserved geometry and a useful inbox summary', 
     await page.close();
 });
 
+test('reel preview and modal own playback, carousel, actions, comments, links, and focus', async () => {
+    const page = await openHarness({ width: 1100, height: 760 });
+    await page.evaluate(() => window.historyHarness.mount('reel'));
+    const preview = page.getByRole('button', { name: 'Open reel from reel_author' });
+    await preview.waitFor();
+    assert.equal(await page.locator('[data-message-id="reel-message"] a[href*="/reel/"]').count(), 0);
+
+    const inlinePlayback = await page.locator('.message-reel-preview video').evaluate(async video => {
+        const playback = { plays: 0, pauses: 0 };
+        Object.defineProperty(HTMLMediaElement.prototype, 'play', { configurable: true, value: () => { playback.plays++; return Promise.resolve(); } });
+        Object.defineProperty(HTMLMediaElement.prototype, 'pause', { configurable: true, value: () => { playback.pauses++; } });
+        video.scrollIntoView({ block: 'center' });
+        await new Promise(resolve => setTimeout(resolve, 350));
+        video.dispatchEvent(new Event('canplay'));
+        await new Promise(resolve => setTimeout(resolve, 200));
+        const scroller = video.closest('.messages')!;
+        scroller.scrollTop = scroller.scrollHeight;
+        await new Promise(resolve => setTimeout(resolve, 80));
+        const afterVisible = { ...playback };
+        const row = video.closest('.message-reel-preview') as HTMLElement;
+        row.style.display = 'none';
+        scroller.dispatchEvent(new Event('scroll'));
+        await new Promise(resolve => setTimeout(resolve, 350));
+        const afterHidden = { ...playback };
+        row.style.display = '';
+        return { afterVisible, afterHidden };
+    });
+    assert.ok(inlinePlayback.afterVisible.plays > 0, `visible loaded preview did not autoplay: ${JSON.stringify(inlinePlayback)}`);
+    assert.ok(inlinePlayback.afterHidden.pauses > inlinePlayback.afterVisible.pauses, 'hidden preview did not pause');
+
+    await preview.click();
+    const dialog = page.getByRole('dialog', { name: 'Reel by Reel Author' });
+    await dialog.waitFor();
+    await page.getByRole('alert').filter({ hasText: 'Harness comments failure' }).waitFor();
+    assert.deepEqual(await page.evaluate(() => window.historyHarness.reelMetrics()), {
+        reelCommentCalls: 1, reelMediaCalls: 1, reelLikeCalls: 0, reelSaveCalls: 0,
+    });
+    await page.getByRole('button', { name: 'Retry comments' }).click();
+    await page.getByText('Great reel').waitFor();
+
+    const author = page.getByRole('link', { name: /Reel Author/ });
+    assert.equal(await author.getAttribute('href'), 'https://www.instagram.com/reel_author/');
+    const download = page.getByRole('link', { name: 'Download' });
+    assert.ok(await download.getAttribute('download') !== null);
+    assert.equal(await page.getByRole('slider', { name: 'Seek reel' }).count(), 1);
+
+    await page.getByRole('button', { name: 'Like reel' }).click();
+    await page.getByRole('button', { name: 'Save reel' }).click();
+    await page.waitForFunction(() => {
+        const metrics = window.historyHarness.reelMetrics();
+        return metrics.reelLikeCalls === 1 && metrics.reelSaveCalls === 1;
+    });
+    assert.equal(await page.getByRole('button', { name: 'Unlike reel' }).getAttribute('aria-pressed'), 'true');
+    assert.equal(await page.getByRole('button', { name: 'Unsave reel' }).getAttribute('aria-pressed'), 'true');
+
+    const modalVideo = page.locator('.reel-stage video');
+    await modalVideo.evaluate(video => {
+        Object.defineProperty(video, 'paused', { configurable: true, get: () => false });
+        Object.defineProperty(video, 'duration', { configurable: true, value: 10 });
+        (video as HTMLVideoElement).currentTime = 4;
+        (video as HTMLVideoElement).volume = 0.4;
+        (video as HTMLVideoElement).muted = true;
+        (video as HTMLVideoElement).playbackRate = 1.5;
+    });
+    await page.getByRole('combobox', { name: 'Reel quality' }).selectOption('1');
+    await page.waitForTimeout(100);
+    await modalVideo.dispatchEvent('loadedmetadata');
+    const switched = await modalVideo.evaluate(video => ({
+        src: (video as HTMLVideoElement).getAttribute('src'),
+        time: (video as HTMLVideoElement).currentTime,
+        volume: (video as HTMLVideoElement).volume,
+        muted: (video as HTMLVideoElement).muted,
+        rate: (video as HTMLVideoElement).playbackRate,
+    }));
+    assert.match(switched.src ?? '', /AAAA$/);
+    assert.ok(Math.abs(switched.time - 4) < 0.01);
+    assert.equal(switched.volume, 0.4);
+    assert.equal(switched.muted, true);
+    assert.equal(switched.rate, 1.5);
+    await modalVideo.evaluate(video => { (video as HTMLVideoElement).playbackRate = 1; });
+
+    await page.keyboard.down('Space');
+    assert.equal(await modalVideo.evaluate(video => (video as HTMLVideoElement).playbackRate), 2);
+    await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+    assert.equal(await modalVideo.evaluate(video => (video as HTMLVideoElement).playbackRate), 1);
+    await page.keyboard.up('Space');
+    await modalVideo.evaluate(video => {
+        Object.defineProperty(video, 'paused', { configurable: true, get: () => true });
+        (video as HTMLVideoElement).currentTime = 1;
+    });
+    await page.keyboard.press(',');
+    assert.ok(Math.abs(await modalVideo.evaluate(video => (video as HTMLVideoElement).currentTime) - (1 - 1 / 30)) < 0.002);
+    await page.keyboard.press('.');
+    assert.ok(Math.abs(await modalVideo.evaluate(video => (video as HTMLVideoElement).currentTime) - 1) < 0.002);
+
+    await page.getByRole('button', { name: 'Close reel' }).focus();
+    await page.keyboard.press('Shift+Tab');
+    const focusWrapped = await dialog.evaluate(currentDialog => {
+        const focusable = [...currentDialog.querySelectorAll<HTMLElement>(
+            'button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled)',
+        )];
+        return document.activeElement === focusable.at(-1);
+    });
+    assert.equal(focusWrapped, true);
+    await page.keyboard.press('Tab');
+    assert.equal(await dialog.evaluate(currentDialog =>
+        document.activeElement === currentDialog.querySelector<HTMLElement>(
+            'button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled)',
+        )), true);
+
+    await modalVideo.evaluate(video => {
+        Object.defineProperty(video, 'paused', { configurable: true, get: () => false });
+    });
+    const oldVideo = await modalVideo.elementHandle();
+    await page.keyboard.down('Space');
+    await page.keyboard.press('ArrowRight');
+    await page.waitForFunction(() => document.querySelector('.reel-stage')?.getAttribute('aria-label') === 'Slide 2 of 2');
+    assert.equal(await oldVideo!.evaluate(video => (video as HTMLVideoElement).playbackRate), 1);
+    await page.keyboard.up('Space');
+    assert.equal(await page.locator('.reel-stage img[alt="Reel image"]').count(), 1);
+    assert.equal(await download.getAttribute('href'), 'https://cdn.example/image.jpg');
+    await page.keyboard.press('ArrowLeft');
+    await page.getByRole('button', { name: 'Close reel' }).click();
+    await dialog.waitFor({ state: 'detached' });
+    await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Open reel from reel_author');
+
+    await preview.click();
+    await dialog.waitFor();
+    await page.waitForTimeout(100);
+    const closingVideo = page.locator('.reel-stage video');
+    await closingVideo.evaluate(video => Object.defineProperty(video, 'paused', { configurable: true, get: () => false }));
+    const closingHandle = await closingVideo.elementHandle();
+    await page.keyboard.down('Space');
+    await page.getByRole('button', { name: 'Close reel' }).click();
+    await dialog.waitFor({ state: 'detached' });
+    assert.equal(await closingHandle!.evaluate(video => (video as HTMLVideoElement).playbackRate), 1);
+    await page.keyboard.up('Space');
+
+    await preview.click();
+    await dialog.waitFor();
+    await page.locator('.reel-modal').evaluate(backdrop => {
+        backdrop.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await dialog.waitFor({ state: 'detached' });
+    await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Open reel from reel_author');
+    await page.close();
+});
+
+test('modal retries expired cached video and current carousel image with refreshed URLs', async () => {
+    const page = await openHarness({ width: 1100, height: 760 });
+    await page.evaluate(() => window.historyHarness.mount('reel'));
+    await page.getByRole('button', { name: 'Open reel from reel_author' }).click();
+    await page.getByRole('dialog', { name: 'Reel by Reel Author' }).waitFor();
+
+    const video = page.locator('.reel-stage video');
+    const cachedVideoUrl = await video.getAttribute('src');
+    await video.dispatchEvent('error');
+    const videoRetry = page.getByRole('button', { name: 'Retry reel media' });
+    await videoRetry.waitFor();
+    await videoRetry.evaluate(button => {
+        (button as HTMLButtonElement).click();
+        (button as HTMLButtonElement).click();
+    });
+    assert.equal(await video.getAttribute('src'), cachedVideoUrl, 'cached video disappeared during refresh');
+    await page.waitForFunction(() => window.historyHarness.reelMetrics().reelMediaCalls === 2);
+    await page.waitForFunction(() => document.querySelector('.reel-stage video')?.getAttribute('src')?.endsWith('#fresh-2'));
+    assert.equal((await page.getByText('Great reel').count()) > 0, true);
+
+    await page.keyboard.press('ArrowRight');
+    const image = page.locator('.reel-stage img[alt="Reel image"]');
+    await image.waitFor();
+    const cachedImageUrl = await image.getAttribute('src');
+    await image.dispatchEvent('error');
+    const imageRetry = page.getByRole('button', { name: 'Retry reel media' });
+    await imageRetry.click();
+    assert.equal(await image.getAttribute('src'), cachedImageUrl, 'cached image disappeared during refresh');
+    await page.waitForFunction(() => window.historyHarness.reelMetrics().reelMediaCalls === 3);
+    await page.waitForFunction(() => document.querySelector('.reel-stage img')?.getAttribute('src')?.endsWith('#fresh-3'));
+    assert.deepEqual(await page.evaluate(() => window.historyHarness.reelMetrics()), {
+        reelCommentCalls: 2,
+        reelMediaCalls: 3,
+        reelLikeCalls: 0,
+        reelSaveCalls: 0,
+    });
+    await page.close();
+});
+
 test('activity and fallback messages stay friendly, inert, escaped, and free of empty media', async () => {
     const page = await openHarness({ width: 900, height: 700 });
     await page.evaluate(() => window.historyHarness.mount('events'));
@@ -608,6 +795,168 @@ test('reply selection, failed-send recovery, and bounded reaction picker are acc
     await failedMenu.getByRole('menuitem', { name: 'Retry send' }).click();
     await page.locator('[data-message-id="server-1"]').waitFor();
     assert.equal(await failure.count(), 0);
+    await page.close();
+});
+
+test('reply preview loads through older history and focuses the original in a bounded window', async () => {
+    const page = await openHarness({ width: 900, height: 520 });
+    await page.evaluate(() => window.historyHarness.mount('reply-navigation'));
+    const reply = page.locator('[data-message-id="m119"]')
+        .getByRole('button', { name: 'Go to original message: Original message 10' });
+    await reply.waitFor();
+    await reply.click();
+    const target = page.locator('[data-message-id="m10"]');
+    await target.waitFor();
+    await page.getByRole('status').filter({ hasText: 'Original message loaded' }).waitFor();
+
+    const result = await target.evaluate(row => {
+        const scroller = row.closest<HTMLElement>('.messages')!;
+        const rowRect = row.getBoundingClientRect();
+        const scrollerRect = scroller.getBoundingClientRect();
+        return {
+            active: document.activeElement === row,
+            rowCenter: rowRect.top + rowRect.height / 2,
+            scrollerCenter: scrollerRect.top + scrollerRect.height / 2,
+            renderedRows: scroller.querySelectorAll('[data-message-id]').length,
+        };
+    });
+    assert.equal(result.active, true);
+    assert.ok(Math.abs(result.rowCenter - result.scrollerCenter) < 2);
+    assert.ok(result.renderedRows <= 80);
+    assert.deepEqual(await page.evaluate(() => window.historyHarness.calls()), [undefined, 'c1', 'c2', 'c3', 'c4']);
+    await page.close();
+});
+
+test('reply preview supports keyboard activation and rerenders an explicit retry error', async () => {
+    let page = await openHarness({ width: 900, height: 520 });
+    const replyName = 'Go to original message: Original message 10';
+
+    await page.evaluate(() => window.historyHarness.mount('reply-navigation'));
+    await page.getByRole('button', { name: replyName }).press('Enter');
+    await page.locator('[data-message-id="m10"]').waitFor();
+
+    await page.evaluate(() => window.historyHarness.mount('reply-navigation'));
+    await page.getByRole('button', { name: replyName }).press('Space');
+    await page.locator('[data-message-id="m10"]').waitFor();
+
+    // Isolate the retry contract from reply/viewport prefetch work started by
+    // the keyboard-activation mounts above. Prefetch reuse has dedicated
+    // coverage below; this scenario must leave c1 for the user click to fail.
+    await page.close();
+    page = await openHarness({ width: 900, height: 520 });
+
+    await page.evaluate(() => {
+        Object.defineProperty(window, 'IntersectionObserver', {
+            configurable: true,
+            value: class {
+                observe() {}
+                unobserve() {}
+                disconnect() {}
+            },
+        });
+        return window.historyHarness.mount('reply-navigation-retry');
+    });
+    await page.getByRole('button', { name: replyName }).press('Enter');
+    const failure = page.getByRole('alert').filter({ hasText: 'Harness reply failure' });
+    await failure.waitFor();
+    assert.equal(await page.locator('[data-message-id="m119"]').count(), 1);
+    assert.deepEqual(await page.evaluate(() => window.historyHarness.calls()), [undefined, 'c1']);
+    await failure.getByRole('button', { name: 'Retry' }).press('Space');
+    await page.locator('[data-message-id="m10"]').waitFor();
+    assert.deepEqual(await page.evaluate(() => window.historyHarness.calls()), [undefined, 'c1', 'c1', 'c2', 'c3', 'c4']);
+    await page.close();
+});
+
+test('visible reply prefetch is reused while click progress and icon return stay accessible', async () => {
+    const page = await openHarness({ width: 900, height: 520 });
+    await page.evaluate(() => window.historyHarness.mount('reply-navigation-delayed'));
+    const reply = page.getByRole('button', {
+        name: 'Go to original message: Original message 10',
+    });
+    await reply.waitFor();
+    await page.waitForFunction(() => window.historyHarness.calls().length === 2);
+    assert.deepEqual(await page.evaluate(() => window.historyHarness.calls()), [undefined, 'c1']);
+
+    await reply.click();
+    await page.getByRole('status').filter({
+        hasText: 'Loading original message… Searching older history.',
+    }).waitFor();
+    assert.deepEqual(await page.evaluate(() => window.historyHarness.calls()), [undefined, 'c1']);
+    await page.evaluate(() => window.historyHarness.resolveVisible());
+    await page.locator('[data-message-id="m10"]').waitFor();
+
+    const returnButton = page.getByRole('button', {
+        name: 'Return to previous reply message (1 step remaining)',
+    });
+    await returnButton.waitFor();
+    assert.equal((await returnButton.textContent())?.trim(), '');
+    assert.equal(await returnButton.locator('svg').count(), 1);
+    await returnButton.click();
+    await page.waitForFunction(() =>
+        window.historyHarness.historyState('thread').replyNavigation?.targetId === 'm119');
+    const returned = page.locator('[data-message-id="m119"]');
+    await returned.waitFor();
+    await page.waitForFunction(() =>
+        window.historyHarness.historyState('thread').replyReturnStack?.length === 0);
+    assert.deepEqual(
+        (await page.evaluate(() => window.historyHarness.historyState('thread'))).replyReturnStack,
+        [],
+    );
+    await page.close();
+});
+
+test('delayed reply navigation cannot alter the old pane after returning to inbox', async () => {
+    const page = await openHarness({ width: 900, height: 520 });
+    await page.evaluate(() => window.historyHarness.mount('reply-navigation-delayed'));
+    const reply = page.getByRole('button', {
+        name: 'Go to original message: Original message 10',
+    });
+    await reply.waitFor();
+    await page.waitForFunction(() => window.historyHarness.calls().includes('c1'));
+    const before = (await page.evaluate(() =>
+        window.historyHarness.historyState('thread'))).viewportIds;
+    await reply.click();
+    await page.getByRole('status').filter({ hasText: 'Loading original message' }).waitFor();
+    await page.evaluate(() => window.historyHarness.showInbox());
+    await page.getByRole('button', { name: 'History harness', exact: true }).waitFor();
+    await page.evaluate(() => window.historyHarness.resolveVisible());
+    await page.waitForTimeout(100);
+    const old = await page.evaluate(() => window.historyHarness.historyState('thread'));
+    assert.deepEqual(old.viewportIds, before);
+    assert.equal(old.replyNavigation, undefined);
+    assert.deepEqual(old.replyReturnStack, []);
+    assert.equal(await page.locator('[data-message-id="m10"]').count(), 0);
+    assert.equal(await page.locator('.conversation__header h2').count(), 0);
+    await page.close();
+});
+
+test('reply chain near latest keeps down navigation until newest window reaches DOM bottom', async () => {
+    const page = await openHarness({ width: 900, height: 520 });
+    await page.evaluate(() => window.historyHarness.mount('reply-navigation-chain'));
+
+    await page.locator('[data-message-id="m105"]')
+        .getByRole('button', { name: 'Go to original message: Message B' }).click();
+    await page.locator('[data-message-id="m95"]')
+        .getByRole('button', { name: 'Go to original message: Message A' }).click();
+    await page.getByRole('button', {
+        name: 'Return to previous reply message (2 steps remaining)',
+    }).click();
+    await page.waitForFunction(() => document.activeElement?.getAttribute('data-message-id') === 'm95');
+    await page.getByRole('button', {
+        name: 'Return to previous reply message (1 step remaining)',
+    }).click();
+    await page.waitForFunction(() => document.activeElement?.getAttribute('data-message-id') === 'm105');
+
+    const newest = page.getByRole('button', { name: 'Go to newest message' });
+    await newest.waitFor();
+    assert.equal(await page.locator('[data-message-id="m119"]').count(), 1);
+    await newest.click();
+    await newest.waitFor({ state: 'detached' });
+    const distance = await page.evaluate(() => {
+        const scroller = document.querySelector<HTMLElement>('.messages')!;
+        return scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+    });
+    assert.ok(distance <= 2, `reply-chain newest navigation ended ${distance}px from bottom`);
     await page.close();
 });
 

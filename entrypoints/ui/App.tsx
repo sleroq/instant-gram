@@ -14,14 +14,15 @@ import {
     useRef,
     useState,
 } from '../../vendor/teact/src/teact/teact';
-import type { Message, Thread, User } from '../../lib/domain';
-import type { FrontendStore, HistoryState, PinMutation } from './store';
+import type { Message, ReelMediaItem, Thread, User } from '../../lib/domain';
+import type { FrontendStore, HistoryState, PinMutation, ReelState } from './store';
 import { hasLocalOlderIds } from './history-window';
 import { computeChatWindow } from './virtual-list';
 
 const ROW_HEIGHT = 72;
 const REACTION_EMOJIS = ['❤', '😂', '😮', '😢', '😡', '👍'];
 let keyboardScrollSequence = 0;
+let reelReturnFocus: HTMLElement | undefined;
 
 type AppProps = { store: FrontendStore };
 
@@ -35,7 +36,12 @@ export default function App({ store }: AppProps) {
         ? state.inbox.byId[state.selectedThreadId]
         : undefined;
 
+    const activeReel = state.reels.activeId
+        ? state.reels.byId[state.reels.activeId]
+        : undefined;
+
     return (
+        <>
         <main className={`app-shell${selected ? ' app-shell--conversation-selected' : ''}`}>
             <aside className="sidebar">
                 <header className="sidebar__header">
@@ -65,6 +71,8 @@ export default function App({ store }: AppProps) {
                 )}
             </section>
         </main>
+        {activeReel && <ReelModal key={activeReel.shortcode} store={store} reel={activeReel} />}
+        </>
     );
 }
 
@@ -364,6 +372,8 @@ function MessagePane({
     const activeThreadRef = useRef(thread.key);
     const openedThreadRef = useRef('');
     const followNewestThreadRef = useRef<string>();
+    const handledReplyNavigationRef = useRef(0);
+    const [isViewportAtBottom, setIsViewportAtBottom] = useState(false);
     const viewportKey = history?.viewportIds.join('\u0000') ?? '';
 
     activeThreadRef.current = thread.key;
@@ -495,6 +505,7 @@ function MessagePane({
             } else {
                 scroller.scrollTop = scroller.scrollHeight;
             }
+            setIsViewportAtBottom(isAtBottom(scroller));
         }
         const pending = pendingAnchorRef.current;
         if (history.isReplacingViewport) {
@@ -515,6 +526,7 @@ function MessagePane({
             scheduleThreadContinuation(thread.key, reevaluateOlderReveal, 50);
         }
         updateResizeAnchor(scroller, resizeAnchorRef);
+        setIsViewportAtBottom(isAtBottom(scroller));
         if (
             scroller.scrollHeight <= scroller.clientHeight + 1 && history.hasOlder &&
             !history.isLoadingOlder && !history.isPreloadingOlder &&
@@ -547,7 +559,33 @@ function MessagePane({
         scroller.scrollTop = scroller.scrollHeight;
         followNewestThreadRef.current = undefined;
         updateResizeAnchor(scroller, resizeAnchorRef);
+        setIsViewportAtBottom(isAtBottom(scroller));
     }, [thread.key, viewportKey]);
+
+    useLayoutEffect(() => {
+        const navigation = history?.replyNavigation;
+        const scroller = scrollerRef.current;
+        if (
+            !scroller || navigation?.status !== 'ready' ||
+            activeThreadRef.current !== thread.key ||
+            store.state.selectedThreadId !== thread.key ||
+            handledReplyNavigationRef.current === navigation.requestId
+        ) return;
+        const row = scroller.querySelector<HTMLElement>(
+            `[data-message-id="${cssEscape(navigation.targetId)}"]`,
+        );
+        if (!row) return;
+        handledReplyNavigationRef.current = navigation.requestId;
+        row.scrollIntoView({ block: 'center' });
+        row.focus({ preventScroll: true });
+        setIsViewportAtBottom(isAtBottom(scroller));
+        store.saveHistoryAnchor(thread.key, {
+            id: navigation.targetId,
+            offset: row.getBoundingClientRect().top - scroller.getBoundingClientRect().top,
+        });
+        updateResizeAnchor(scroller, resizeAnchorRef);
+        store.completeReplyNavigationPosition(thread.key, navigation.requestId);
+    }, [thread.key, viewportKey, history?.replyNavigation?.requestId, history?.replyNavigation?.status]);
 
     useEffect(() => {
         const root = scrollerRef.current;
@@ -564,6 +602,32 @@ function MessagePane({
             clearRevealTimer();
         };
     }, [thread.key, history?.status]);
+
+    useEffect(() => {
+        const root = scrollerRef.current;
+        if (!root || !history || history.status !== 'ready') return;
+        const previews = [...root.querySelectorAll<HTMLElement>('[data-reply-target-id]')];
+        if (!previews.length) return;
+        const prefetchVisible = () => {
+            const rootRect = root.getBoundingClientRect();
+            store.prefetchReplyTargets(thread.key, previews.filter(element => {
+                const rect = element.getBoundingClientRect();
+                return rect.bottom >= rootRect.top - 160 && rect.top <= rootRect.bottom + 160;
+            }).map(element => element.dataset.replyTargetId).filter(Boolean) as string[]);
+        };
+        if (typeof IntersectionObserver === 'undefined') {
+            prefetchVisible();
+            return () => store.prefetchReplyTargets(thread.key, []);
+        }
+        const observer = new IntersectionObserver(entries => {
+            if (entries.length) prefetchVisible();
+        }, { root, rootMargin: '160px 0px' });
+        previews.forEach(preview => observer.observe(preview));
+        return () => {
+            observer.disconnect();
+            store.prefetchReplyTargets(thread.key, []);
+        };
+    }, [store, thread.key, viewportKey, history?.status]);
 
     useEffect(() => {
         reevaluateOlderReveal();
@@ -623,6 +687,7 @@ function MessagePane({
             });
         }
         updateResizeAnchor(scroller, resizeAnchorRef);
+        setIsViewportAtBottom(isAtBottom(scroller));
     };
 
     const submitDraft = () => {
@@ -644,15 +709,32 @@ function MessagePane({
         return Boolean(localId);
     };
 
-    const showNewest = () => {
+    const useDownNavigation = () => {
+        if (history?.replyReturnStack.length) {
+            void store.returnFromReplyNavigation(thread.key);
+            return;
+        }
         followNewestThreadRef.current = thread.key;
         store.revealNewestHistory(thread.key);
+        requestAnimationFrame(() => {
+            if (
+                activeThreadRef.current !== thread.key ||
+                store.state.selectedThreadId !== thread.key
+            ) return;
+            const scroller = scrollerRef.current;
+            if (!scroller) return;
+            scroller.scrollTop = scroller.scrollHeight;
+            followNewestThreadRef.current = undefined;
+            updateResizeAnchor(scroller, resizeAnchorRef);
+            setIsViewportAtBottom(isAtBottom(scroller));
+        });
     };
 
-    const latestId = history?.listedIds.at(-1);
-    const hasNewerMessages = Boolean(
-        latestId && history && !history.viewportIds.includes(latestId),
-    );
+    const newestWindow = history ? history.listedIds.slice(-40) : [];
+    const isNewestWindow = Boolean(history) &&
+        newestWindow.length === history!.viewportIds.length &&
+        newestWindow.every((id, index) => history!.viewportIds[index] === id);
+    const hasNewerMessages = Boolean(history && (!isNewestWindow || !isViewportAtBottom));
     const selectReply = useCallback((messageId: string) => {
         const scroller = scrollerRef.current;
         const visible = scroller
@@ -670,6 +752,14 @@ function MessagePane({
                 ?.focus({ preventScroll: true });
         });
     }, [store, thread.key]);
+    const navigateToReply = useCallback((messageId: string, returnId: string) => {
+        void store.navigateToReply(thread.key, messageId, returnId);
+    }, [store, thread.key]);
+    const hasReplyReturn = Boolean(history?.replyReturnStack.length);
+    const showDownNavigation = hasReplyReturn || hasNewerMessages;
+    const downNavigationLabel = hasReplyReturn
+        ? `Return to previous reply message (${history!.replyReturnStack.length} ${history!.replyReturnStack.length === 1 ? 'step' : 'steps'} remaining)`
+        : 'Go to newest message';
 
     return (
         <>
@@ -711,7 +801,8 @@ function MessagePane({
                 )}
                 {history?.status === 'ready' && (
                     <>
-                        {(history.isLoadingOlder || history.isPreloadingOlder) && (
+                        {(history.isLoadingOlder || history.isPreloadingOlder) &&
+                            history.replyNavigation?.status !== 'loading' && (
                             <div className="messages__loading status-surface" role="status">
                                 <span className="spinner spinner--small" aria-hidden="true" />
                                 <span>Loading older messages…</span>
@@ -724,6 +815,34 @@ function MessagePane({
                                     Retry
                                 </button>
                             </div>
+                        )}
+                        {history.replyNavigation?.status === 'loading' && (
+                            <div className="messages__reply-navigation status-surface" role="status">
+                                <span className="spinner spinner--small" aria-hidden="true" />
+                                <span>
+                                    {history.replyNavigation.pagesLoaded
+                                        ? `Loading original message… ${history.replyNavigation.pagesLoaded} older ${history.replyNavigation.pagesLoaded === 1 ? 'page' : 'pages'}, ${history.replyNavigation.messagesLoaded ?? 0} ${(history.replyNavigation.messagesLoaded ?? 0) === 1 ? 'message' : 'messages'} loaded.`
+                                        : 'Loading original message… Searching older history.'}
+                                </span>
+                            </div>
+                        )}
+                        {history.replyNavigation?.status === 'error' && (
+                            <div className="messages__reply-navigation messages__reply-navigation--error status-surface" role="alert">
+                                <span>{history.replyNavigation.error}</span>
+                                <button
+                                    type="button"
+                                    onClick={() => store.navigateToReply(
+                                        thread.key,
+                                        history.replyNavigation!.targetId,
+                                        history.replyNavigation!.returnId,
+                                    )}
+                                >
+                                    Retry
+                                </button>
+                            </div>
+                        )}
+                        {history.replyNavigation?.status === 'ready' && (
+                            <span className="visually-hidden" role="status">Original message loaded</span>
                         )}
                         <div className="messages__content" ref={contentRef}>
                             <div className="messages__sentinel" ref={sentinelRef} aria-hidden="true" />
@@ -776,7 +895,8 @@ function MessagePane({
                                                             : undefined}
                                                         grouped={index > 0}
                                                         showDate={group.showDate && index === 0}
-                                                        onReply={selectReply}
+                                                         onReply={selectReply}
+                                                         onNavigateToReply={navigateToReply}
                                                     />
                                                 );
                                             })}
@@ -787,9 +907,19 @@ function MessagePane({
                     </>
                 )}
             </div>
-            {hasNewerMessages && (
-                <button type="button" className="newest-message" onClick={showNewest}>
-                    Go to newest message
+            {showDownNavigation && (
+                <button
+                    type="button"
+                    className="newest-message"
+                    onClick={useDownNavigation}
+                    aria-label={downNavigationLabel}
+                    title={downNavigationLabel}
+                    aria-busy={history?.replyNavigation?.status === 'loading'}
+                    disabled={history?.replyNavigation?.status === 'loading'}
+                >
+                    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+                        <path d="M6 9l6 6 6-6" />
+                    </svg>
                 </button>
             )}
             {history?.status === 'ready' && (
@@ -820,6 +950,7 @@ const MessageRow = memo(function MessageRow({
     grouped,
     showDate,
     onReply,
+    onNavigateToReply,
 }: {
     store: FrontendStore;
     threadId: string;
@@ -834,6 +965,7 @@ const MessageRow = memo(function MessageRow({
     grouped: boolean;
     showDate: boolean;
     onReply: (messageId: string) => void;
+    onNavigateToReply: (messageId: string, returnId: string) => void;
 }) {
     const [menuPoint, setMenuPoint] = useState<SurfacePoint>();
     const [pickerPoint, setPickerPoint] = useState<SurfacePoint>();
@@ -925,10 +1057,16 @@ const MessageRow = memo(function MessageRow({
                 <div className="message__bubble">
                     {senderName && <strong className="message__sender-name">{senderName}</strong>}
                     {'replyPreview' in message && message.replyPreview && (
-                        <ReplyPreview preview={message.replyPreview} />
+                        <ReplyPreview
+                            preview={message.replyPreview}
+                            onNavigate={'repliedTo' in message && message.repliedTo
+                                ? () => onNavigateToReply(message.repliedTo!, message.id)
+                                : undefined}
+                            targetId={'repliedTo' in message ? message.repliedTo : undefined}
+                        />
                     )}
                     <div className="message__body">
-                        <MessageContent message={message} />
+                        <MessageContent store={store} message={message} />
                         <time dateTime={new Date(message.ts).toISOString()}>
                             {formatMessageTime(message.ts)}
                         </time>
@@ -1383,18 +1521,469 @@ function Composer({
     );
 }
 
-function MessageContent({ message }: { message: Message }) {
+function InlineReel({ store, message }: { store: FrontendStore; message: Extract<Message, { kind: 'reel_share' }> }) {
+    const rootRef = useRef<HTMLButtonElement>(null as unknown as HTMLButtonElement);
+    const videoRef = useRef<HTMLVideoElement>(null as unknown as HTMLVideoElement);
+    const [nearViewport, setNearViewport] = useState(false);
+    const [canPlay, setCanPlay] = useState(false);
+    const reel = store.state.reels.byId[message.shortcode];
+    const item = reel?.media?.items[0];
+    const video = item?.kind === 'video' ? item : undefined;
+
+    useEffect(() => {
+        const root = rootRef.current;
+        const history = root?.closest('.messages');
+        if (!root || !history) return;
+        const checkPosition = () => {
+            const rootRect = root.getBoundingClientRect();
+            const historyRect = history.getBoundingClientRect();
+            setNearViewport(
+                rootRect.width > 0 && rootRect.height > 0 &&
+                rootRect.bottom >= historyRect.top - 160 && rootRect.top <= historyRect.bottom + 160,
+            );
+        };
+        const observer = new IntersectionObserver(entries => {
+            setNearViewport(entries.some(entry => entry.isIntersecting));
+        }, { root: history, rootMargin: '160px 0px', threshold: 0 });
+        observer.observe(root);
+        history.addEventListener('scroll', checkPosition, { passive: true });
+        checkPosition();
+        return () => {
+            observer.disconnect();
+            history.removeEventListener('scroll', checkPosition);
+        };
+    }, [message.id]);
+
+    useEffect(() => {
+        const media = videoRef.current;
+        if (!media) return;
+        if (nearViewport && canPlay) void media.play().catch(() => undefined);
+        else media.pause();
+    }, [nearViewport, canPlay, video?.videoUrl]);
+
+    const markPlayable = () => {
+        setCanPlay(true);
+        const media = videoRef.current;
+        const history = rootRef.current?.closest('.messages');
+        if (!media || !history) return;
+        const mediaRect = media.getBoundingClientRect();
+        const historyRect = history.getBoundingClientRect();
+        if (mediaRect.bottom >= historyRect.top - 160 && mediaRect.top <= historyRect.bottom + 160) {
+            setNearViewport(true);
+            void media.play().catch(() => undefined);
+        }
+    };
+
+    return (
+        <button
+            ref={rootRef}
+            type="button"
+            className="message-card message-reel-preview"
+            aria-label={`Open reel from ${message.author}`}
+            onClick={(event: ReactMouseEvent<HTMLButtonElement>) => {
+                reelReturnFocus = event.currentTarget;
+                void store.openReel(message.shortcode, message.mediaId);
+            }}
+        >
+            {video ? (
+                <video
+                    key={video.id}
+                    ref={videoRef}
+                    src={video.videoUrl}
+                    poster={video.posterUrl || message.thumbUrl}
+                    muted
+                    loop
+                    playsInline
+                    preload="metadata"
+                    aria-hidden="true"
+                    onCanPlay={markPlayable}
+                    onLoadedData={markPlayable}
+                />
+            ) : (
+                <img src={item?.posterUrl || message.thumbUrl} alt="" loading="lazy" />
+            )}
+            <span className="message-reel-preview__badge" aria-hidden="true">▶</span>
+            <strong>{message.author}</strong>
+            {message.caption && <span>{message.caption}</span>}
+        </button>
+    );
+}
+
+function ReelModal({ store, reel }: { store: FrontendStore; reel: ReelState }) {
+    const modalRef = useRef<HTMLDivElement>(null as unknown as HTMLDivElement);
+    const [slide, setSlide] = useState(0);
+    const media = reel.media;
+    const items = media?.items ?? [];
+    const current = items[Math.min(slide, Math.max(0, items.length - 1))];
+    const close = () => store.closeReel();
+    const move = (delta: number) => setSlide(index => Math.max(0, Math.min(items.length - 1, index + delta)));
+
+    useLayoutEffect(() => {
+        const modal = modalRef.current;
+        const shell = document.querySelector<HTMLElement>('.app-shell');
+        if (!modal || !shell) return;
+        shell.setAttribute('inert', '');
+        shell.setAttribute('aria-hidden', 'true');
+        const previousOverflow = document.documentElement.style.overflow;
+        document.documentElement.style.overflow = 'hidden';
+        modal.querySelector<HTMLElement>(
+            'button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled)',
+        )?.focus({ preventScroll: true });
+        return () => {
+            shell.removeAttribute('inert');
+            shell.removeAttribute('aria-hidden');
+            document.documentElement.style.overflow = previousOverflow;
+            const target = reelReturnFocus;
+            reelReturnFocus = undefined;
+            requestAnimationFrame(() => target?.isConnected && target.focus({ preventScroll: true }));
+        };
+    }, []);
+
+    useEffect(() => {
+        const onKey = (event: globalThis.KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                close();
+                return;
+            }
+            if (isEditableTarget(event.target as Element)) return;
+            if (event.key === 'ArrowLeft' && slide > 0) {
+                event.preventDefault();
+                move(-1);
+            } else if (event.key === 'ArrowRight' && slide < items.length - 1) {
+                event.preventDefault();
+                move(1);
+            } else if (event.key === 'Tab') {
+                const focusable = [...modalRef.current.querySelectorAll<HTMLElement>(
+                    'button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled)',
+                )];
+                if (!focusable.length) return;
+                const currentIndex = focusable.indexOf(document.activeElement as HTMLElement);
+                const next = event.shiftKey
+                    ? (currentIndex <= 0 ? focusable.length - 1 : currentIndex - 1)
+                    : (currentIndex === focusable.length - 1 ? 0 : currentIndex + 1);
+                if (currentIndex < 0 || next !== currentIndex + (event.shiftKey ? -1 : 1)) {
+                    event.preventDefault();
+                    focusable[next].focus();
+                }
+            }
+        };
+        document.addEventListener('keydown', onKey, true);
+        return () => document.removeEventListener('keydown', onKey, true);
+    }, [slide, items.length]);
+
+    return (
+        <div
+            className="reel-modal"
+            role="presentation"
+            onClick={(event: ReactMouseEvent<HTMLDivElement>) => {
+                if (event.target === event.currentTarget) close();
+            }}
+        >
+            <div
+                ref={modalRef}
+                className="reel-modal__dialog"
+                role="dialog"
+                aria-modal="true"
+                aria-label={media ? `Reel by ${media.author.fullName || media.author.username}` : 'Instagram reel'}
+            >
+                <button type="button" className="reel-modal__close" onClick={close} aria-label="Close reel">×</button>
+                {!media && reel.status === 'loading' && <ListState label="Loading reel…" spinner />}
+                {!media && reel.status === 'error' && (
+                    <ListState
+                        label={reel.error ?? 'Could not load reel'}
+                        error
+                        actionLabel="Retry"
+                        onAction={() => { void store.retryReel(reel.shortcode); }}
+                    />
+                )}
+                {media && current && (
+                    <>
+                        <section className="reel-stage" aria-label={`Slide ${slide + 1} of ${items.length}`}>
+                            <ReelMediaPlayer
+                                key={current.id}
+                                item={current}
+                                refreshing={reel.status === 'loading'}
+                                onRetry={() => { void store.retryReel(reel.shortcode); }}
+                            />
+                            {slide > 0 && (
+                                <button type="button" className="reel-stage__previous" onClick={() => move(-1)} aria-label="Previous slide">‹</button>
+                            )}
+                            {slide < items.length - 1 && (
+                                <button type="button" className="reel-stage__next" onClick={() => move(1)} aria-label="Next slide">›</button>
+                            )}
+                            {items.length > 1 && (
+                                <div className="reel-stage__position" role="status">{slide + 1} / {items.length}</div>
+                            )}
+                        </section>
+                        <aside className="reel-details">
+                            <header className="reel-author">
+                                {media.author.picUrl ? <img src={media.author.picUrl} alt="" width="42" height="42" /> : <span className="avatar avatar--small">{initials(media.author.username)}</span>}
+                                <a href={`https://www.instagram.com/${encodeURIComponent(media.author.username)}/`} target="_blank" rel="noreferrer">
+                                    <strong>{media.author.fullName || media.author.username}</strong>
+                                    <span>@{media.author.username}{media.author.isVerified ? ' · Verified' : ''}</span>
+                                </a>
+                            </header>
+                            {media.caption && <p className="reel-details__caption">{media.caption}</p>}
+                            <div className="reel-actions">
+                                <button
+                                    type="button"
+                                    aria-label={media.hasLiked ? 'Unlike reel' : 'Like reel'}
+                                    aria-pressed={media.hasLiked}
+                                    aria-busy={reel.likeMutation?.status === 'pending'}
+                                    disabled={reel.likeMutation?.status === 'pending'}
+                                    onClick={() => { void store.toggleReelLiked(reel.shortcode); }}
+                                >{media.hasLiked ? '♥' : '♡'} {media.likeCount.toLocaleString()}</button>
+                                {media.canSave && <button
+                                    type="button"
+                                    aria-label={media.hasSaved ? 'Unsave reel' : 'Save reel'}
+                                    aria-pressed={media.hasSaved}
+                                    aria-busy={reel.saveMutation?.status === 'pending'}
+                                    disabled={reel.saveMutation?.status === 'pending'}
+                                    onClick={() => { void store.toggleReelSaved(reel.shortcode); }}
+                                >{media.hasSaved ? 'Saved' : 'Save'}</button>}
+                                {current.canDownload && current.downloadUrl && (
+                                    <a className="reel-actions__download" href={current.downloadUrl} download target="_blank" rel="noreferrer">Download</a>
+                                )}
+                            </div>
+                            {reel.likeMutation?.status === 'error' && <p role="alert" className="reel-error">Like failed: {reel.likeMutation.error}</p>}
+                            {reel.saveMutation?.status === 'error' && <p role="alert" className="reel-error">Save failed: {reel.saveMutation.error}</p>}
+                            <section className="reel-comments" aria-label="Comments">
+                                <h3>Comments <span>{media.commentCount.toLocaleString()}</span></h3>
+                                {reel.comments.status === 'loading' && <p role="status">Loading comments…</p>}
+                                {reel.comments.status === 'error' && <div role="alert" className="reel-error">
+                                    <span>{reel.comments.error ?? 'Could not load comments'}</span>
+                                    <button type="button" onClick={() => { void store.retryReelComments(reel.shortcode); }}>Retry comments</button>
+                                </div>}
+                                {reel.comments.status === 'ready' && reel.comments.listedIds.length === 0 && <p>No comments yet</p>}
+                                {reel.comments.listedIds.map(id => {
+                                    const comment = reel.comments.byId[id];
+                                    return <article key={id} className="reel-comment"><strong>@{comment.author.username}</strong><p>{comment.text}</p></article>;
+                                })}
+                            </section>
+                        </aside>
+                    </>
+                )}
+            </div>
+        </div>
+    );
+}
+
+function ReelMediaPlayer({
+    item,
+    refreshing,
+    onRetry,
+}: {
+    item: ReelMediaItem;
+    refreshing: boolean;
+    onRetry: () => void;
+}) {
+    const wrapperRef = useRef<HTMLDivElement>(null as unknown as HTMLDivElement);
+    const videoRef = useRef<HTMLVideoElement>(null as unknown as HTMLVideoElement);
+    const [playing, setPlaying] = useState(false);
+    const [muted, setMuted] = useState(false);
+    const [volume, setVolume] = useState(1);
+    const [currentTime, setCurrentTime] = useState(0);
+    const [duration, setDuration] = useState(item.kind === 'video' ? item.durationSec : 0);
+    const [quality, setQuality] = useState('auto');
+    const [failedSource, setFailedSource] = useState<string>();
+    const fastRef = useRef(false);
+    const sourceSwitchRef = useRef<{
+        currentTime: number;
+        wasPlaying: boolean;
+        volume: number;
+        muted: boolean;
+        playbackRate: number;
+    }>();
+
+    const restoreSpeed = () => {
+        const video = videoRef.current;
+        fastRef.current = false;
+        if (video) video.playbackRate = 1;
+    };
+
+    useEffect(() => {
+        if (item.kind !== 'video') return;
+        const video = videoRef.current;
+        const onKeyDown = (event: globalThis.KeyboardEvent) => {
+            if (isEditableTarget(event.target as Element)) return;
+            if (event.code === 'Space' && !video.paused) {
+                event.preventDefault();
+                if (!event.repeat) {
+                    fastRef.current = true;
+                    video.playbackRate = 2;
+                }
+            } else if ((event.key === ',' || event.key === '.') && video.paused) {
+                event.preventDefault();
+                // Instagram does not expose frame-rate metadata here; 30fps is
+                // the documented fallback for deterministic frame stepping.
+                video.currentTime = Math.max(0, Math.min(video.duration || item.durationSec, video.currentTime + (event.key === ',' ? -1 : 1) / 30));
+                setCurrentTime(video.currentTime);
+            }
+        };
+        const onKeyUp = (event: globalThis.KeyboardEvent) => {
+            if (event.code === 'Space' && fastRef.current) {
+                event.preventDefault();
+                restoreSpeed();
+            }
+        };
+        const onBlur = () => restoreSpeed();
+        document.addEventListener('keydown', onKeyDown, true);
+        document.addEventListener('keyup', onKeyUp, true);
+        window.addEventListener('blur', onBlur);
+        return () => {
+            restoreSpeed();
+            document.removeEventListener('keydown', onKeyDown, true);
+            document.removeEventListener('keyup', onKeyUp, true);
+            window.removeEventListener('blur', onBlur);
+        };
+    }, [item.id]);
+
+    const sourceUrl = item.kind === 'image'
+        ? item.imageUrl
+        : quality === 'auto'
+            ? item.videoUrl
+            : item.variants[Number(quality)]?.url ?? item.videoUrl;
+
+    const errorNotice = failedSource === sourceUrl && (
+        <div className="reel-media__error" role="alert">
+            <span>This reel media could not be loaded.</span>
+            <button
+                type="button"
+                aria-busy={refreshing}
+                disabled={refreshing}
+                onClick={onRetry}
+            >{refreshing ? 'Refreshing…' : 'Retry reel media'}</button>
+        </div>
+    );
+
+    if (item.kind === 'image') {
+        return <div ref={wrapperRef} className="reel-media">
+            <img
+                src={sourceUrl}
+                alt="Reel image"
+                width={item.width}
+                height={item.height}
+                onError={() => setFailedSource(sourceUrl)}
+            />
+            {errorNotice}
+        </div>;
+    }
+
+    const togglePlayback = () => {
+        const video = videoRef.current;
+        if (video.paused) void video.play(); else video.pause();
+    };
+    const setVideoVolume = (value: number) => {
+        const video = videoRef.current;
+        video.volume = value;
+        video.muted = value === 0;
+        setVolume(value);
+        setMuted(value === 0);
+    };
+    useEffect(() => {
+        const snapshot = sourceSwitchRef.current;
+        const video = videoRef.current;
+        if (!snapshot || !video) return;
+        sourceSwitchRef.current = undefined;
+        const restore = () => {
+            video.volume = snapshot.volume;
+            video.muted = snapshot.muted;
+            video.playbackRate = snapshot.playbackRate;
+            try { video.currentTime = Math.min(snapshot.currentTime, video.duration || snapshot.currentTime); }
+            catch { /* Some browsers require loaded metadata before seeking. */ }
+            if (snapshot.wasPlaying) void video.play().catch(() => undefined);
+        };
+        if (video.readyState >= 1) restore();
+        else video.addEventListener('loadedmetadata', restore, { once: true });
+        return () => video.removeEventListener('loadedmetadata', restore);
+    }, [sourceUrl]);
+
+    return (
+        <div ref={wrapperRef} className="reel-media reel-media--video">
+            <video
+                ref={videoRef}
+                src={sourceUrl}
+                poster={item.posterUrl}
+                playsInline
+                preload="auto"
+                onClick={togglePlayback}
+                onPlay={() => setPlaying(true)}
+                onPause={() => { setPlaying(false); restoreSpeed(); }}
+                onTimeUpdate={() => setCurrentTime(videoRef.current.currentTime)}
+                onDurationChange={() => setDuration(videoRef.current.duration || item.durationSec)}
+                onError={() => setFailedSource(sourceUrl)}
+            />
+            {errorNotice}
+            <div className="reel-player">
+                <input
+                    className="reel-player__timeline"
+                    type="range"
+                    min="0"
+                    max={duration || 0.01}
+                    step="0.01"
+                    value={Math.min(currentTime, duration || 0)}
+                    aria-label="Seek reel"
+                    onChange={(event: ChangeEvent<HTMLInputElement>) => {
+                        const value = Number(event.currentTarget.value);
+                        videoRef.current.currentTime = value;
+                        setCurrentTime(value);
+                    }}
+                />
+                <div className="reel-player__row">
+                    <button type="button" onClick={togglePlayback} aria-label={playing ? 'Pause reel' : 'Play reel'}>{playing ? 'Ⅱ' : '▶'}</button>
+                    <button type="button" onClick={() => {
+                        const next = !videoRef.current.muted;
+                        videoRef.current.muted = next;
+                        setMuted(next);
+                    }} aria-label={muted ? 'Unmute reel' : 'Mute reel'}>{muted ? 'Muted' : 'Sound'}</button>
+                    <input type="range" min="0" max="1" step="0.05" value={muted ? 0 : volume} aria-label="Reel volume" onChange={(event: ChangeEvent<HTMLInputElement>) => setVideoVolume(Number(event.currentTarget.value))} />
+                    {item.variants.length > 1 && <label className="reel-player__quality">
+                        <span>Quality</span>
+                        <select
+                            value={quality}
+                            aria-label="Reel quality"
+                            onChange={(event: ChangeEvent<HTMLSelectElement>) => {
+                                const video = videoRef.current;
+                                sourceSwitchRef.current = {
+                                    currentTime: video.currentTime,
+                                    wasPlaying: !video.paused,
+                                    volume: video.volume,
+                                    muted: video.muted,
+                                    playbackRate: video.playbackRate,
+                                };
+                                setQuality(event.currentTarget.value);
+                            }}
+                        >
+                            <option value="auto">Auto</option>
+                            {item.variants.map((variant, index) => (
+                                <option key={variant.url} value={String(index)}>
+                                    {variant.height ? `${variant.height}p` : `Variant ${index + 1}`}
+                                    {variant.type ? ` · format ${variant.type}` : ''}
+                                </option>
+                            ))}
+                        </select>
+                    </label>}
+                    <time>{formatMediaTime(currentTime)} / {formatMediaTime(duration)}</time>
+                    <button type="button" aria-label="Enter fullscreen" onClick={() => { void wrapperRef.current.requestFullscreen?.(); }}>⛶</button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function formatMediaTime(seconds: number) {
+    if (!Number.isFinite(seconds)) return '0:00';
+    const whole = Math.max(0, Math.floor(seconds));
+    return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`;
+}
+
+function MessageContent({ store, message }: { store: FrontendStore; message: Message }) {
     switch (message.kind) {
         case 'text': return <span>{message.text}</span>;
         case 'reaction_log': return <span>{message.fragment}</span>;
         case 'activity': return <span>{message.text}</span>;
-        case 'reel_share': return (
-            <a className="message-card" href={message.targetUrl} target="_blank" rel="noreferrer">
-                <img src={message.thumbUrl} alt={`Reel from ${message.author}`} loading="lazy" />
-                <strong>{message.author}</strong>
-                {message.caption && <span>{message.caption}</span>}
-            </a>
-        );
+        case 'reel_share': return <InlineReel store={store} message={message} />;
         case 'inline_share': {
             const content = (
                 <>
@@ -1434,13 +2023,37 @@ function MessageContent({ message }: { message: Message }) {
     }
 }
 
-function ReplyPreview({ preview }: { preview: NonNullable<Extract<Message, { kind: 'text' }>['replyPreview']> }) {
-    return (
-        <span className="message__reply">
+function ReplyPreview({
+    preview,
+    onNavigate,
+    targetId,
+}: {
+    preview: NonNullable<Extract<Message, { kind: 'text' }>['replyPreview']>;
+    onNavigate?: () => void;
+    targetId?: string;
+}) {
+    const previewLabel = preview.kind === 'text'
+        ? preview.text
+        : preview.kind === 'media'
+            ? preview.title
+            : preview.label;
+    const content = (
+        <>
             {preview.kind === 'media' && preview.thumbUrl && <img src={preview.thumbUrl} alt="" loading="lazy" />}
-            <span>{preview.kind === 'text' ? preview.text : preview.kind === 'media' ? preview.title : preview.label}</span>
-        </span>
+            <span>{previewLabel}</span>
+        </>
     );
+    return onNavigate ? (
+        <button
+            type="button"
+            className="message__reply message__reply--action"
+            onClick={onNavigate}
+            aria-label={`Go to original message: ${previewLabel}`}
+            data-reply-target-id={targetId}
+        >
+            {content}
+        </button>
+    ) : <span className="message__reply">{content}</span>;
 }
 
 function ListState({

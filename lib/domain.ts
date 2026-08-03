@@ -107,7 +107,18 @@ export type ReelMediaItem = {
     downloadUrl?: string;
 } & (
     | { kind: 'image'; imageUrl: string }
-    | { kind: 'video'; videoUrl: string; durationSec: number }
+    | {
+        kind: 'video';
+        videoUrl: string;
+        variants: Array<{
+            url: string;
+            type?: number;
+            width?: number;
+            height?: number;
+            bandwidth?: number;
+        }>;
+        durationSec: number;
+    }
 );
 export type ReelAuthor = User & { isVerified: boolean };
 export type ReelMedia = {

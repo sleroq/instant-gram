@@ -114,6 +114,17 @@ type HistoryState = {
     scrollAnchor?: { id: string; offset: number };
     draft: string;
     replyTargetId?: string;
+    replyNavigation?: {
+        requestId: number;
+        targetId: string;
+        returnId?: string;
+        status: 'loading' | 'ready' | 'error';
+        pagesLoaded?: number;
+        messagesLoaded?: number;
+        isPositioned?: boolean;
+        error?: string;
+    };
+    replyReturnStack: string[];
     pendingSends: Record<string, PendingSend>;
     failedSends: Record<string, FailedSend>;
     rowKeyByMessageId: Record<string, string>;
@@ -182,6 +193,14 @@ rejected as a whole so slide cardinality is never silently changed. Author
 profile metadata, caption/counts, liked/saved state, and download eligibility
 are parsed outside UI components.
 
+Media loading no longer depends on the failing, uncaptured
+`PolarisPostActionLoadPostQueryQuery`. The anchor prefers the validated numeric
+media-ID hint normalized from a DM share; when absent, it decodes the shortcode
+to the numeric media ID using the relationship proven by sanitized
+`real-loading` captures. It then performs the captured authenticated
+`GET /api/v1/media/<id>/info/` and accepts the result only when both REST `pk`
+and `code` match. The parser retains all unique captured `video_versions`.
+
 Every loaded initial or older history page scans its messages for reel shares.
 The store deduplicates by shortcode, starts at most two reel preloads at once,
 and spends at most eight preload starts per store lifetime. This includes inbox
@@ -209,6 +228,46 @@ started, that receipt's boolean and optimistic like count remain authoritative
 over the older read while all unrelated refreshed metadata is retained. This
 also protects a chained opposite mutation: the older read may update metadata,
 but cannot replace that mutation's receipt-backed rollback baseline.
+
+### Reel presentation and media shortcuts
+
+Reel shares are buttons, never outbound reel links. They read the normalized
+shortcode cache and open one modal over the application shell; the shell becomes
+inert and hidden from assistive technology until close, background scrolling is
+locked, focus is contained, and close by button, backdrop, or Escape restores the
+invoking preview. The modal owns only presentation state (the stable carousel
+index and native media element state). Author, comments, mutation state, and
+ordered media remain store-owned. Comments therefore appear only after open and
+retain the store's explicit retry path. Modal image/video decode or CDN failures
+retain cached media and metadata, show an accessible retry over the current
+carousel item, and force the existing store-owned single-flight refresh. The
+local failure indication clears only when the item/source changes; refreshed
+comments start only after that media refresh succeeds while the same reel remains
+active.
+
+The independently implemented player uses native media decoding beneath custom
+play, mute/volume, seek, time, and fullscreen controls. While a modal video is
+already playing, holding Space temporarily uses 2× playback and restores 1× on
+keyup, blur, pause, slide replacement, or modal teardown; it never toggles play.
+Comma and period move a paused video by one frame. Instagram's current reel
+contract exposes duration but no frame rate, so the UI uses a documented 1/30s
+fallback. Editable targets keep their native keys. Carousel arrows and Left/Right
+operate on the bounded `ReelMedia.items` order.
+
+When multiple variants exist, the player exposes Auto (the parser's
+highest-dimension/bandwidth candidate) and each explicit variant. A source
+change restores current time, playing/paused intent, volume, mute, and playback
+rate after replacement metadata loads. Variant selection is presentation state,
+not another media cache.
+
+Inline previews reuse the first cached reel item and reserve a 9:16 box. A video
+is activated only after a playable media event and while intersecting or within
+160px of the message scrollport; it is muted/looped and pauses when outside that
+range. A direct geometry check backs the observer on playable and scroll events,
+without introducing a component media cache. This behavior is an independent
+small-scope adaptation of the general Telegram Web A principle that expensive
+media should activate only near the viewport; no Telegram player source, styles,
+icons, or assets were used.
 
 ### Pin normalization and displayed order
 
@@ -262,6 +321,60 @@ Do not reuse it for older-page lookahead.
 restores visited chats from an ID-plus-offset anchor, groups adjacent senders,
 and renders every current domain message variant and reply preview.
 
+Reply previews with a `repliedTo` message ID are semantic buttons. The store-owned
+`navigateToReply` action first checks normalized local history, then serially
+consumes the existing older-history cursor until the target is loaded, history is
+exhausted, or a request fails. It joins an older request already in flight,
+failure-gates ordinary sentinel loading while navigation is active, and retains
+accessible loading/error/ready state in `HistoryState.replyNavigation`. After a
+click, each successfully consumed page updates honest page and newly normalized
+message counts; no percentage is shown because Instagram supplies no total. Once
+found, it replaces `viewportIds` with at most 80 IDs around the target; the pane
+then performs the one DOM-owned operation: a non-animated centered scroll and
+focus of the stable `data-message-id` row. Missing/deleted targets and transport
+failures remain retryable alerts.
+
+`isPositioned` is acknowledged by the pane only after that DOM operation. Older
+sentinel reveal is paused between the ready viewport replacement and this
+acknowledgement, preventing a still-visible top sentinel from replacing a return
+target before it can be teleported and focused.
+
+Visible or near-visible actionable previews report only their current target IDs
+to the store. A global queue retains at most four targets including the active
+one, drains one at a time through the same normalized older cursor and
+per-thread single-flight, and spends at most one older page per visible target.
+Background lookup never replaces the viewport or exposes click-only progress,
+and a failed prefetch cursor is privately gated rather than surfacing an error.
+Changing the visible target set or selected thread invalidates queued work and
+prevents an obsolete task from starting another page; an already in-flight page
+may still normalize. User navigation pauses queue draining, joins an in-flight
+prefetch for its thread, and takes ownership after that page settles, continuing
+without a page budget or duplicate cursor call. This bounds actual request work,
+not only queue memory, without inventing a second message cache or an Instagram
+range-query contract.
+
+A successful A→B reply navigation appends A to the history-owned return stack;
+failed, stale, duplicate-top, and self navigation do not. The down-arrow control
+unwinds the stack through the same load/reveal/focus action, committing each pop
+only after success. Its accessible name reports the remaining return depth. Once
+the stack is empty, the same icon goes to the exact newest 40-ID window and its
+DOM bottom. Merely having the latest ID somewhere in an 80-row target window is
+not newest state, and a rendered newest window remains actionable while its
+bottom is offscreen.
+
+The pinned Telegram Web A clean-room review (`message/hooks/useInnerHandlers.ts`
+and `global/actions/ui/messages.ts` at `a323b1f`) showed that a reply click is
+delegated to centralized message focus, loads a target viewport when absent,
+focus-highlights the row, and reports inaccessible replies. ICR adopts that
+behavior, not its outlying-range machinery. A sanitized review of a user-provided,
+uncommitted local capture showed paired Instagram before/after anchor queries,
+but only for isolated 20-message ranges;
+it does not prove continuation needed to reconnect such a range to ICR's single
+contiguous `listedIds`. The current implementation therefore uses the already
+verified older cursor. This can require multiple 20-message requests for a very
+old reply, trading latency for normalized continuity and unchanged pagination,
+single-flight, and virtualization contracts.
+
 Message parsing owns the explicit Instagram content-type inventory. Textual
 conversation administration (group image/name changes, participant removal, and
 new-friend notices) crosses the background/UI boundary as the protocol-neutral
@@ -314,7 +427,9 @@ remain gated until `retryOlderHistory(id)` explicitly clears that cursor.
 - `historyRequests: Map<threadId, symbol>` permits one initial history request
   per thread while allowing different chats to warm concurrently.
 - `olderHistoryRequests: Map<threadId, symbol>` permits one older request per
-  thread across user-visible loads, short-viewport fills, and lookahead.
+  thread across user-visible loads, short-viewport fills, lookahead, reply
+  prefetch, and explicit reply navigation. Reply-prefetch targets are additionally
+  globally serialized and bounded; explicit navigation takes queue priority.
 - `sendRequests` permits one attempt per thread/local ID. Failed retries reuse
   the original 19-digit signed-64-bit `offlineThreadingId` and row rather than
   appending another message; different threads may send concurrently.
@@ -338,10 +453,15 @@ remain gated until `retryOlderHistory(id)` explicitly clears that cursor.
   error, and `finally` mutation occur only when both still match.
 - `destroy()` increments `generation`, clears listeners/request registries and
   warmups, and removes the inbox request marker. Late async completions are
-  ignored. Requests are not physically aborted.
-- Changing selection does not invalidate another thread's request. It may safely
-  finish into that thread's normalized cache, but cannot change selection
-  because actions never assign selection on response.
+  ignored. Requests are not physically aborted. Reply-navigation waits also race
+  an owner cancellation signal, so both a waiter on shared older work and the
+  direct owner of a never-settling RPC resolve `false` during teardown.
+- Changing selection does not invalidate another thread's underlying RPC. It may
+  safely finish into that thread's normalized cache. It does abandon explicit
+  reply-navigation ownership: the action resolves `false`, clears its loading
+  intent, and cannot later commit progress, error/ready state, viewport/focus
+  intent, positioning acknowledgement, or return-stack changes. Reply-prefetch
+  queue intent is likewise invalidated; an in-flight page may only normalize.
 
 This protection is an ownership rule: all RPC actions need explicit
 single-flight and stale-generation handling at the store boundary.
@@ -366,10 +486,11 @@ anchor boundary and therefore cannot install partial server state.
 before dispatch and records a thread-scoped follow intent. A bottom send appends
 to the bounded window and scrolls after render. A send from a scrolled-up or
 older local window leaves `viewportIds` and the logical anchor intact and shows
-“Go to newest message”; that action switches to the newest 40 loaded IDs before
-scrolling. Follow intent is cleared on thread changes so it cannot affect a
-restored chat. Enter submits, Shift+Enter inserts a newline, and drafts remain
-store-owned per thread.
+the accessible down-arrow control. Reply-return entries take precedence; once
+none remain, its “Go to newest message” action switches to the newest 40 loaded
+IDs before scrolling. Follow intent is cleared on thread changes so it cannot
+affect a restored chat. Enter submits, Shift+Enter inserts a newline, and drafts
+remain store-owned per thread.
 
 Message and conversation-row action surfaces are component-owned transient DOM
 state, not another entity cache. Desktop rows expose no permanent ellipsis or

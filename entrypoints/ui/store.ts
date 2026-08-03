@@ -12,6 +12,7 @@ import {
     initialHistoryWindow,
     moveHistoryWindowOlder,
     appendToHistoryWindow,
+    historyWindowAroundTarget,
 } from './history-window.ts';
 
 type Status = 'idle' | 'loading' | 'ready' | 'error';
@@ -43,6 +44,17 @@ export type HistoryState = {
     scrollAnchor?: { id: string; offset: number };
     draft: string;
     replyTargetId?: string;
+    replyNavigation?: {
+        requestId: number;
+        targetId: string;
+        returnId?: string;
+        status: 'loading' | 'ready' | 'error';
+        pagesLoaded?: number;
+        messagesLoaded?: number;
+        isPositioned?: boolean;
+        error?: string;
+    };
+    replyReturnStack: string[];
     pendingSends: Record<string, PendingSend>;
     failedSends: Record<string, FailedSend>;
     rowKeyByMessageId: Record<string, string>;
@@ -147,6 +159,15 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
     const olderTriggerTimers = new Map<string, number>();
     const olderPreloadTimers = new Set<number>();
     const olderSettledListeners = new Map<string, () => void>();
+    const olderSettlementWaiters = new Map<string, Set<() => void>>();
+    const replyNavigationRequests = new Map<string, symbol>();
+    const replyNavigationCancellations = new Map<symbol, () => void>();
+    const replyPrefetchQueue: { threadId: string; targetId: string; intent: number }[] = [];
+    const queuedReplyPrefetches = new Set<string>();
+    const replyPrefetchFailedCursors = new Map<string, string>();
+    let activeReplyPrefetch: { threadId: string; targetId: string; intent: number } | undefined;
+    let replyPrefetchIntent = 0;
+    let visibleReplyPrefetchKey = '';
     const sendRequests = new Map<string, symbol>();
     const reactionRequests = new Map<string, symbol>();
     const pinRequests = new Map<string, symbol>();
@@ -176,6 +197,7 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
     const openedThreadIds = new Set<string>();
     let inboxRequest: symbol | undefined;
     let generation = 0;
+    let nextReplyNavigationRequestId = 0;
     let warmupGeneration = 0;
     const warmupTimers = new Set<number>();
     let warmupsStarted = 0;
@@ -221,7 +243,8 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
         const reel = reelState(shortcode, mediaId);
         if (reelMediaRequests.has(shortcode)) {
             await waitForReelMedia(shortcode);
-            return state.reels.byId[shortcode]?.media;
+            const settled = state.reels.byId[shortcode];
+            return settled?.status === 'ready' ? settled.media : undefined;
         }
         if (reel.media && !force) return reel.media;
         const request = Symbol(`reel:${shortcode}`);
@@ -557,6 +580,7 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
             isPreloadingOlder: false,
             isReplacingViewport: false,
             draft: '',
+            replyReturnStack: [],
             pendingSends: {},
             failedSends: {},
             rowKeyByMessageId: {},
@@ -931,7 +955,7 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
 
     async function requestOlderHistory(
         threadId: string,
-        mode: 'visible' | 'preload' | 'fill',
+        mode: 'visible' | 'preload' | 'fill' | 'navigate' | 'reply-prefetch',
     ) {
         const history = state.histories[threadId];
         const thread = state.inbox.byId[threadId];
@@ -945,9 +969,9 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
         const requestGeneration = generation;
         olderHistoryRequests.set(threadId, request);
         if (mode === 'preload') history.isPreloadingOlder = true;
-        else history.isLoadingOlder = true;
-        history.error = undefined;
-        emit();
+        else if (mode !== 'reply-prefetch') history.isLoadingOlder = true;
+        if (mode !== 'reply-prefetch') history.error = undefined;
+        if (mode !== 'reply-prefetch') emit();
 
         let loaded = false;
         try {
@@ -960,14 +984,25 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
                 olderHistoryRequests.get(threadId) !== request
             ) return false;
             if (!result.ok) {
-                history.error = result.error.message;
-                history.failedOlderCursor = cursor;
+                if (mode === 'reply-prefetch') replyPrefetchFailedCursors.set(threadId, cursor);
+                else if (mode === 'navigate' && state.selectedThreadId !== threadId) {
+                    // An abandoned explicit lookup may finish, but must not
+                    // leave user-visible failure intent in the old thread.
+                } else {
+                    history.error = result.error.message;
+                    history.failedOlderCursor = cursor;
+                }
                 return false;
             }
             const added = mergeOlderMessages(history, result.value.items);
             if (result.value.hasNextPage && result.value.cursor === cursor && added === 0) {
-                history.error = 'History pagination made no progress';
-                history.failedOlderCursor = cursor;
+                if (mode === 'reply-prefetch') replyPrefetchFailedCursors.set(threadId, cursor);
+                else if (mode === 'navigate' && state.selectedThreadId !== threadId) {
+                    // Selection cancellation owns the visible state.
+                } else {
+                    history.error = 'History pagination made no progress';
+                    history.failedOlderCursor = cursor;
+                }
                 return false;
             }
             history.cursor = result.value.cursor;
@@ -981,8 +1016,13 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
                 generation === requestGeneration &&
                 olderHistoryRequests.get(threadId) === request
             ) {
-                history.error = errorMessage(error);
-                history.failedOlderCursor = cursor;
+                if (mode === 'reply-prefetch') replyPrefetchFailedCursors.set(threadId, cursor);
+                else if (mode === 'navigate' && state.selectedThreadId !== threadId) {
+                    // Selection cancellation owns the visible state.
+                } else {
+                    history.error = errorMessage(error);
+                    history.failedOlderCursor = cursor;
+                }
             }
             return false;
         } finally {
@@ -995,6 +1035,8 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
                 history.isPreloadingOlder = false;
                 emit();
                 olderSettledListeners.get(threadId)?.();
+                olderSettlementWaiters.get(threadId)?.forEach(resolve => resolve());
+                olderSettlementWaiters.delete(threadId);
                 if (loaded && mode === 'visible' && history.hasOlder) {
                     const timer = window.setTimeout(() => {
                         olderPreloadTimers.delete(timer);
@@ -1010,6 +1052,9 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
         const history = state.histories[threadId];
         if (
             !history || history.status !== 'ready' || history.isReplacingViewport ||
+            history.replyNavigation?.status === 'loading' ||
+            (history.replyNavigation?.status === 'ready' &&
+                !history.replyNavigation.isPositioned) ||
             (history.failedOlderCursor !== undefined && history.failedOlderCursor === history.cursor)
         ) return {};
         if (hasLocalOlderIds(history.listedIds, history.viewportIds)) {
@@ -1036,6 +1081,252 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
         ) return {};
         olderTriggerTimes.set(threadId, now);
         return { requested: true, completion: requestOlderHistory(threadId, 'visible') };
+    }
+
+    function waitForOlderHistory(threadId: string) {
+        if (!olderHistoryRequests.has(threadId)) return Promise.resolve();
+        return new Promise<void>(resolve => {
+            const waiters = olderSettlementWaiters.get(threadId) ?? new Set<() => void>();
+            waiters.add(resolve);
+            olderSettlementWaiters.set(threadId, waiters);
+        });
+    }
+
+    function waitForReplyNavigationStep(request: symbol, step: Promise<boolean>) {
+        return new Promise<{ cancelled: boolean; loaded: boolean }>(resolve => {
+            let settled = false;
+            const finish = (cancelled: boolean, loaded: boolean) => {
+                if (settled) return;
+                settled = true;
+                replyNavigationCancellations.delete(request);
+                resolve({ cancelled, loaded });
+            };
+            replyNavigationCancellations.set(request, () => finish(true, false));
+            void step.then(loaded => finish(false, loaded), () => finish(false, false));
+        });
+    }
+
+    function updateReplyNavigationProgress(
+        threadId: string,
+        history: HistoryState,
+        request: symbol,
+        beforeCount: number,
+        beforeCursor?: string,
+    ) {
+        if (
+            replyNavigationRequests.get(threadId) !== request ||
+            state.selectedThreadId !== threadId
+        ) return;
+        const navigation = history.replyNavigation;
+        if (!navigation || navigation.status !== 'loading') return;
+        if (history.cursor === beforeCursor && history.listedIds.length === beforeCount) return;
+        navigation.pagesLoaded = (navigation.pagesLoaded ?? 0) + 1;
+        navigation.messagesLoaded = (navigation.messagesLoaded ?? 0) +
+            Math.max(0, history.listedIds.length - beforeCount);
+        emit();
+    }
+
+    async function drainReplyPrefetchQueue() {
+        if (activeReplyPrefetch || replyNavigationRequests.size) return;
+        const next = replyPrefetchQueue.shift();
+        if (!next) return;
+        queuedReplyPrefetches.delete(`${next.threadId}\u0000${next.targetId}`);
+        const history = state.histories[next.threadId];
+        if (
+            next.intent !== replyPrefetchIntent || state.selectedThreadId !== next.threadId ||
+            !history || history.status !== 'ready' || history.byId[next.targetId] ||
+            !history.hasOlder || !history.cursor ||
+            replyPrefetchFailedCursors.get(next.threadId) === history.cursor
+        ) {
+            void drainReplyPrefetchQueue();
+            return;
+        }
+        const task = { ...next };
+        activeReplyPrefetch = task;
+        const requestGeneration = generation;
+        try {
+            // A visible target may spend at most one older page. This bounds
+            // work as well as queue size; an explicit click can join this page
+            // and then continue through as many cursors as necessary.
+            if (olderHistoryRequests.has(next.threadId)) await waitForOlderHistory(next.threadId);
+            else await requestOlderHistory(next.threadId, 'reply-prefetch');
+        } finally {
+            if (activeReplyPrefetch === task) activeReplyPrefetch = undefined;
+            if (generation === requestGeneration) void drainReplyPrefetchQueue();
+        }
+    }
+
+    function prefetchReplyTargets(threadId: string, targetIds: string[]) {
+        const history = state.histories[threadId];
+        if (!history || history.status !== 'ready' || state.selectedThreadId !== threadId) return;
+        const uniqueTargets = [...new Set(targetIds.filter(Boolean))];
+        const visibleKey = `${threadId}\u0000${uniqueTargets.join('\u0000')}`;
+        if (visibleKey === visibleReplyPrefetchKey) return;
+        visibleReplyPrefetchKey = visibleKey;
+        const intent = ++replyPrefetchIntent;
+        replyPrefetchQueue.length = 0;
+        queuedReplyPrefetches.clear();
+        for (const targetId of uniqueTargets) {
+            const key = `${threadId}\u0000${targetId}`;
+            if (
+                !targetId || history.byId[targetId] || queuedReplyPrefetches.has(key) ||
+                (activeReplyPrefetch?.threadId === threadId && activeReplyPrefetch.targetId === targetId)
+            ) continue;
+            // Four is the global cap including the page currently in flight.
+            if (replyPrefetchQueue.length + (activeReplyPrefetch ? 1 : 0) >= 4) break;
+            replyPrefetchQueue.push({ threadId, targetId, intent });
+            queuedReplyPrefetches.add(key);
+        }
+        void drainReplyPrefetchQueue();
+    }
+
+    async function navigateToReply(threadId: string, targetId: string, returnId?: string) {
+        const history = state.histories[threadId];
+        if (
+            !history || history.status !== 'ready' || !targetId ||
+            state.selectedThreadId !== threadId
+        ) return false;
+        const previousRequest = replyNavigationRequests.get(threadId);
+        if (previousRequest) replyNavigationCancellations.get(previousRequest)?.();
+        const request = Symbol(`reply-navigation:${threadId}`);
+        const navigationRequestId = ++nextReplyNavigationRequestId;
+        const requestGeneration = generation;
+        visibleReplyPrefetchKey = '';
+        replyPrefetchIntent++;
+        replyPrefetchQueue.length = 0;
+        queuedReplyPrefetches.clear();
+        replyNavigationRequests.set(threadId, request);
+        history.replyNavigation = {
+            requestId: navigationRequestId,
+            targetId,
+            ...(returnId ? { returnId } : {}),
+            status: 'loading',
+            pagesLoaded: 0,
+            messagesLoaded: 0,
+        };
+        replyPrefetchFailedCursors.delete(threadId);
+        history.failedOlderCursor = undefined;
+        history.error = undefined;
+        emit();
+
+        while (
+            generation === requestGeneration &&
+            replyNavigationRequests.get(threadId) === request &&
+            state.selectedThreadId === threadId
+        ) {
+            if (history.byId[targetId]) {
+                const viewportIds = historyWindowAroundTarget(history.listedIds, targetId);
+                if (!viewportIds.length) break;
+                history.viewportIds = viewportIds;
+                history.isReplacingViewport = false;
+                history.replyNavigation = {
+                    requestId: navigationRequestId,
+                    targetId,
+                    ...(returnId ? { returnId } : {}),
+                    status: 'ready',
+                };
+                if (
+                    returnId && returnId !== targetId && history.byId[returnId] &&
+                    history.replyReturnStack.at(-1) !== returnId
+                ) history.replyReturnStack.push(returnId);
+                replyNavigationRequests.delete(threadId);
+                emit();
+                void drainReplyPrefetchQueue();
+                return true;
+            }
+            if (!history.hasOlder || !history.cursor) {
+                history.replyNavigation = {
+                    requestId: navigationRequestId,
+                    targetId,
+                    ...(returnId ? { returnId } : {}),
+                    status: 'error',
+                    error: 'Original message is unavailable.',
+                };
+                replyNavigationRequests.delete(threadId);
+                emit();
+                void drainReplyPrefetchQueue();
+                return false;
+            }
+            const beforeCount = history.listedIds.length;
+            const beforeCursor = history.cursor;
+            if (olderHistoryRequests.has(threadId)) {
+                const step = await waitForReplyNavigationStep(
+                    request,
+                    waitForOlderHistory(threadId).then(() => true),
+                );
+                if (step.cancelled) return false;
+                updateReplyNavigationProgress(threadId, history, request, beforeCount, beforeCursor);
+                continue;
+            }
+            const step = await waitForReplyNavigationStep(
+                request,
+                requestOlderHistory(threadId, 'navigate'),
+            );
+            if (step.cancelled) return false;
+            const loaded = step.loaded;
+            if (loaded) updateReplyNavigationProgress(
+                threadId,
+                history,
+                request,
+                beforeCount,
+                beforeCursor,
+            );
+            if (!loaded) {
+                if (
+                    generation !== requestGeneration ||
+                    replyNavigationRequests.get(threadId) !== request
+                ) return false;
+                history.replyNavigation = {
+                    requestId: navigationRequestId,
+                    targetId,
+                    ...(returnId ? { returnId } : {}),
+                    status: 'error',
+                    error: history.error || 'Could not load the original message.',
+                };
+                history.error = undefined;
+                replyNavigationRequests.delete(threadId);
+                emit();
+                void drainReplyPrefetchQueue();
+                return false;
+            }
+        }
+        return false;
+    }
+
+    async function returnFromReplyNavigation(threadId: string) {
+        const history = state.histories[threadId];
+        const targetId = history?.replyReturnStack.at(-1);
+        if (!history || !targetId) return false;
+        const stackLength = history.replyReturnStack.length;
+        const navigated = await navigateToReply(threadId, targetId);
+        if (
+            !navigated || state.selectedThreadId !== threadId ||
+            history.replyReturnStack.length !== stackLength ||
+            history.replyReturnStack.at(-1) !== targetId
+        ) return false;
+        history.replyReturnStack.pop();
+        emit();
+        return true;
+    }
+
+    function abandonReplyNavigationExcept(selectedThreadId?: string) {
+        for (const [threadId, request] of replyNavigationRequests) {
+            if (threadId === selectedThreadId) continue;
+            replyNavigationCancellations.get(request)?.();
+            replyNavigationRequests.delete(threadId);
+        }
+        for (const [threadId, history] of Object.entries(state.histories)) {
+            if (threadId === selectedThreadId) continue;
+            const navigation = history.replyNavigation;
+            if (
+                navigation?.status === 'loading' ||
+                (navigation?.status === 'ready' && !navigation.isPositioned)
+            ) delete history.replyNavigation;
+        }
+        visibleReplyPrefetchKey = '';
+        replyPrefetchIntent++;
+        replyPrefetchQueue.length = 0;
+        queuedReplyPrefetches.clear();
     }
 
     async function loadReelComments(shortcode: string) {
@@ -1090,7 +1381,8 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
         let media: ReelMedia | undefined;
         if (reelMediaRequests.has(shortcode)) {
             await waitForReelMedia(shortcode);
-            media = state.reels.byId[shortcode]?.media;
+            const settled = state.reels.byId[shortcode];
+            media = settled?.status === 'ready' ? settled.media : undefined;
         } else {
             media = await loadReelMedia(shortcode, mediaId);
         }
@@ -1228,6 +1520,7 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
         warmupsStarted = 0;
         visibleWarmupKey = '';
         state.selectedThreadId = threadId;
+        abandonReplyNavigationExcept(threadId);
         openedThreadIds.add(threadId);
         emit();
         void loadInitialHistory(threadId);
@@ -1239,6 +1532,7 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
         warmupsStarted = 0;
         visibleWarmupKey = '';
         state.selectedThreadId = undefined;
+        abandonReplyNavigationExcept();
         emit();
     }
 
@@ -1302,6 +1596,8 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
         },
         destroy() {
             generation++;
+            replyNavigationCancellations.forEach(cancel => cancel());
+            replyNavigationCancellations.clear();
             cancelWarmups();
             listeners.clear();
             historyRequests.clear();
@@ -1312,6 +1608,15 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
             olderPreloadTimers.forEach(timer => window.clearTimeout(timer));
             olderPreloadTimers.clear();
             olderSettledListeners.clear();
+            olderSettlementWaiters.forEach(waiters => waiters.forEach(resolve => resolve()));
+            olderSettlementWaiters.clear();
+            replyNavigationRequests.clear();
+            replyPrefetchQueue.length = 0;
+            queuedReplyPrefetches.clear();
+            replyPrefetchFailedCursors.clear();
+            activeReplyPrefetch = undefined;
+            visibleReplyPrefetchKey = '';
+            replyPrefetchIntent++;
             sendRequests.clear();
             reactionRequests.clear();
             pinRequests.clear();
@@ -1384,6 +1689,19 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
             history.error = undefined;
             revealOlderHistory(threadId, true);
         },
+        navigateToReply,
+        prefetchReplyTargets,
+        returnFromReplyNavigation,
+        completeReplyNavigationPosition(threadId: string, requestId: number) {
+            const navigation = state.histories[threadId]?.replyNavigation;
+            if (
+                state.selectedThreadId !== threadId ||
+                navigation?.status !== 'ready' || navigation.requestId !== requestId ||
+                navigation.isPositioned
+            ) return;
+            navigation.isPositioned = true;
+            emit();
+        },
         completeHistoryReplacement(threadId: string) {
             const history = state.histories[threadId];
             if (!history?.isReplacingViewport) return;
@@ -1453,12 +1771,17 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
             state.reels.activeId = undefined;
             emit();
         },
-        retryReel(shortcode: string) {
+        async retryReel(shortcode: string) {
             const reel = state.reels.byId[shortcode];
-            if (!reel) return Promise.resolve(undefined);
-            reel.status = 'idle';
-            reel.error = undefined;
-            return loadReelMedia(shortcode, reel.mediaIdHint, true);
+            if (!reel) return undefined;
+            if (!reelMediaRequests.has(shortcode)) {
+                reel.status = 'idle';
+                reel.error = undefined;
+            }
+            const media = await loadReelMedia(shortcode, reel.mediaIdHint, true);
+            if (media && state.reels.activeId === shortcode)
+                await loadReelComments(shortcode);
+            return media;
         },
         retryReelComments(shortcode: string) {
             const reel = state.reels.byId[shortcode];

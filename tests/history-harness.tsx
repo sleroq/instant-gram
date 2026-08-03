@@ -6,9 +6,10 @@ import type { CompleteUiRpc } from '../entrypoints/ui/rpc';
 import { createFrontendStore } from '../entrypoints/ui/store';
 import '../entrypoints/ui/styles.scss';
 
-type Scenario = 'continuous' | 'delayed' | 'resize' | 'selection' | 'image' | 'mutations' |
+type Scenario = 'continuous' | 'delayed' | 'resize' | 'selection' | 'image' | 'reel' | 'mutations' |
     'older-send' | 'thread-state' | 'identity-pm' | 'identity-group' | 'outgoing-prepend' |
-    'events' | 'vim-scroll';
+    'events' | 'vim-scroll' | 'reply-navigation' | 'reply-navigation-retry' |
+    'reply-navigation-delayed' | 'reply-navigation-chain';
 
 let activeStore: ReturnType<typeof createFrontendStore> | undefined;
 let resolveVisible: ((result: Result<ThreadMessages>) => void) | undefined;
@@ -16,6 +17,11 @@ let calls: Array<string | undefined> = [];
 let resolveSend: (() => void) | undefined;
 let failedOnce = false;
 let sentCount = 0;
+let reelCommentCalls = 0;
+let reelMediaCalls = 0;
+let reelLikeCalls = 0;
+let reelSaveCalls = 0;
+let mountedScenario: Scenario | undefined;
 
 const thread = {
     key: 'thread',
@@ -53,6 +59,19 @@ const imageMessage: Message = {
         width: 430,
         height: 960,
     }],
+};
+
+const reelMessage: Message = {
+    kind: 'reel_share',
+    id: 'reel-message',
+    senderId: 'sender',
+    ts: 1_000,
+    shortcode: 'reel-code',
+    mediaId: '9001',
+    targetUrl: 'https://www.instagram.com/reel/reel-code/',
+    thumbUrl: 'data:image/gif;base64,R0lGODlhAQABAAAAACw=',
+    author: 'reel_author',
+    caption: 'Harness reel caption',
 };
 
 const eventMessages: Message[] = [
@@ -123,6 +142,29 @@ function messages(start: number, end: number, variable = false): Message[] {
     });
 }
 
+function replyNavigationMessages(): Message[] {
+    return messages(80, 120, true).map(message => message.id === 'm119' ? {
+        ...message,
+        repliedTo: 'm10',
+        replyPreview: { kind: 'text', text: 'Original message 10' },
+    } : message);
+}
+
+function replyNavigationChainMessages(): Message[] {
+    const replies = new Map([
+        ['m105', { target: 'm95', text: 'Message B' }],
+        ['m95', { target: 'm85', text: 'Message A' }],
+    ]);
+    return messages(80, 120, true).map(message => {
+        const reply = replies.get(message.id);
+        return reply ? {
+            ...message,
+            repliedTo: reply.target,
+            replyPreview: { kind: 'text' as const, text: reply.text },
+        } : message;
+    });
+}
+
 function outgoingMessages(start: number, end: number): Message[] {
     return messages(start, end, true).map(message => ({
         ...message,
@@ -138,6 +180,7 @@ function page(start: number, end: number, cursor?: string, hasNextPage = false, 
 }
 
 async function mount(scenario: Scenario) {
+    mountedScenario = scenario;
     if (activeStore) {
         TeactDOM.render(undefined, document.querySelector('#app')!);
         activeStore = undefined;
@@ -147,6 +190,10 @@ async function mount(scenario: Scenario) {
     resolveSend = undefined;
     failedOnce = false;
     sentCount = 0;
+    reelCommentCalls = 0;
+    reelMediaCalls = 0;
+    reelLikeCalls = 0;
+    reelSaveCalls = 0;
     document.querySelector('#history-harness-style')?.remove();
     if (scenario === 'continuous') {
         const style = document.createElement('style');
@@ -173,10 +220,12 @@ async function mount(scenario: Scenario) {
                     viewerId: 'interop-viewer',
                 },
             }
-        : scenario === 'delayed' || scenario === 'selection'
+            : scenario === 'delayed' || scenario === 'selection'
             ? page(40, 80, 'c1', true, true)
             : scenario === 'image'
                 ? { ok: true as const, value: { items: [imageMessage], hasNextPage: false, viewerId: 'viewer' } }
+                : scenario === 'reel'
+                    ? { ok: true as const, value: { items: [reelMessage], hasNextPage: false, viewerId: 'viewer' } }
                 : scenario === 'identity-pm' || scenario === 'identity-group'
                     ? { ok: true as const, value: {
                         items: identityMessages(scenario), hasNextPage: false, viewerId: 'viewer',
@@ -187,6 +236,21 @@ async function mount(scenario: Scenario) {
                     } }
                 : scenario === 'older-send' || scenario === 'thread-state'
                     ? page(0, 120, undefined, false, true)
+                    : scenario === 'reply-navigation' || scenario === 'reply-navigation-retry' ||
+                        scenario === 'reply-navigation-delayed'
+                        ? {
+                            ok: true as const,
+                            value: {
+                                items: replyNavigationMessages(),
+                                cursor: 'c1',
+                                hasNextPage: true,
+                                viewerId: 'viewer',
+                            },
+                        }
+                    : scenario === 'reply-navigation-chain'
+                        ? { ok: true as const, value: {
+                            items: replyNavigationChainMessages(), hasNextPage: false, viewerId: 'viewer',
+                        } }
                     : page(0, 40, undefined, false, true);
     let pinned: string[] = [];
     const pinFailures = new Set<string>();
@@ -200,6 +264,8 @@ async function mount(scenario: Scenario) {
                         ? vimThreads
                     : scenario === 'image'
                         ? [{ ...thread, lastMessage: imageMessage }]
+                        : scenario === 'reel'
+                            ? [{ ...thread, lastMessage: reelMessage }]
                         : scenario === 'identity-pm' || scenario === 'identity-group'
                             ? [{
                                 ...thread,
@@ -271,10 +337,40 @@ async function mount(scenario: Scenario) {
                 reactions: [{ senderId: 'viewer', reaction: payload.emoji, timestampMs: Date.now() }],
             },
         }),
-        getReelMedia: async () => ({ ok: false, error: { message: 'not used' } }),
-        getReelComments: async () => ({ ok: false, error: { message: 'not used' } }),
-        setReelLiked: async () => ({ ok: false, error: { message: 'not used' } }),
-        setReelSaved: async () => ({ ok: false, error: { message: 'not used' } }),
+        getReelMedia: async () => {
+            if (scenario !== 'reel') return { ok: false, error: { message: 'not used' } };
+            reelMediaCalls++;
+            const revision = reelMediaCalls;
+            if (revision > 1) await new Promise(resolve => setTimeout(resolve, 100));
+            const suffix = revision > 1 ? `#fresh-${revision}` : '';
+            return {
+                ok: true,
+                value: {
+                id: '9001', shortcode: 'reel-code',
+                author: { id: 'author-1', username: 'reel_author', fullName: 'Reel Author', picUrl: null, isVerified: true },
+                caption: 'Harness reel caption', items: [
+                    { id: 'video-slide', kind: 'video', videoUrl: `data:video/mp4;base64,${suffix}`, variants: [
+                        { url: `data:video/mp4;base64,${suffix}`, type: 101, width: 540, height: 960 },
+                        { url: 'data:video/mp4;base64,AAAA', type: 102, width: 720, height: 1280 },
+                    ], posterUrl: 'data:image/gif;base64,R0lGODlhAQABAAAAACw=', durationSec: 10, width: 540, height: 960, canDownload: true, downloadUrl: 'https://cdn.example/video.mp4' },
+                    { id: 'image-slide', kind: 'image', imageUrl: `data:image/gif;base64,R0lGODlhAQABAAAAACw=${suffix}`, posterUrl: 'data:image/gif;base64,R0lGODlhAQABAAAAACw=', width: 640, height: 640, canDownload: true, downloadUrl: 'https://cdn.example/image.jpg' },
+                ], likeCount: 12, commentCount: 1, hasLiked: false, hasSaved: false, canSave: true, canDownload: true,
+                },
+            };
+        },
+        getReelComments: async () => {
+            reelCommentCalls++;
+            if (scenario === 'reel' && reelCommentCalls === 1) return { ok: false, error: { message: 'Harness comments failure' } };
+            return { ok: true, value: { items: [{ id: 'comment-1', text: 'Great reel', createdAtMs: 2_000, likeCount: 0, hasLiked: false, childCommentCount: 0, author: { id: 'commenter', username: 'commenter', fullName: 'Commenter', picUrl: null, isVerified: false } }], hasNextPage: false } };
+        },
+        setReelLiked: async payload => {
+            reelLikeCalls++;
+            return { ok: true, value: { mediaId: payload.mediaId, hasLiked: payload.liked } };
+        },
+        setReelSaved: async payload => {
+            reelSaveCalls++;
+            return { ok: true, value: { mediaId: payload.mediaId, hasSaved: payload.saved } };
+        },
         getThread: payload => {
             calls.push(payload.cursor);
             if (payload.threadKey === secondThread.key) {
@@ -288,6 +384,22 @@ async function mount(scenario: Scenario) {
                 scenario === 'delayed' || scenario === 'selection' || scenario === 'outgoing-prepend'
             )) {
                 return new Promise(resolve => { resolveVisible = resolve; });
+            }
+            if (scenario === 'reply-navigation-delayed' && payload.cursor === 'c1') {
+                return new Promise(resolve => { resolveVisible = resolve; });
+            }
+            if (
+                scenario === 'reply-navigation' || scenario === 'reply-navigation-retry' ||
+                scenario === 'reply-navigation-delayed'
+            ) {
+                if (scenario === 'reply-navigation-retry' && payload.cursor === 'c1' && !failedOnce) {
+                    failedOnce = true;
+                    return Promise.resolve({ ok: false, error: { message: 'Harness reply failure' } });
+                }
+                if (payload.cursor === 'c1') return Promise.resolve(page(60, 80, 'c2', true, true));
+                if (payload.cursor === 'c2') return Promise.resolve(page(40, 60, 'c3', true, true));
+                if (payload.cursor === 'c3') return Promise.resolve(page(20, 40, 'c4', true, true));
+                return Promise.resolve(page(0, 20, undefined, false, true));
             }
             if (payload.cursor === 'c1') return Promise.resolve(page(20, 40, 'c2', true));
             return Promise.resolve(page(0, 20));
@@ -314,7 +426,9 @@ window.historyHarness = {
     calls: () => calls,
     resolveVisible: () => {
         if (!resolveVisible) throw new Error('No delayed visible request');
-        resolveVisible(activeStore?.state.histories.thread.viewerId === 'interop-viewer'
+        resolveVisible(mountedScenario === 'reply-navigation-delayed'
+            ? page(60, 80, 'c2', true, true)
+            : activeStore?.state.histories.thread.viewerId === 'interop-viewer'
             ? {
                 ok: true,
                 value: {
@@ -345,8 +459,11 @@ window.historyHarness = {
             scrollAnchor: history?.scrollAnchor,
             draft: history?.draft,
             replyTargetId: history?.replyTargetId,
+            replyNavigation: history?.replyNavigation,
+            replyReturnStack: history?.replyReturnStack,
         };
     },
+    reelMetrics: () => ({ reelCommentCalls, reelMediaCalls, reelLikeCalls, reelSaveCalls }),
 };
 
 declare global {
@@ -367,6 +484,22 @@ declare global {
                 scrollAnchor?: { id: string; offset: number };
                 draft?: string;
                 replyTargetId?: string;
+                replyNavigation?: {
+                    requestId: number;
+                    targetId: string;
+                    returnId?: string;
+                    status: 'loading' | 'ready' | 'error';
+                    pagesLoaded?: number;
+                    messagesLoaded?: number;
+                    error?: string;
+                };
+                replyReturnStack?: string[];
+            };
+            reelMetrics: () => {
+                reelCommentCalls: number;
+                reelMediaCalls: number;
+                reelLikeCalls: number;
+                reelSaveCalls: number;
             };
         };
     }

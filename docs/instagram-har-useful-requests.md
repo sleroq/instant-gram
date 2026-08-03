@@ -198,7 +198,9 @@ lines 1434–1447: GET /api/v1/media/3887864898364318881/comments/
 
 The capture proves the initial comments request and response shape, but contains
 no comments request with `min_id`; do not infer pagination from `next_min_id`.
-The shortcode-to-ID `PolarisPostActionLoadPostQueryQuery` call is still the
-plan/live-bundle-derived step and is not present in the captures. Validate its
-returned code and numeric/compound media identity against the requested
-shortcode and the REST response before using the ID in a path or caching media.
+The later sanitized `real-loading` captures prove that Instagram's URL-safe
+base64 shortcode decodes to the same numeric media ID used by comments and the
+REST info path. Prefer a numeric DM media-ID hint and use that deterministic
+decode only when the hint is absent. The former plan/live-bundle-derived
+`PolarisPostActionLoadPostQueryQuery` was not captured and is no longer called.
+Always validate REST `items[0].pk` and `items[0].code` before caching media.

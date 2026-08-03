@@ -12,7 +12,6 @@ import {
     parseReactionMutationResponse,
     parseReelCommentsResponse,
     parseReelInfoResponse,
-    parseReelMediaResponse,
     parseReelLikeResponse,
     parseReelSaveResponse,
     parseSentCutoutStickerResponse,
@@ -23,6 +22,10 @@ import {
     parseThreadResponse,
     parseUnreadCountResponses,
 } from '../../lib/instagram-api/parsers.ts';
+import {
+    instagramMediaIdFromShortcode,
+    loadReelMedia,
+} from '../../lib/instagram-api/reels.ts';
 
 const user = {
     interop_messaging_user_fbid: 'sender-1',
@@ -745,7 +748,7 @@ test('mutation parsers reject malformed successful GraphQL envelopes', () => {
     );
 });
 
-test('reel info represents video and carousel media with profile and action state', () => {
+test('reel info represents captured video variants and complete carousel media', () => {
     const base = {
         pk: '3953224267254190889',
         code: 'ABC',
@@ -767,7 +770,11 @@ test('reel info represents video and carousel media with profile and action stat
         product_type: 'carousel_container',
         carousel_media: [{
             pk: 'slide-video', video_duration: 5,
-            video_versions: [{ url: 'https://cdn.example/video.mp4', width: 720, height: 1280 }],
+            video_versions: [
+                { url: 'https://cdn.example/video-low.mp4', type: 101, width: 360, height: 640 },
+                { url: 'https://cdn.example/video-high.mp4', type: 102, width: 720, height: 1280 },
+                { url: 'https://cdn.example/video-alt.mp4', type: 103, width: 720, height: 1280 },
+            ],
             image_versions2: { candidates: [{ url: 'https://cdn.example/poster.jpg', width: 720, height: 1280 }] },
         }, {
             pk: 'slide-image',
@@ -782,29 +789,18 @@ test('reel info represents video and carousel media with profile and action stat
     });
     assert.deepEqual(parsed.items.map(item => item.kind), ['video', 'image']);
     assert.equal(parsed.items[0]?.posterUrl, 'https://cdn.example/poster.jpg');
+    assert.equal(parsed.items[0]?.kind === 'video' && parsed.items[0].videoUrl,
+        'https://cdn.example/video-high.mp4');
+    assert.deepEqual(parsed.items[0]?.kind === 'video' &&
+        parsed.items[0].variants.map(variant => variant.type), [102, 103, 101]);
     assert.equal(parsed.items[0]?.canDownload, true);
-    assert.equal(parsed.items[0]?.downloadUrl, 'https://cdn.example/video.mp4');
+    assert.equal(parsed.items[0]?.downloadUrl, 'https://cdn.example/video-high.mp4');
     assert.equal(parsed.hasLiked, true);
     assert.equal(parsed.hasSaved, true);
     assert.equal(parsed.canDownload, true);
 });
 
 test('reel identities and complete mixed carousels are required end to end', () => {
-    assert.deepEqual(parseReelMediaResponse({ data: { xdt_shortcode_media: {
-        pk: '3953224267254190889', id: '3953224267254190889_5654194264', code: 'ABC',
-    } } }, { shortcode: 'ABC', mediaId: '3953224267254190889' }), {
-        mediaId: '3953224267254190889', hasLiked: undefined, hasSaved: undefined,
-    });
-    assert.throws(() => parseReelMediaResponse({ data: { xdt_shortcode_media: {
-        pk: 'not-numeric', code: 'ABC',
-    } } }, { shortcode: 'ABC' }), /identity did not match/);
-    assert.throws(() => parseReelMediaResponse({ data: { xdt_shortcode_media: {
-        pk: '3953224267254190889', id: '999_5654194264', code: 'ABC',
-    } } }, { shortcode: 'ABC' }), /identity did not match/);
-    assert.throws(() => parseReelMediaResponse({ data: { xdt_shortcode_media: {
-        pk: '3953224267254190889', code: 'WRONG',
-    } } }, { shortcode: 'ABC' }), /identity did not match/);
-
     const media = {
         pk: '3953224267254190889', id: '3953224267254190889_5654194264', code: 'ABC',
         media_type: 8, product_type: 'carousel_container',
@@ -814,18 +810,18 @@ test('reel identities and complete mixed carousels are required end to end', () 
             { video_versions: [{ url: 'https://cdn/three.mp4' }] }],
     };
     assert.throws(
-        () => parseReelInfoResponse({ items: [media] }, { shortcode: 'ABC' }, {
-            mediaId: '3953224267254190889',
+        () => parseReelInfoResponse({ items: [media] }, {
+            shortcode: 'ABC', mediaId: '3953224267254190889',
         }),
         /malformed media/,
     );
     assert.throws(() => parseReelInfoResponse({ items: [{
         ...media, carousel_media: media.carousel_media.filter(Boolean), code: 'WRONG',
-    }] }, { shortcode: 'ABC' }, { mediaId: '3953224267254190889' }), /identity did not match/);
+    }] }, { shortcode: 'ABC', mediaId: '3953224267254190889' }), /identity did not match/);
     assert.throws(() => parseReelInfoResponse({ items: [{
         ...media, carousel_media: media.carousel_media.filter(Boolean), pk: '3953224267254190999',
         id: '3953224267254190999_5654194264',
-    }] }, { shortcode: 'ABC' }, { mediaId: '3953224267254190889' }), /identity did not match/);
+    }] }, { shortcode: 'ABC', mediaId: '3953224267254190889' }), /identity did not match/);
 
     for (const carousel_media of [undefined, null, {}, []]) {
         assert.throws(() => parseReelInfoResponse({ items: [{
@@ -858,6 +854,32 @@ test('reel identities and complete mixed carousels are required end to end', () 
         assert.equal(parsed.items[0]?.downloadUrl, undefined);
         assert.equal(parsed.items[0]?.posterUrl, 'https://cdn/parent.jpg');
     }
+});
+
+test('media-ID shares bypass GraphQL and shortcode fallback decodes the captured identity', async () => {
+    const calls: string[] = [];
+    const fixture = (mediaId: string, code: string) => ({ items: [{
+        pk: mediaId,
+        code,
+        media_type: 1,
+        product_type: 'feed',
+        image_versions2: { candidates: [{ url: 'https://cdn.example/post.jpg', width: 1080, height: 1080 }] },
+        user: { pk: 'owner', username: 'owner' },
+    }] });
+    const mediaBacked = await loadReelMedia({ shortcode: 'ABC', mediaId: '9001' }, async mediaId => {
+        calls.push(mediaId);
+        return fixture(mediaId, 'ABC');
+    });
+    assert.equal(mediaBacked.items[0]?.kind, 'image');
+    assert.deepEqual(calls, ['9001']);
+
+    const decoded = instagramMediaIdFromShortcode('ABC');
+    const fallback = await loadReelMedia({ shortcode: 'ABC' }, async mediaId => {
+        calls.push(mediaId);
+        return fixture(mediaId, 'ABC');
+    });
+    assert.equal(fallback.id, decoded);
+    assert.deepEqual(calls, ['9001', decoded]);
 });
 
 test('reel comments and action receipts normalize only the captured initial REST page', () => {

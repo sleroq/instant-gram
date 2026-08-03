@@ -21,3 +21,13 @@ export function appendToHistoryWindow(viewportIds: string[], id: string) {
     if (viewportIds.includes(id)) return viewportIds;
     return [...viewportIds, id].slice(-MAX_HISTORY_ROWS);
 }
+
+export function historyWindowAroundTarget(listedIds: string[], targetId: string) {
+    const targetIndex = listedIds.indexOf(targetId);
+    if (targetIndex < 0) return [];
+    const start = Math.min(
+        Math.max(0, targetIndex - HISTORY_SLICE_SIZE),
+        Math.max(0, listedIds.length - MAX_HISTORY_ROWS),
+    );
+    return listedIds.slice(start, start + MAX_HISTORY_ROWS);
+}

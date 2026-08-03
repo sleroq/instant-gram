@@ -501,6 +501,421 @@ test('older history deduplicates overlaps, stays bounded, and preloads once', as
     store.destroy();
 });
 
+test('reply navigation drains contiguous older pages and teleports a bounded window to the target', async () => {
+    installWindowTimers();
+    const calls: Array<string | undefined> = [];
+    const rpc = fakeRpc(async () => ({
+        ok: true,
+        value: { items: [thread('a')], hasNextPage: false },
+    }), async payload => {
+        calls.push(payload.cursor);
+        if (!payload.cursor) return historyPage(80, 120, 'c1', true);
+        if (payload.cursor === 'c1') return historyPage(60, 80, 'c2', true);
+        if (payload.cursor === 'c2') return historyPage(40, 60, 'c3', true);
+        if (payload.cursor === 'c3') return historyPage(20, 40, 'c4', true);
+        return historyPage(0, 20, undefined, false);
+    });
+    const store = createFrontendStore(rpc);
+    store.start();
+    await settle();
+    store.selectThread('a');
+    await settle();
+
+    assert.equal(await store.navigateToReply('a', 'm10'), true);
+    const history = store.state.histories.a;
+    assert.deepEqual(calls, [undefined, 'c1', 'c2', 'c3', 'c4']);
+    assert.equal(history.viewportIds.includes('m10'), true);
+    assert.equal(history.viewportIds.length <= 80, true);
+    assert.deepEqual(history.viewportIds, messageIds(0, 80));
+    assert.equal(history.replyNavigation?.status, 'ready');
+
+    assert.equal(await store.navigateToReply('a', 'deleted-message'), false);
+    assert.equal(history.replyNavigation?.status, 'error');
+    assert.equal(history.replyNavigation?.error, 'Original message is unavailable.');
+    assert.equal(calls.length, 5);
+    store.destroy();
+});
+
+test('reply navigation uses a local target without requesting older history', async () => {
+    installWindowTimers();
+    const calls: Array<string | undefined> = [];
+    const rpc = fakeRpc(async () => ({
+        ok: true,
+        value: { items: [thread('a')], hasNextPage: false },
+    }), async payload => {
+        calls.push(payload.cursor);
+        return historyPage(80, 120, 'c1', true);
+    });
+    const store = createFrontendStore(rpc);
+    store.start();
+    await settle();
+    store.selectThread('a');
+    await settle();
+
+    assert.equal(await store.navigateToReply('a', 'm90'), true);
+    assert.deepEqual(calls, [undefined]);
+    assert.equal(store.state.histories.a.replyNavigation?.targetId, 'm90');
+    store.destroy();
+});
+
+test('reply navigation joins an older request in flight without duplicating its cursor', async () => {
+    installWindowTimers();
+    const calls: Array<string | undefined> = [];
+    let resolveOlder!: (result: Result<ThreadMessages>) => void;
+    const rpc = fakeRpc(async () => ({
+        ok: true,
+        value: { items: [thread('a')], hasNextPage: false },
+    }), payload => {
+        calls.push(payload.cursor);
+        if (!payload.cursor) return Promise.resolve(historyPage(80, 120, 'c1', true));
+        return new Promise(resolve => { resolveOlder = resolve; });
+    });
+    const store = createFrontendStore(rpc);
+    store.start();
+    await settle();
+    store.selectThread('a');
+    await settle();
+
+    store.revealOlderHistory('a', true);
+    const navigation = store.navigateToReply('a', 'm65');
+    assert.deepEqual(calls, [undefined, 'c1']);
+    resolveOlder(historyPage(60, 80, 'c2', true));
+    assert.equal(await navigation, true);
+    assert.deepEqual(calls, [undefined, 'c1']);
+    store.destroy();
+});
+
+test('reply navigation reports honest page and message progress while an older target loads', async () => {
+    installWindowTimers();
+    const resolvers: Array<(result: Result<ThreadMessages>) => void> = [];
+    const rpc = fakeRpc(async () => ({
+        ok: true,
+        value: { items: [thread('a')], hasNextPage: false },
+    }), payload => !payload.cursor
+        ? Promise.resolve(historyPage(80, 120, 'c1', true))
+        : new Promise(resolve => { resolvers.push(resolve); }));
+    const store = createFrontendStore(rpc);
+    store.start();
+    await settle();
+    store.selectThread('a');
+    await settle();
+
+    const navigation = store.navigateToReply('a', 'm50');
+    assert.deepEqual(store.state.histories.a.replyNavigation, {
+        requestId: 1, targetId: 'm50', status: 'loading', pagesLoaded: 0, messagesLoaded: 0,
+    });
+    resolvers.shift()!(historyPage(60, 80, 'c2', true));
+    await settle();
+    assert.deepEqual(store.state.histories.a.replyNavigation, {
+        requestId: 1, targetId: 'm50', status: 'loading', pagesLoaded: 1, messagesLoaded: 20,
+    });
+    resolvers.shift()!(historyPage(40, 60, 'c3', true));
+    assert.equal(await navigation, true);
+    store.destroy();
+});
+
+test('visible reply prefetch is serialized, bounded, and reused by priority navigation', async () => {
+    installWindowTimers();
+    const calls: Array<string | undefined> = [];
+    let resolveOlder!: (result: Result<ThreadMessages>) => void;
+    const rpc = fakeRpc(async () => ({
+        ok: true,
+        value: { items: [thread('a')], hasNextPage: false },
+    }), payload => {
+        calls.push(payload.cursor);
+        if (!payload.cursor) return Promise.resolve(historyPage(80, 120, 'c1', true));
+        return new Promise(resolve => { resolveOlder = resolve; });
+    });
+    const store = createFrontendStore(rpc);
+    store.start();
+    await settle();
+    store.selectThread('a');
+    await settle();
+
+    store.prefetchReplyTargets('a', ['m65', 'm10', 'm9', 'm8', 'm7', 'm6']);
+    assert.deepEqual(calls, [undefined, 'c1']);
+    const navigation = store.navigateToReply('a', 'm65', 'm119');
+    assert.deepEqual(calls, [undefined, 'c1']);
+    resolveOlder(historyPage(60, 80, 'c2', true));
+    assert.equal(await navigation, true);
+    assert.equal(store.state.histories.a.replyReturnStack.at(-1), 'm119');
+    store.destroy();
+});
+
+test('reply prefetch spends one page per visible target and serializes the four-target cap', async () => {
+    installWindowTimers();
+    const calls: Array<string | undefined> = [];
+    const resolvers: Array<(result: Result<ThreadMessages>) => void> = [];
+    const rpc = fakeRpc(async () => ({
+        ok: true,
+        value: { items: [thread('a')], hasNextPage: false },
+    }), payload => {
+        calls.push(payload.cursor);
+        if (!payload.cursor) return Promise.resolve(historyPage(80, 120, 'c1', true));
+        return new Promise(resolve => { resolvers.push(resolve); });
+    });
+    const store = createFrontendStore(rpc);
+    store.start();
+    await settle();
+    store.selectThread('a');
+    await settle();
+
+    store.prefetchReplyTargets('a', ['missing-1', 'missing-2', 'missing-3', 'missing-4', 'missing-5']);
+    assert.deepEqual(calls, [undefined, 'c1']);
+    resolvers.shift()!(historyPage(60, 80, 'c2', true));
+    await settle();
+    assert.deepEqual(calls, [undefined, 'c1', 'c2']);
+    resolvers.shift()!(historyPage(40, 60, 'c3', true));
+    await settle();
+    assert.deepEqual(calls, [undefined, 'c1', 'c2', 'c3']);
+    resolvers.shift()!(historyPage(20, 40, 'c4', true));
+    await settle();
+    assert.deepEqual(calls, [undefined, 'c1', 'c2', 'c3', 'c4']);
+    resolvers.shift()!(historyPage(0, 20, 'c5', true));
+    await settle();
+    assert.deepEqual(calls, [undefined, 'c1', 'c2', 'c3', 'c4']);
+
+    // A single missing visible target never drains multiple cursors.
+    store.prefetchReplyTargets('a', []);
+    store.prefetchReplyTargets('a', ['still-missing']);
+    await settle();
+    assert.deepEqual(calls, [undefined, 'c1', 'c2', 'c3', 'c4', 'c5']);
+    resolvers.shift()!(historyPage(0, 0, undefined, false));
+    await settle();
+    assert.equal(calls.length, 6);
+    store.destroy();
+});
+
+test('reply prefetch cancellation prevents continuation after visibility or selection changes', async () => {
+    installWindowTimers();
+    for (const cancelWithSelection of [false, true]) {
+        const calls: Array<{ threadKey: string; cursor?: string }> = [];
+        let resolveOlder!: (result: Result<ThreadMessages>) => void;
+        const rpc = fakeRpc(async () => ({
+            ok: true,
+            value: { items: [thread('a'), thread('b')], hasNextPage: false },
+        }), payload => {
+            calls.push(payload);
+            if (!payload.cursor) return Promise.resolve(historyPage(80, 120, 'c1', true));
+            return new Promise(resolve => { resolveOlder = resolve; });
+        });
+        const store = createFrontendStore(rpc);
+        store.start();
+        await settle();
+        store.selectThread('a');
+        await settle();
+        store.prefetchReplyTargets('a', ['missing']);
+        assert.equal(calls.filter(call => call.cursor).length, 1);
+        if (cancelWithSelection) store.selectThread('b');
+        else store.prefetchReplyTargets('a', []);
+        resolveOlder(historyPage(60, 80, 'c2', true));
+        await settle();
+        assert.deepEqual(calls.filter(call => call.threadKey === 'a').map(call => call.cursor), [undefined, 'c1']);
+        store.destroy();
+    }
+});
+
+test('selection abandonment resolves explicit reply navigation false without UI or viewport commits', async () => {
+    installWindowTimers();
+    for (const abandonToInbox of [false, true]) {
+        let resolveOlder!: (result: Result<ThreadMessages>) => void;
+        const rpc = fakeRpc(async () => ({
+            ok: true,
+            value: { items: [thread('a'), thread('b')], hasNextPage: false },
+        }), payload => {
+            if (!payload.cursor) return Promise.resolve(historyPage(80, 120, 'c1', true));
+            return new Promise(resolve => { resolveOlder = resolve; });
+        });
+        const store = createFrontendStore(rpc);
+        store.start();
+        await settle();
+        store.selectThread('a');
+        await settle();
+        const beforeViewport = [...store.state.histories.a.viewportIds];
+        const navigation = store.navigateToReply('a', 'm70', 'm119');
+        if (abandonToInbox) store.showInbox();
+        else store.selectThread('b');
+        assert.equal(await navigation, false);
+        assert.equal(store.state.histories.a.replyNavigation, undefined);
+        resolveOlder(historyPage(60, 80, 'c2', true));
+        await settle();
+        assert.deepEqual(store.state.histories.a.viewportIds, beforeViewport);
+        assert.deepEqual(store.state.histories.a.replyReturnStack, []);
+        assert.equal(store.state.histories.a.replyNavigation, undefined);
+        store.completeReplyNavigationPosition('a', 1);
+        assert.equal(store.state.histories.a.replyNavigation, undefined);
+        store.destroy();
+    }
+});
+
+test('selection clears a ready reply focus intent before positioning acknowledgement', async () => {
+    installWindowTimers();
+    const rpc = fakeRpc(async () => ({
+        ok: true,
+        value: { items: [thread('a'), thread('b')], hasNextPage: false },
+    }), async () => historyPage(80, 120, 'c1', true));
+    const store = createFrontendStore(rpc);
+    store.start();
+    await settle();
+    store.selectThread('a');
+    await settle();
+    assert.equal(await store.navigateToReply('a', 'm90'), true);
+    const requestId = store.state.histories.a.replyNavigation!.requestId;
+    store.selectThread('b');
+    assert.equal(store.state.histories.a.replyNavigation, undefined);
+    store.completeReplyNavigationPosition('a', requestId);
+    assert.equal(store.state.histories.a.replyNavigation, undefined);
+    store.destroy();
+});
+
+test('reply return stack unwinds a chain before newest and failures do not corrupt it', async () => {
+    installWindowTimers();
+    const rpc = fakeRpc(async () => ({
+        ok: true,
+        value: { items: [thread('a')], hasNextPage: false },
+    }), async () => historyPage(0, 120, undefined, false));
+    const store = createFrontendStore(rpc);
+    store.start();
+    await settle();
+    store.selectThread('a');
+    await settle();
+
+    assert.equal(await store.navigateToReply('a', 'm60', 'm110'), true);
+    assert.equal(await store.navigateToReply('a', 'm20', 'm60'), true);
+    assert.deepEqual(store.state.histories.a.replyReturnStack, ['m110', 'm60']);
+    assert.equal(await store.navigateToReply('a', 'missing', 'm20'), false);
+    assert.deepEqual(store.state.histories.a.replyReturnStack, ['m110', 'm60']);
+    assert.equal(await store.returnFromReplyNavigation('a'), true);
+    assert.equal(store.state.histories.a.replyNavigation?.targetId, 'm60');
+    assert.equal(await store.returnFromReplyNavigation('a'), true);
+    assert.equal(store.state.histories.a.replyNavigation?.targetId, 'm110');
+    assert.deepEqual(store.state.histories.a.replyReturnStack, []);
+    assert.equal(store.revealNewestHistory('a'), true);
+    assert.deepEqual(store.state.histories.a.viewportIds, messageIds(80, 120));
+    store.destroy();
+});
+
+test('rapid reply navigation is latest-wins while sharing older history work', async () => {
+    installWindowTimers();
+    const calls: Array<string | undefined> = [];
+    let resolveOlder!: (result: Result<ThreadMessages>) => void;
+    const rpc = fakeRpc(async () => ({
+        ok: true,
+        value: { items: [thread('a')], hasNextPage: false },
+    }), payload => {
+        calls.push(payload.cursor);
+        if (!payload.cursor) return Promise.resolve(historyPage(80, 120, 'c1', true));
+        return new Promise(resolve => { resolveOlder = resolve; });
+    });
+    const store = createFrontendStore(rpc);
+    store.start();
+    await settle();
+    store.selectThread('a');
+    await settle();
+
+    const superseded = store.navigateToReply('a', 'm10');
+    const latest = store.navigateToReply('a', 'm70');
+    assert.deepEqual(calls, [undefined, 'c1']);
+    resolveOlder(historyPage(60, 80, 'c2', true));
+    assert.equal(await superseded, false);
+    assert.equal(await latest, true);
+    assert.deepEqual(store.state.histories.a.replyNavigation, {
+        requestId: 2,
+        targetId: 'm70',
+        status: 'ready',
+    });
+    assert.deepEqual(calls, [undefined, 'c1']);
+    store.destroy();
+});
+
+test('reply navigation transport failure waits for explicit retry', async () => {
+    installWindowTimers();
+    const calls: Array<string | undefined> = [];
+    let olderAttempt = 0;
+    const rpc = fakeRpc(async () => ({
+        ok: true,
+        value: { items: [thread('a')], hasNextPage: false },
+    }), async payload => {
+        calls.push(payload.cursor);
+        if (!payload.cursor) return historyPage(80, 120, 'c1', true);
+        olderAttempt++;
+        return olderAttempt === 1
+            ? { ok: false, error: { message: 'transport unavailable' } }
+            : historyPage(60, 80, 'c2', true);
+    });
+    const store = createFrontendStore(rpc);
+    store.start();
+    await settle();
+    store.selectThread('a');
+    await settle();
+
+    assert.equal(await store.navigateToReply('a', 'm70', 'm119'), false);
+    assert.deepEqual(calls, [undefined, 'c1']);
+    assert.deepEqual(store.state.histories.a.replyNavigation, {
+        requestId: 1,
+        targetId: 'm70',
+        returnId: 'm119',
+        status: 'error',
+        error: 'transport unavailable',
+    });
+    await settle();
+    assert.deepEqual(calls, [undefined, 'c1']);
+
+    assert.deepEqual(store.state.histories.a.replyReturnStack, []);
+    assert.equal(await store.navigateToReply(
+        'a',
+        'm70',
+        store.state.histories.a.replyNavigation?.returnId,
+    ), true);
+    assert.deepEqual(calls, [undefined, 'c1', 'c1']);
+    assert.deepEqual(store.state.histories.a.replyReturnStack, ['m119']);
+    store.destroy();
+});
+
+test('destroy releases reply navigation waiting on older history and ignores its completion', async () => {
+    installWindowTimers();
+    let resolveOlder!: (result: Result<ThreadMessages>) => void;
+    const rpc = fakeRpc(async () => ({
+        ok: true,
+        value: { items: [thread('a')], hasNextPage: false },
+    }), payload => !payload.cursor
+        ? Promise.resolve(historyPage(80, 120, 'c1', true))
+        : new Promise(resolve => { resolveOlder = resolve; }));
+    const store = createFrontendStore(rpc);
+    store.start();
+    await settle();
+    store.selectThread('a');
+    await settle();
+
+    store.revealOlderHistory('a', true);
+    const navigation = store.navigateToReply('a', 'm70');
+    store.destroy();
+    assert.equal(await navigation, false);
+    resolveOlder(historyPage(60, 80, 'c2', true));
+    await settle();
+    assert.equal(store.state.histories.a.byId.m70, undefined);
+});
+
+test('destroy resolves direct-owner reply navigation even when its older RPC never settles', async () => {
+    installWindowTimers();
+    const rpc = fakeRpc(async () => ({
+        ok: true,
+        value: { items: [thread('a')], hasNextPage: false },
+    }), payload => !payload.cursor
+        ? Promise.resolve(historyPage(80, 120, 'c1', true))
+        : new Promise<Result<ThreadMessages>>(() => undefined));
+    const store = createFrontendStore(rpc);
+    store.start();
+    await settle();
+    store.selectThread('a');
+    await settle();
+
+    const navigation = store.navigateToReply('a', 'm10');
+    store.destroy();
+    assert.equal(await navigation, false);
+    assert.equal(store.state.histories.a.byId.m10, undefined);
+});
+
 test('optimistic send retries one row and reconciles every normalized index', async () => {
     installWindowTimers();
     let sendAttempt = 0;
@@ -913,6 +1328,7 @@ test('reel shares preload with a bounded deduped cache while comments and mutati
                 items: [{
                     id: payload.mediaId!, kind: 'video',
                     videoUrl: 'https://cdn.example/video.mp4',
+                    variants: [{ url: 'https://cdn.example/video.mp4' }],
                     posterUrl: 'https://cdn.example/poster.jpg', durationSec: 5,
                     canDownload: true,
                 }],
@@ -1002,6 +1418,69 @@ test('reel opens join one deferred media flight and close gates comments without
     resolveComments({ ok: true, value: { items: [], hasNextPage: false } });
     assert.equal(await opened, true);
     assert.equal(store.state.reels.byId.ABC.comments.status, 'ready');
+    store.destroy();
+});
+
+test('successful media retry starts comments only while that reel remains active', async () => {
+    const rpc = fakeRpc(async () => ({ ok: true, value: { items: [], hasNextPage: false } }));
+    let mediaAttempt = 0;
+    let resolveRetry!: (value: Awaited<ReturnType<CompleteUiRpc['getReelMedia']>>) => void;
+    rpc.getReelMedia = async payload => {
+        mediaAttempt++;
+        if (mediaAttempt === 1 || mediaAttempt === 3)
+            return { ok: false, error: { message: 'expired media' } };
+        if (mediaAttempt === 4)
+            return new Promise(resolve => { resolveRetry = resolve; });
+        return { ok: true, value: reelMedia(payload.shortcode, payload.mediaId!, 'https://cdn/fresh.mp4') };
+    };
+    let commentCalls = 0;
+    rpc.getReelComments = async () => {
+        commentCalls++;
+        return { ok: true, value: { items: [], hasNextPage: false } };
+    };
+    const store = createFrontendStore(rpc);
+
+    assert.equal(await store.openReel('ABC', '100'), false);
+    assert.ok(await store.retryReel('ABC'));
+    assert.equal(commentCalls, 1);
+
+    assert.equal(await store.openReel('DEF', '200'), false);
+    const retry = store.retryReel('DEF');
+    store.closeReel();
+    resolveRetry({ ok: true, value: reelMedia('DEF', '200', 'https://cdn/fresh-2.mp4') });
+    assert.ok(await retry);
+    assert.equal(commentCalls, 1);
+    store.destroy();
+});
+
+test('joined failed media retries do not treat retained cached media as refresh success', async () => {
+    const rpc = fakeRpc(async () => ({ ok: true, value: { items: [], hasNextPage: false } }));
+    let mediaCalls = 0;
+    let resolveRefresh!: (value: Awaited<ReturnType<CompleteUiRpc['getReelMedia']>>) => void;
+    rpc.getReelMedia = async payload => {
+        mediaCalls++;
+        if (mediaCalls === 1)
+            return { ok: true, value: reelMedia(payload.shortcode, payload.mediaId!, 'https://cdn/expired.mp4') };
+        return new Promise(resolve => { resolveRefresh = resolve; });
+    };
+    let commentCalls = 0;
+    rpc.getReelComments = async () => {
+        commentCalls++;
+        return { ok: false, error: { message: 'comments unavailable' } };
+    };
+    const store = createFrontendStore(rpc);
+    assert.equal(await store.openReel('ABC', '100'), false);
+    assert.equal(commentCalls, 1);
+
+    const firstRetry = store.retryReel('ABC');
+    const joinedRetry = store.retryReel('ABC');
+    assert.equal(mediaCalls, 2);
+    resolveRefresh({ ok: false, error: { message: 'still expired' } });
+    assert.equal(await firstRetry, undefined);
+    assert.equal(await joinedRetry, undefined);
+    assert.equal(commentCalls, 1);
+    assert.equal(store.state.reels.byId.ABC.media?.items[0].kind, 'video');
+    assert.equal(store.state.reels.byId.ABC.status, 'error');
     store.destroy();
 });
 
@@ -1301,6 +1780,7 @@ function reelMedia(shortcode: string, id: string, url: string) {
             id,
             kind: 'video' as const,
             videoUrl: url,
+            variants: [{ url }],
             posterUrl: url,
             durationSec: 1,
             canDownload: true,

@@ -862,22 +862,6 @@ export function parsePinnedThreadResponse(json: unknown): PinThreadResult {
     return { threadFbid, isPinned };
 }
 
-export function parseReelMediaResponse(
-    json: unknown,
-    payload: ReelPayload,
-): { mediaId: string; hasLiked?: boolean; hasSaved?: boolean } {
-    const media = objectProp(responseData(json)?.xdt_shortcode_media);
-    const mediaId = instagramMediaId(media);
-    const shortcode = stringProp(media?.shortcode) ?? stringProp(media?.code);
-    if (mediaId && shortcode === payload.shortcode &&
-        (!payload.mediaId || equivalentMediaId(mediaId, payload.mediaId))) return {
-        mediaId,
-        hasLiked: booleanProp(media?.viewer_has_liked) ?? booleanProp(media?.has_liked),
-        hasSaved: booleanProp(media?.viewer_has_saved) ?? booleanProp(media?.has_viewer_saved),
-    };
-    throw new Error('Instagram reel GraphQL identity did not match the requested reel');
-}
-
 function equivalentMediaId(left: string, right: string): boolean {
     const normalize = (value: string) => /^\d+$/.test(value)
         ? value
@@ -916,13 +900,20 @@ function reelItem(
     canDownload: boolean,
 ): ReelMediaItem | undefined {
     const image = candidateImage(node);
+    const seenUrls = new Set<string>();
     const versions = (Array.isArray(node.video_versions) ? node.video_versions : [])
         .map(objectProp)
         .filter((version): version is JsonObject => Boolean(version))
-        .filter(version => stringProp(version.url))
+        .filter(version => {
+            const url = stringProp(version.url);
+            if (!url || seenUrls.has(url)) return false;
+            seenUrls.add(url);
+            return true;
+        })
         .sort((a, b) => {
-            const height = (numberProp(b.height) ?? 0) - (numberProp(a.height) ?? 0);
-            return height || (numberProp(b.bandwidth) ?? 0) - (numberProp(a.bandwidth) ?? 0);
+            const pixels = (numberProp(b.width) ?? 0) * (numberProp(b.height) ?? 0) -
+                (numberProp(a.width) ?? 0) * (numberProp(a.height) ?? 0);
+            return pixels || (numberProp(b.bandwidth) ?? 0) - (numberProp(a.bandwidth) ?? 0);
         });
     const videoUrl = stringProp(versions[0]?.url) ?? stringProp(node.video_url);
     const id = stringProp(node.pk) ?? stringProp(node.id) ?? fallbackId;
@@ -932,6 +923,13 @@ function reelItem(
         id,
         kind: 'video',
         videoUrl,
+        variants: versions.length ? versions.map(version => ({
+            url: stringProp(version.url)!,
+            type: numberProp(version.type),
+            width: numberProp(version.width),
+            height: numberProp(version.height),
+            bandwidth: numberProp(version.bandwidth),
+        })) : [{ url: videoUrl }],
         posterUrl: image?.url ?? videoUrl,
         width,
         height,
@@ -966,15 +964,13 @@ function reelAuthor(value: unknown) {
 export function parseReelInfoResponse(
     json: unknown,
     payload: ReelPayload,
-    actionState?: { mediaId: string; hasLiked?: boolean; hasSaved?: boolean },
 ): ReelMedia {
     const root = objectProp(json);
     const item = Array.isArray(root?.items) ? objectProp(root.items[0]) : undefined;
     const mediaId = instagramMediaId(item);
     const shortcode = stringProp(item?.code) ?? stringProp(item?.shortcode);
     if (!item || !mediaId || shortcode !== payload.shortcode ||
-        (payload.mediaId && !equivalentMediaId(mediaId, payload.mediaId)) ||
-        (actionState && !equivalentMediaId(mediaId, actionState.mediaId)))
+        (payload.mediaId && !equivalentMediaId(mediaId, payload.mediaId)))
         throw new Error('Instagram reel REST identity did not match the requested reel');
     const canDownload = booleanProp(item.is_third_party_downloads_eligible) ?? false;
     const isCarousel = numberProp(item.media_type) === 8 ||
@@ -1002,9 +998,9 @@ export function parseReelInfoResponse(
         items: items as ReelMediaItem[],
         likeCount: numberProp(item.like_count) ?? 0,
         commentCount: numberProp(item.comment_count) ?? 0,
-        hasLiked: booleanProp(item.has_liked) ?? actionState?.hasLiked ?? false,
+        hasLiked: booleanProp(item.has_liked) ?? false,
         hasSaved: booleanProp(item.has_viewer_saved) ?? booleanProp(item.has_saved) ??
-            actionState?.hasSaved ?? false,
+            false,
         canSave: booleanProp(item.can_viewer_save) ?? true,
         canDownload,
     };

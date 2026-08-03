@@ -14,14 +14,10 @@ import {
     type InstagramGraphqlOperationName,
 } from '../lib/instagram-api/catalog';
 import { createInstagramRpcHandlers } from '../lib/instagram-api/handlers';
-import {
-    parseReelInfoResponse,
-    parseReelCommentsResponse,
-    parseReelMediaResponse,
-} from '../lib/instagram-api/parsers';
+import { parseReelCommentsResponse } from '../lib/instagram-api/parsers';
+import { loadReelMedia } from '../lib/instagram-api/reels';
 import type { Result, RpcMap } from '../lib/domain';
 
-type ReelPayload = Parameters<RpcMap['getReelMedia']>[0];
 type ReelCommentsPayload = Parameters<RpcMap['getReelComments']>[0];
 type RemoteRpcName = Exclude<keyof RpcMap, 'getPins'>;
 const REMOTE_RPC_NAMES = [
@@ -206,40 +202,6 @@ async function executeOperation(
     );
 }
 
-function validateReelPayload(value: unknown): ReelPayload {
-    if (!isRecord(value)) throw new Error('Invalid Instagram reel payload');
-    if (Object.keys(value).some(key => key !== 'shortcode' && key !== 'mediaId'))
-        throw new Error('Invalid Instagram reel payload fields');
-    if (
-        typeof value.shortcode !== 'string' ||
-        value.shortcode.trim().length === 0 ||
-        value.shortcode.length > 128
-    )
-        throw new Error('Invalid Instagram reel shortcode');
-    if (
-        value.mediaId !== undefined &&
-        (typeof value.mediaId !== 'string' ||
-            !/^\d{1,64}$/.test(value.mediaId))
-    )
-        throw new Error('Invalid Instagram reel media ID');
-    return value as ReelPayload;
-}
-
-function reelMediaRequest(payload: ReelPayload): GraphqlRequest {
-    return {
-        friendlyName: FRIENDLY_NAMES.reelMedia,
-        docId: DOC_IDS.reelMedia,
-        endpoint: '/graphql/query',
-        kind: 'query',
-        variables: {
-            shortcode: payload.shortcode,
-            fetch_tagged_user_count: null,
-            hoisted_comment_id: null,
-            hoisted_reply_id: null,
-        },
-    };
-}
-
 async function fetchReelInfo(mediaId: string): Promise<unknown> {
     const response = await fetch(
         `https://www.instagram.com/api/v1/media/${mediaId}/info/`,
@@ -257,15 +219,7 @@ async function fetchReelInfo(mediaId: string): Promise<unknown> {
 }
 
 async function getReelMedia(value: unknown) {
-    const payload = validateReelPayload(value);
-    const parsed = parseReelMediaResponse(
-        await graphql(reelMediaRequest(payload)),
-        payload,
-    );
-    const mediaId = parsed.mediaId;
-    if (!/^\d{1,64}$/.test(mediaId))
-        throw new Error('Invalid resolved Instagram reel media ID');
-    return parseReelInfoResponse(await fetchReelInfo(mediaId), payload, parsed);
+    return loadReelMedia(value, fetchReelInfo);
 }
 
 function validateReelCommentsPayload(value: unknown): ReelCommentsPayload {
