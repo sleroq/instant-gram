@@ -39,6 +39,10 @@ Instagram API/query documentation is in `docs/instagram-*.md`. Browser request
 examples are in `docs/examples/*.har`; consult them when request or response
 shape is relevant, and keep Instagram protocol knowledge out of UI components.
 
+Use DevTools MCP selectively when code inspection and automated checks are not
+enough to verify tricky behavior or inspect the live add-on or Instagram web
+client. Do not use it for routine changes that can be verified locally.
+
 Frontend verification:
 
 ```sh
