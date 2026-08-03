@@ -200,31 +200,68 @@ test('reaction handler returns the authoritative captured reaction state', async
     }]);
 });
 
+test('reel action handlers dispatch distinct captured mutations and validate receipts', async () => {
+    const calls: Call[] = [];
+    const handlers = createInstagramRpcHandlers(executor({
+        PolarisAPILikePostMutation: {
+            data: { xig_media_like: { media: { id: '3953224267254190889_5654194264', has_liked: true } } },
+        },
+        PolarisAPIUnsavePostMutation: {
+            data: { xig_media_unsave: { media: { id: '3953224267254190889_5654194264' } } },
+        },
+    }, calls));
+    assert.deepEqual(await handlers.setReelLiked({
+        mediaId: '3953224267254190889', liked: true,
+    }), { mediaId: '3953224267254190889', hasLiked: true });
+    assert.deepEqual(await handlers.setReelSaved({
+        mediaId: '3953224267254190889', saved: false,
+    }), { mediaId: '3953224267254190889', hasSaved: false });
+    assert.deepEqual(calls, [{
+        operation: 'PolarisAPILikePostMutation',
+        input: { mediaId: '3953224267254190889', clientMutationId: '1' },
+    }, {
+        operation: 'PolarisAPIUnsavePostMutation',
+        input: { mediaId: '3953224267254190889', clientMutationId: '2' },
+    }]);
+    await assert.rejects(
+        createInstagramRpcHandlers(executor({
+            PolarisAPILikePostMutation: {
+                data: { xig_media_like: { media: { id: '999_5654194264' } } },
+            },
+        }, [])).setReelLiked({ mediaId: '3953224267254190889', liked: true }),
+        /did not match/,
+    );
+});
+
 test('conversation pin handler selects the exact mutation and rejects mismatched receipts', async () => {
     const calls: Call[] = [];
     const handlers = createInstagramRpcHandlers(executor({
         useIGDPinThreadMutation: {
-            data: { xig_direct_pin_thread: { is_pin: true, id: 'thread-fbid' } },
+            data: { xig_direct_pin_thread: { is_pin: true, id: '1789001' } },
         },
         useIGDUnpinThreadMutation: {
-            data: { xig_direct_pin_thread: { is_pin: true, id: 'thread-fbid' } },
+            data: { xig_direct_pin_thread: { is_pin: true, id: '1789001' } },
         },
     }, calls));
     assert.deepEqual(await handlers.togglePin({
-        threadKey: 'route-key', threadFbid: 'thread-fbid', pin: true,
+        threadKey: 'route-key', threadFbid: '1789001', pin: true,
     }), {
         pinned: [],
-        receipt: { threadFbid: 'thread-fbid', isPinned: true },
+        receipt: { threadFbid: '1789001', isPinned: true },
     });
     await assert.rejects(
-        handlers.togglePin({ threadKey: 'route-key', threadFbid: 'thread-fbid', pin: false }),
+        handlers.togglePin({ threadKey: 'route-key', threadFbid: '1789001', pin: false }),
         /did not match/,
     );
     assert.deepEqual(calls.map(call => call.operation), [
         'useIGDPinThreadMutation',
         'useIGDUnpinThreadMutation',
     ]);
-    assert.deepEqual(calls[0]?.input, { threadFbid: 'thread-fbid' });
+    assert.deepEqual(calls[0]?.input, { threadFbid: '1789001' });
+    await assert.rejects(
+        handlers.togglePin({ threadKey: 'opaque-route', threadFbid: 'not-numeric', pin: true }),
+        /Invalid Instagram thread FBID/,
+    );
 });
 
 test('unread count includes pending and spam bounded pages', async () => {
@@ -384,7 +421,7 @@ test('every closed catalog operation has a semantic or secondary RPC route', () 
         Object.keys(INSTAGRAM_RPC_OPERATION_REACHABILITY).sort(),
         Object.keys(INSTAGRAM_GRAPHQL_OPERATIONS).sort(),
     );
-    assert.equal(Object.keys(INSTAGRAM_RPC_OPERATION_REACHABILITY).length, 31);
+    assert.equal(Object.keys(INSTAGRAM_RPC_OPERATION_REACHABILITY).length, 35);
     assert.equal(
         INSTAGRAM_RPC_OPERATION_REACHABILITY.IGDirectCutoutStickerShareMutation,
         'sendCutoutSticker',

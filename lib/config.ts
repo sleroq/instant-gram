@@ -32,6 +32,10 @@ export const DOC_IDS = {
     musicPlaylistPage: '27812422605032626',
     olderMessages: '25255103937520139',
     reelMedia: '8845758582119845',
+    likeReel: '27358573637160660',
+    unlikeReel: '37071567952434061',
+    saveReel: '27326721586982367',
+    unsaveReel: '27203919972607144',
 } as const;
 
 export const FRIENDLY_NAMES = {
@@ -69,6 +73,10 @@ export const FRIENDLY_NAMES = {
     musicPlaylistPage: 'playlistMusicRefetchQuery',
     olderMessages: 'IGDMessageListOffMsysQuery',
     reelMedia: 'PolarisPostActionLoadPostQueryQuery',
+    likeReel: 'PolarisAPILikePostMutation',
+    unlikeReel: 'PolarisAPIUnlikePostMutation',
+    saveReel: 'PolarisAPISavePostMutation',
+    unsaveReel: 'PolarisAPIUnsavePostMutation',
 } as const;
 
 export const INSTAGRAM_GRAPHQL_FLAGS = {

@@ -21,6 +21,7 @@ import { computeChatWindow } from './virtual-list';
 
 const ROW_HEIGHT = 72;
 const REACTION_EMOJIS = ['❤', '😂', '😮', '😢', '😡', '👍'];
+let keyboardScrollSequence = 0;
 
 type AppProps = { store: FrontendStore };
 
@@ -28,6 +29,7 @@ type SurfacePoint = { x: number; y: number; align?: 'left' | 'right' };
 
 export default function App({ store }: AppProps) {
     useStore(store);
+    useVimNavigation(store);
     const state = store.state;
     const selected = state.selectedThreadId
         ? state.inbox.byId[state.selectedThreadId]
@@ -68,6 +70,7 @@ export default function App({ store }: AppProps) {
 
 function ChatList({ store }: AppProps) {
     const [scrollTop, setScrollTop] = useState(0);
+    const suppressPaginationRef = useRef(false);
     const state = store.state;
     const ids = store.orderedThreadIds();
     const { start, end } = computeChatWindow(scrollTop, ids.length);
@@ -78,7 +81,9 @@ function ChatList({ store }: AppProps) {
         : undefined;
 
     useEffect(() => {
-        if (end >= ids.length - 5) store.loadNextInboxPage();
+        const suppressPagination = suppressPaginationRef.current;
+        suppressPaginationRef.current = false;
+        if (!suppressPagination && end >= ids.length - 5) store.loadNextInboxPage();
         store.warmVisibleThreads(visibleIds);
     }, [
         visibleKey,
@@ -110,9 +115,12 @@ function ChatList({ store }: AppProps) {
     return (
         <div
             className="chat-list"
-            onScroll={(event: UIEvent<HTMLDivElement>) =>
-                setScrollTop(event.currentTarget.scrollTop)
-            }
+            onScroll={(event: UIEvent<HTMLDivElement>) => {
+                if (event.currentTarget.dataset.keyboardNavigationScroll) {
+                    suppressPaginationRef.current = true;
+                }
+                setScrollTop(event.currentTarget.scrollTop);
+            }}
         >
             <div
                 className="chat-list__spacer"
@@ -122,6 +130,7 @@ function ChatList({ store }: AppProps) {
                 {visibleIds.map((id, offset) => (
                     <ChatRow
                         key={id}
+                        store={store}
                         thread={state.inbox.byId[id]}
                         index={start + offset}
                         selected={id === state.selectedThreadId}
@@ -149,6 +158,7 @@ function ChatList({ store }: AppProps) {
 }
 
 type ChatRowProps = {
+    store: FrontendStore;
     thread: Thread;
     index: number;
     selected: boolean;
@@ -159,19 +169,67 @@ type ChatRowProps = {
 };
 
 function ChatRow({
-    thread, index, selected, pinned, pinMutation, onSelect, onTogglePin,
+    store, thread, index, selected, pinned, pinMutation, onSelect, onTogglePin,
 }: ChatRowProps) {
     const [menuPoint, setMenuPoint] = useState<SurfacePoint>();
     const rowRef = useRef<HTMLButtonElement>(null as unknown as HTMLButtonElement);
+    const restoreFocusRef = useRef<{ frames: number[]; selectedThreadId?: string }>();
     const canPin = Boolean(thread.threadFbid);
     const longPress = useLongPress(openMenu, canPin);
-    const user = thread.users[0];
     const snippet = thread.lastMessage ? messageSummary(thread.lastMessage) : 'No messages yet';
 
     function openMenu(point: SurfacePoint) {
         if (!canPin) return;
         setMenuPoint(point);
     }
+
+    const cancelFocusRestore = () => {
+        const intent = restoreFocusRef.current;
+        intent?.frames.forEach(frame => cancelAnimationFrame(frame));
+        restoreFocusRef.current = undefined;
+    };
+
+    const scheduleFocusRestore = () => {
+        cancelFocusRestore();
+        const intent = {
+            frames: [] as number[],
+            selectedThreadId: store.state.selectedThreadId,
+        };
+        restoreFocusRef.current = intent;
+        const restore = (remainingAttempts: number) => {
+            const frame = requestAnimationFrame(() => {
+                if (restoreFocusRef.current !== intent) return;
+                const active = document.activeElement;
+                if (
+                    store.state.selectedThreadId !== intent.selectedThreadId ||
+                    (active instanceof HTMLElement && active.isConnected &&
+                        active !== document.body && active !== rowRef.current)
+                ) {
+                    cancelFocusRestore();
+                    return;
+                }
+                if (!restoreChatRowFocus(store, thread.key) && remainingAttempts > 0) {
+                    restore(remainingAttempts - 1);
+                    return;
+                }
+                restoreFocusRef.current = undefined;
+            });
+            intent.frames.push(frame);
+        };
+        const first = requestAnimationFrame(() => restore(2));
+        intent.frames.push(first);
+    };
+
+    useEffect(() => {
+        const cancelForNewFocus = (event: FocusEvent) => {
+            if (restoreFocusRef.current && event.target !== rowRef.current) cancelFocusRestore();
+        };
+        document.addEventListener('focusin', cancelForNewFocus, true);
+        return () => {
+            document.removeEventListener('focusin', cancelForNewFocus, true);
+            cancelFocusRestore();
+        };
+    }, [thread.key]);
 
     return (
         <div
@@ -180,6 +238,7 @@ function ChatRow({
         >
             <button
                 ref={rowRef}
+                data-thread-id={thread.key}
                 type="button"
                 className="chat-row__select"
                 onClick={(event: ReactMouseEvent<HTMLButtonElement>) => {
@@ -207,13 +266,7 @@ function ChatRow({
                 aria-busy={pinMutation?.status === 'pending'}
                 aria-label={`${thread.title}${thread.isMuted ? ', muted' : ''}${pinned ? ', pinned' : ''}`}
             >
-                <span className="avatar">
-                    {user?.picUrl ? (
-                        <img src={user.picUrl} alt="" width="52" height="52" loading="lazy" />
-                    ) : (
-                        <span>{initials(thread.title)}</span>
-                    )}
-                </span>
+                <ChatAvatar thread={thread} />
                 <span className="chat-row__body">
                     <span className="chat-row__topline">
                         <strong>{thread.title}</strong>
@@ -245,12 +298,49 @@ function ChatRow({
                         label: (pinMutation?.pin ?? !pinned)
                             ? 'Pin conversation'
                             : 'Unpin conversation',
-                        action: onTogglePin,
+                        action: () => {
+                            onTogglePin();
+                            scheduleFocusRestore();
+                        },
                         disabled: pinMutation?.status === 'pending',
                     }]}
                 />
             )}
         </div>
+    );
+}
+
+function ChatAvatar({ thread }: { thread: Thread }) {
+    const users = thread.isGroup ? thread.users.slice(0, 5) : thread.users.slice(0, 1);
+
+    if (thread.isGroup && users.length > 1) {
+        return (
+            <span
+                className={`avatar-stack avatar-stack--${users.length}`}
+                aria-hidden="true"
+            >
+                {users.map(user => (
+                    <span key={user.id} className="avatar avatar-stack__item">
+                        {user.picUrl ? (
+                            <img src={user.picUrl} alt="" width="30" height="30" loading="lazy" />
+                        ) : (
+                            <span>{initials(user.fullName || user.username)}</span>
+                        )}
+                    </span>
+                ))}
+            </span>
+        );
+    }
+
+    const user = users[0];
+    return (
+        <span className="avatar" aria-hidden="true">
+            {user?.picUrl ? (
+                <img src={user.picUrl} alt="" width="52" height="52" loading="lazy" />
+            ) : (
+                <span>{initials(thread.title)}</span>
+            )}
+        </span>
     );
 }
 
@@ -313,6 +403,7 @@ function MessagePane({
         const scroller = scrollerRef.current;
         const sentinel = sentinelRef.current;
         if (!scroller || !sentinel) return false;
+        if (scroller.dataset.keyboardNavigationScroll) return false;
         const rootRect = scroller.getBoundingClientRect();
         const sentinelRect = sentinel.getBoundingClientRect();
         return sentinelRect.bottom >= rootRect.top - 750 && sentinelRect.top <= rootRect.bottom;
@@ -603,7 +694,7 @@ function MessagePane({
                     <p>{thread.isGroup ? `${thread.users.length} members` : 'Instagram'}</p>
                 </div>
             </header>
-            <div className="messages" ref={scrollerRef} onScroll={onScroll}>
+            <div className="messages" data-history-thread-id={thread.key} ref={scrollerRef} onScroll={onScroll}>
                 {(!history || history.status === 'loading') && (
                     <ListState label="Loading recent messages…" spinner />
                 )}
@@ -795,7 +886,7 @@ const MessageRow = memo(function MessageRow({
             ref={rowRef}
             data-message-id={message.id}
             className="message-row"
-            tabIndex={ownsContextMenu ? 0 : undefined}
+            tabIndex={0}
             aria-label={ownsContextMenu
                 ? messageAccessibleLabel(message, senderLabel, pending, failed)
                 : undefined}
@@ -830,7 +921,7 @@ const MessageRow = memo(function MessageRow({
                     <time className="status-surface" dateTime={new Date(message.ts).toISOString()}>{formatMessageDate(message.ts)}</time>
                 </div>
             )}
-            <div className={`message${outgoing ? ' message--outgoing' : ''}${grouped ? ' message--grouped' : ''}${message.kind === 'reaction_log' ? ' message--log' : ''}`}>
+            <div className={`message${outgoing ? ' message--outgoing' : ''}${grouped ? ' message--grouped' : ''}${message.kind === 'reaction_log' || message.kind === 'activity' ? ' message--log' : ''}`}>
                 <div className="message__bubble">
                     {senderName && <strong className="message__sender-name">{senderName}</strong>}
                     {'replyPreview' in message && message.replyPreview && (
@@ -1296,6 +1387,7 @@ function MessageContent({ message }: { message: Message }) {
     switch (message.kind) {
         case 'text': return <span>{message.text}</span>;
         case 'reaction_log': return <span>{message.fragment}</span>;
+        case 'activity': return <span>{message.text}</span>;
         case 'reel_share': return (
             <a className="message-card" href={message.targetUrl} target="_blank" rel="noreferrer">
                 <img src={message.thumbUrl} alt={`Reel from ${message.author}`} loading="lazy" />
@@ -1331,7 +1423,14 @@ function MessageContent({ message }: { message: Message }) {
                 ))}
             </span>
         );
-        case 'unsupported': return <span className="message__unsupported">Unsupported message ({message.contentType})</span>;
+        case 'unsupported': return (
+            <span className="message__unsupported">
+                {message.fallback.label}
+                {message.fallback.preview && message.fallback.preview !== message.fallback.label
+                    ? `: ${message.fallback.preview}`
+                    : undefined}
+            </span>
+        );
     }
 }
 
@@ -1385,14 +1484,198 @@ function useStore(store: FrontendStore) {
     }, [store]);
 }
 
+function useVimNavigation(store: FrontendStore) {
+    const activePaneRef = useRef<'chats' | 'history'>('chats');
+    const lastMessageByThreadRef = useRef(new Map<string, string>());
+    const navigationTokenRef = useRef(0);
+
+    useEffect(() => {
+        const focusChat = (threadId: string, select: boolean) => {
+            const navigationToken = ++navigationTokenRef.current;
+            const ids = store.orderedThreadIds();
+            const index = ids.indexOf(threadId);
+            if (index < 0) return;
+            activePaneRef.current = 'chats';
+            if (select) store.selectThread(threadId);
+            const scroller = document.querySelector<HTMLElement>('.chat-list');
+            if (scroller) {
+                const top = index * ROW_HEIGHT;
+                if (top < scroller.scrollTop) setKeyboardScrollTop(scroller, top);
+                else if (top + ROW_HEIGHT > scroller.scrollTop + scroller.clientHeight) {
+                    setKeyboardScrollTop(scroller, top + ROW_HEIGHT - scroller.clientHeight);
+                }
+            }
+            const focus = () => {
+                if (navigationTokenRef.current !== navigationToken) return true;
+                const row = document.querySelector<HTMLElement>(
+                    `[data-thread-id="${cssEscape(threadId)}"]`,
+                );
+                row?.focus({ preventScroll: true });
+                return Boolean(row);
+            };
+            if (!focus()) requestAnimationFrame(() => requestAnimationFrame(focus));
+        };
+
+        const focusHistory = (navigationToken = ++navigationTokenRef.current) => {
+            if (navigationTokenRef.current !== navigationToken) return;
+            const threadId = store.state.selectedThreadId;
+            if (!threadId) return;
+            const pane = document.querySelector<HTMLElement>('.messages');
+            if (pane?.dataset.historyThreadId !== threadId) {
+                requestAnimationFrame(() => requestAnimationFrame(() => focusHistory(navigationToken)));
+                return;
+            }
+            const rows = [...document.querySelectorAll<HTMLElement>('.messages [data-message-id]')];
+            if (!rows.length) return;
+            const remembered = lastMessageByThreadRef.current.get(threadId);
+            const row = remembered
+                ? rows.find(item => item.dataset.messageId === remembered) ?? rows.at(-1)
+                : rows.at(-1);
+            activePaneRef.current = 'history';
+            row?.focus({ preventScroll: true });
+            if (row && pane) revealInScroller(pane, row);
+        };
+
+        const onFocus = (event: FocusEvent) => {
+            const target = event.target;
+            if (!(target instanceof Element)) return;
+            navigationTokenRef.current++;
+            const chat = target.closest<HTMLElement>('[data-thread-id]');
+            if (chat) {
+                activePaneRef.current = 'chats';
+                return;
+            }
+            const message = target.closest<HTMLElement>('[data-message-id]');
+            const threadId = store.state.selectedThreadId;
+            if (message?.dataset.messageId && threadId) {
+                activePaneRef.current = 'history';
+                lastMessageByThreadRef.current.set(threadId, message.dataset.messageId);
+            }
+        };
+
+        const onKey = (event: globalThis.KeyboardEvent) => {
+            if (!['j', 'k', 'h', 'l'].includes(event.key) ||
+                event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+            const target = event.target;
+            if (target instanceof Element && (
+                isEditableTarget(target) ||
+                target.closest('.context-menu, .reaction-picker, [role="dialog"], [aria-modal="true"]')
+            )) return;
+            if (document.querySelector('.context-menu, .reaction-picker, [role="dialog"], [aria-modal="true"]')) return;
+
+            if (event.key === 'h') {
+                const selected = store.state.selectedThreadId;
+                if (!selected || activePaneRef.current === 'chats') return;
+                event.preventDefault();
+                focusChat(selected, false);
+                return;
+            }
+            if (event.key === 'l') {
+                if (activePaneRef.current !== 'chats') return;
+                event.preventDefault();
+                focusHistory();
+                return;
+            }
+
+            event.preventDefault();
+            if (activePaneRef.current === 'chats') {
+                const ids = store.orderedThreadIds();
+                if (!ids.length) return;
+                const focused = document.activeElement instanceof HTMLElement
+                    ? document.activeElement.closest<HTMLElement>('[data-thread-id]')?.dataset.threadId
+                    : undefined;
+                const current = focused ?? store.state.selectedThreadId;
+                const currentIndex = current ? ids.indexOf(current) : -1;
+                const nextIndex = currentIndex < 0 ? 0 : Math.max(0, Math.min(
+                    ids.length - 1, currentIndex + (event.key === 'j' ? 1 : -1),
+                ));
+                focusChat(ids[nextIndex], ids[nextIndex] !== store.state.selectedThreadId);
+                return;
+            }
+
+            const rows = [...document.querySelectorAll<HTMLElement>('.messages [data-message-id]')];
+            if (!rows.length) return;
+            const threadId = store.state.selectedThreadId;
+            const focusedIndex = rows.indexOf(document.activeElement as HTMLElement);
+            const remembered = threadId ? lastMessageByThreadRef.current.get(threadId) : undefined;
+            const rememberedIndex = remembered
+                ? rows.findIndex(row => row.dataset.messageId === remembered)
+                : -1;
+            const currentIndex = focusedIndex >= 0
+                ? focusedIndex
+                : rememberedIndex >= 0 ? rememberedIndex : rows.length - 1;
+            const nextIndex = Math.max(0, Math.min(
+                rows.length - 1,
+                currentIndex + (event.key === 'j' ? 1 : -1),
+            ));
+            const row = rows[nextIndex];
+            row.focus({ preventScroll: true });
+            const pane = row.closest<HTMLElement>('.messages');
+            if (pane) revealInScroller(pane, row);
+        };
+
+        document.addEventListener('focusin', onFocus, true);
+        document.addEventListener('keydown', onKey, true);
+        return () => {
+            document.removeEventListener('focusin', onFocus, true);
+            document.removeEventListener('keydown', onKey, true);
+            lastMessageByThreadRef.current.clear();
+        };
+    }, [store]);
+}
+
+function restoreChatRowFocus(store: FrontendStore, threadId: string) {
+    const index = store.orderedThreadIds().indexOf(threadId);
+    const scroller = document.querySelector<HTMLElement>('.chat-list');
+    if (index < 0 || !scroller) return false;
+    const top = index * ROW_HEIGHT;
+    if (top < scroller.scrollTop) setKeyboardScrollTop(scroller, top);
+    else if (top + ROW_HEIGHT > scroller.scrollTop + scroller.clientHeight) {
+        setKeyboardScrollTop(scroller, top + ROW_HEIGHT - scroller.clientHeight);
+    }
+    const row = document.querySelector<HTMLElement>(
+        `[data-thread-id="${cssEscape(threadId)}"]`,
+    );
+    row?.focus({ preventScroll: true });
+    return Boolean(row);
+}
+
+function isEditableTarget(target: Element) {
+    if (target.closest('input, textarea, select')) return true;
+    const htmlTarget = target instanceof HTMLElement ? target : target.parentElement;
+    return Boolean(htmlTarget?.isContentEditable);
+}
+
+function setKeyboardScrollTop(scroller: HTMLElement, scrollTop: number) {
+    const token = String(++keyboardScrollSequence);
+    scroller.dataset.keyboardNavigationScroll = token;
+    scroller.scrollTop = scrollTop;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (scroller.dataset.keyboardNavigationScroll === token) {
+            delete scroller.dataset.keyboardNavigationScroll;
+        }
+    }));
+}
+
+function revealInScroller(scroller: HTMLElement, row: HTMLElement) {
+    const scrollerRect = scroller.getBoundingClientRect();
+    const rowRect = row.getBoundingClientRect();
+    if (rowRect.top < scrollerRect.top) {
+        setKeyboardScrollTop(scroller, scroller.scrollTop + rowRect.top - scrollerRect.top);
+    } else if (rowRect.bottom > scrollerRect.bottom) {
+        setKeyboardScrollTop(scroller, scroller.scrollTop + rowRect.bottom - scrollerRect.bottom);
+    }
+}
+
 function messageSummary(message: Message) {
     switch (message.kind) {
         case 'text': return message.text;
         case 'reaction_log': return message.fragment;
+        case 'activity': return message.text;
         case 'reel_share': return message.caption || `Reel from ${message.author}`;
         case 'inline_share': return message.title;
         case 'image': return message.images.length === 1 ? 'Photo' : `${message.images.length} photos`;
-        case 'unsupported': return `Unsupported message (${message.contentType})`;
+        case 'unsupported': return message.fallback.preview || message.fallback.label;
     }
 }
 
@@ -1502,7 +1785,11 @@ function replyPreviewFor(message: Message): Parameters<typeof ReplyPreview>[0]['
             thumbUrl: message.images[0]?.previewUrl ?? message.images[0]?.url,
         };
         case 'reaction_log': return { kind: 'unavailable', label: message.fragment };
-        case 'unsupported': return { kind: 'unavailable', label: message.fallback.label };
+        case 'activity': return { kind: 'unavailable', label: message.text };
+        case 'unsupported': return {
+            kind: 'unavailable',
+            label: message.fallback.preview || message.fallback.label,
+        };
     }
 }
 

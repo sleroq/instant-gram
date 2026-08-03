@@ -9,7 +9,7 @@ tags:
     - pins
     - accessibility
 created_at: 2026-08-03T13:17:25Z
-updated_at: 2026-08-03T18:00:00Z
+updated_at: 2026-08-03T19:30:00Z
 ---
 
 ## Browser finding (2026-08-03)
@@ -33,3 +33,20 @@ Expose a compact, accessible pin/unpin control (or accessible context action) fr
   and touch context interactions.
 - Added catalog, parser, handler, store, and production browser regressions and
   documented the 2026-08-03 private-protocol source and doc-ID drift caveat.
+
+## Corrective review and Vim navigation
+
+- [x] Model persisted pins as an authoritative committed baseline plus ordered
+  optimistic operations, with read revisions and stale-generation protection.
+- [x] Validate mutation and receipt FBIDs as numeric Instagram IDs while keeping
+  route keys opaque.
+- [x] Restore the invoking chat row after a pin action reorders it.
+- [x] Add pane-local `j`/`k`, `h`/`l` transitions, per-thread message focus
+  memory, editor/surface suppression, and bounded-history behavior.
+- [x] Add focused state, parser/handler, queue, and production browser coverage.
+- [x] Sequence overlapping pin reads so stale successes and failures cannot
+  commit data or status across newer reads or pin revisions.
+- [x] Make Vim selection reveal virtual chats and rendered messages without
+  pagination, while covering DOM editing semantics and stale focus restoration.
+- [x] Two consecutive full test passes with identical discovery counts,
+  typecheck, production build, diff-check, and `beans check` all pass.

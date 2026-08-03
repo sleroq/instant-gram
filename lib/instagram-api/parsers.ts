@@ -11,7 +11,12 @@ import type {
     SetReactionResult,
     InstagramSecondaryGraphqlResult,
     Page,
+    ReelComment,
+    ReelComments,
+    ReelLikeReceipt,
     ReelMedia,
+    ReelMediaItem,
+    ReelSaveReceipt,
     ReplyPreview,
     SentMessage,
     SentTextMessage,
@@ -60,6 +65,29 @@ function textFragments(value: unknown): string | undefined {
         .join('')
         .trim();
     return text || undefined;
+}
+
+function xmaTitle(xma: JsonObject | undefined): string | undefined {
+    return (
+        stringProp(xma?.header_title_text) ??
+        stringProp(xma?.xmaHeaderTitle) ??
+        stringProp(xma?.title_text) ??
+        stringProp(xma?.xmaTitle) ??
+        stringProp(xma?.caption_body_text) ??
+        stringProp(xma?.eyebrow_text)
+    );
+}
+
+function xmaSubtitle(xma: JsonObject | undefined, content?: JsonObject): string | undefined {
+    return (
+        stringProp(xma?.subtitle_text) ??
+        stringProp(xma?.caption_body_text) ??
+        stringProp(content?.xma_text_body)
+    );
+}
+
+function xmaThumb(xma: JsonObject | undefined): string | undefined {
+    return imageUrl(xma?.preview_image) ?? imageUrl(xma?.xmaPreviewImage);
 }
 
 function messageId(node: JsonObject): string {
@@ -126,22 +154,18 @@ function replyPreview(value: JsonObject | undefined): ReplyPreview | undefined {
 
     const xma = objectProp(content?.xma);
     if (xma) {
-        const title =
-            stringProp(xma.header_title_text) ??
-            stringProp(xma.xmaHeaderTitle) ??
-            stringProp(xma.title_text) ??
-            stringProp(xma.caption_body_text) ??
-            stringProp(content?.xma_text_body);
+        const title = xmaTitle(xma) ?? stringProp(content?.xma_text_body);
         if (title)
             return {
                 kind: 'media',
                 title,
-                subtitle: stringProp(xma.caption_body_text),
-                thumbUrl:
-                    imageUrl(xma.preview_image) ??
-                    imageUrl(xma.xmaPreviewImage),
+                subtitle: xmaSubtitle(xma, content),
+                thumbUrl: xmaThumb(xma),
             };
     }
+
+    if (stringProp(value.content_type) === 'IMAGES')
+        return { kind: 'media', title: 'Photo' };
 
     return { kind: 'unavailable', label: 'Original message unavailable' };
 }
@@ -155,7 +179,8 @@ function reelMediaId(
     targetUrl: string,
 ): string | undefined {
     const targetId = stringProp(xma.target_id);
-    if (targetId) return targetId;
+    const normalizedTargetId = targetId && /^(\d+)(?:_\d+)?$/.exec(targetId)?.[1];
+    if (normalizedTargetId) return normalizedTargetId;
     try {
         const id = new URL(targetUrl).searchParams.get('id')?.split('_')[0];
         return id && /^\d+$/.test(id) ? id : undefined;
@@ -190,30 +215,25 @@ function fallbackFor(
 ): MessageFallback {
     const xma = objectProp(content?.xma);
     const fragmentText = textFragments(content?.text_fragments);
-    const xmaTitle =
-        stringProp(xma?.header_title_text) ??
-        stringProp(xma?.xmaHeaderTitle) ??
-        stringProp(xma?.title_text) ??
-        stringProp(xma?.caption_body_text) ??
-        stringProp(xma?.eyebrow_text);
     const labels: Record<string, string> = {
+        IMAGES: 'Photo',
+        MESSAGE_INLINE_SHARE: 'Shared post',
         GEN_AI_RICH_RESPONSE_XMA: 'Meta AI response',
         GEN_AI_SEARCH_PLUGIN_RESPONSE_XMA: 'Meta AI search response',
         MONTAGE_SHARE_XMA: 'Story',
         IG_REELS_BLEND_VISITATION_XMAT: 'Reels blend activity',
     };
     return {
-        label: fragmentText ?? xmaTitle ?? labels[contentType] ?? 'Instagram activity',
+        label: xmaTitle(xma) ?? fragmentText ?? labels[contentType] ?? 'Unsupported message',
         preview:
             stringProp(node.text_body) ??
             stringProp(content?.text_body) ??
             stringProp(content?.messasge_text_body) ??
-            stringProp(content?.unified_response) ??
-            stringProp(content?.xma_text_body),
+            stringProp(content?.xma_text_body) ??
+            xmaSubtitle(xma, content),
         targetUrl:
             stringProp(xma?.target_url) ?? stringProp(xma?.targetUrl),
-        thumbUrl:
-            imageUrl(xma?.preview_image) ?? imageUrl(xma?.xmaPreviewImage),
+        thumbUrl: xmaThumb(xma),
     };
 }
 
@@ -249,6 +269,7 @@ export function parseMessage(value: unknown): Message | undefined {
                 stringProp(node.text_body) ??
                 stringProp(content?.text_body) ??
                 stringProp(content?.text) ??
+                textFragments(content?.text_fragments) ??
                 '',
         };
 
@@ -267,6 +288,26 @@ export function parseMessage(value: unknown): Message | undefined {
                 'Activity',
         };
 
+    const activityLabels: Record<string, string> = {
+        CHANGE_THREAD_IMAGE_XMAT: 'Group image changed',
+        CHANGE_THREAD_NAME_XMAT: 'Group name changed',
+        REMOVE_PARTICIPANT_XMAT: 'Participant removed',
+        THREAD_IGD_NEW_FRIEND_BUMP_XMAT: 'You are now connected on Instagram',
+    };
+    if (contentType in activityLabels)
+        return {
+            kind: 'activity',
+            id,
+            ts,
+            reactions: common.reactions,
+            isPinned: common.isPinned,
+            text:
+                stringProp(node.text_body) ??
+                stringProp(content?.text_body) ??
+                textFragments(content?.text_fragments) ??
+                activityLabels[contentType],
+        };
+
     if (contentType === 'IMAGES') {
         const images = parseImages(content);
         if (images.length > 0) return { ...common, kind: 'image', images };
@@ -276,18 +317,11 @@ export function parseMessage(value: unknown): Message | undefined {
     if (contentType === 'MESSAGE_INLINE_SHARE' && xma) {
         const targetUrl =
             stringProp(xma.target_url) ?? stringProp(xma.targetUrl);
-        const thumbUrl =
-            imageUrl(xma.preview_image) ?? imageUrl(xma.xmaPreviewImage) ?? '';
-        const title =
-            stringProp(xma.header_title_text) ??
-            stringProp(xma.xmaHeaderTitle) ??
-            'Instagram share';
-        const subtitle =
-            stringProp(xma.title_text) ??
-            stringProp(xma.caption_body_text) ??
-            stringProp(content?.xma_text_body);
+        const thumbUrl = xmaThumb(xma);
+        const title = xmaTitle(xma) ?? 'Instagram share';
+        const subtitle = xmaSubtitle(xma, content);
         const shortcode = targetUrl ? reelShortcode(targetUrl) : undefined;
-        if (targetUrl && shortcode)
+        if (targetUrl && shortcode && thumbUrl)
             return {
                 ...common,
                 kind: 'reel_share',
@@ -298,18 +332,15 @@ export function parseMessage(value: unknown): Message | undefined {
                 author: title,
                 caption: subtitle,
             };
-        return {
-            ...common,
-            kind: 'inline_share',
-            targetUrl,
-            thumbUrl,
-            title,
-            subtitle:
-                subtitle ??
-                (stringProp(xma.__typename) === 'SlideMessagePlaceholderXMA'
-                    ? 'Unavailable attachment'
-                    : undefined),
-        };
+        if (thumbUrl)
+            return {
+                ...common,
+                kind: 'inline_share',
+                targetUrl,
+                thumbUrl,
+                title,
+                subtitle,
+            };
     }
 
     return {
@@ -826,7 +857,7 @@ export function parsePinnedThreadResponse(json: unknown): PinThreadResult {
     const result = objectProp(responseData(json)?.xig_direct_pin_thread);
     const threadFbid = stringProp(result?.id);
     const isPinned = booleanProp(result?.is_pin);
-    if (!result || !threadFbid || isPinned === undefined)
+    if (!result || !threadFbid || !/^\d+$/.test(threadFbid) || isPinned === undefined)
         throw new Error('Instagram conversation pin receipt was not returned');
     return { threadFbid, isPinned };
 }
@@ -834,48 +865,193 @@ export function parsePinnedThreadResponse(json: unknown): PinThreadResult {
 export function parseReelMediaResponse(
     json: unknown,
     payload: ReelPayload,
-): ReelMedia | { mediaId: string } {
+): { mediaId: string; hasLiked?: boolean; hasSaved?: boolean } {
     const media = objectProp(responseData(json)?.xdt_shortcode_media);
-    const videoUrl = stringProp(media?.video_url);
-    if (!videoUrl) {
-        const mediaId =
-            stringProp(media?.pk) ?? stringProp(media?.id)?.split('_')[0];
-        if (mediaId) return { mediaId };
-        throw new Error('Instagram reel video URL was not returned');
+    const mediaId = instagramMediaId(media);
+    const shortcode = stringProp(media?.shortcode) ?? stringProp(media?.code);
+    if (mediaId && shortcode === payload.shortcode &&
+        (!payload.mediaId || equivalentMediaId(mediaId, payload.mediaId))) return {
+        mediaId,
+        hasLiked: booleanProp(media?.viewer_has_liked) ?? booleanProp(media?.has_liked),
+        hasSaved: booleanProp(media?.viewer_has_saved) ?? booleanProp(media?.has_viewer_saved),
+    };
+    throw new Error('Instagram reel GraphQL identity did not match the requested reel');
+}
+
+function equivalentMediaId(left: string, right: string): boolean {
+    const normalize = (value: string) => /^\d+$/.test(value)
+        ? value
+        : /^(\d+)_\d+$/.exec(value)?.[1];
+    const leftId = normalize(left);
+    return Boolean(leftId && leftId === normalize(right));
+}
+
+function instagramMediaId(node: JsonObject | undefined): string | undefined {
+    const pk = stringProp(node?.pk);
+    const id = stringProp(node?.id);
+    if (pk && /^\d+$/.test(pk) && (!id || equivalentMediaId(pk, id))) return pk;
+    if (id) {
+        const normalized = /^(\d+)(?:_\d+)?$/.exec(id)?.[1];
+        if (normalized && (!pk || equivalentMediaId(normalized, pk))) return normalized;
     }
-    return {
-        shortcode: payload.shortcode,
+    return undefined;
+}
+
+function candidateImage(node: JsonObject): { url: string; width?: number; height?: number } | undefined {
+    const imageVersions = objectProp(node.image_versions2);
+    const candidates = Array.isArray(imageVersions?.candidates)
+        ? imageVersions.candidates.map(objectProp).filter((item): item is JsonObject => Boolean(item))
+        : [];
+    const best = candidates.sort((a, b) =>
+        (numberProp(b.width) ?? 0) * (numberProp(b.height) ?? 0) -
+        (numberProp(a.width) ?? 0) * (numberProp(a.height) ?? 0)
+    )[0];
+    const url = stringProp(best?.url) ?? stringProp(node.display_url) ?? stringProp(node.thumbnail_src);
+    return url ? { url, width: numberProp(best?.width), height: numberProp(best?.height) } : undefined;
+}
+
+function reelItem(
+    node: JsonObject,
+    fallbackId: string,
+    canDownload: boolean,
+): ReelMediaItem | undefined {
+    const image = candidateImage(node);
+    const versions = (Array.isArray(node.video_versions) ? node.video_versions : [])
+        .map(objectProp)
+        .filter((version): version is JsonObject => Boolean(version))
+        .filter(version => stringProp(version.url))
+        .sort((a, b) => {
+            const height = (numberProp(b.height) ?? 0) - (numberProp(a.height) ?? 0);
+            return height || (numberProp(b.bandwidth) ?? 0) - (numberProp(a.bandwidth) ?? 0);
+        });
+    const videoUrl = stringProp(versions[0]?.url) ?? stringProp(node.video_url);
+    const id = stringProp(node.pk) ?? stringProp(node.id) ?? fallbackId;
+    const width = numberProp(versions[0]?.width) ?? image?.width;
+    const height = numberProp(versions[0]?.height) ?? image?.height;
+    if (videoUrl) return {
+        id,
+        kind: 'video',
         videoUrl,
-        durationSec: numberProp(media?.video_duration) ?? 0,
-        owner: stringProp(objectProp(media?.owner)?.username) ?? '',
+        posterUrl: image?.url ?? videoUrl,
+        width,
+        height,
+        durationSec: numberProp(node.video_duration) ?? 0,
+        canDownload,
+        downloadUrl: canDownload ? videoUrl : undefined,
+    };
+    if (image) return {
+        id,
+        kind: 'image',
+        imageUrl: image.url,
+        posterUrl: image.url,
+        width,
+        height,
+        canDownload,
+        downloadUrl: canDownload ? image.url : undefined,
+    };
+    return undefined;
+}
+
+function reelAuthor(value: unknown) {
+    const user = objectProp(value);
+    return {
+        id: stringProp(user?.pk) ?? stringProp(user?.id) ?? '',
+        username: stringProp(user?.username) ?? '',
+        fullName: stringProp(user?.full_name) ?? '',
+        picUrl: stringProp(user?.profile_pic_url) ?? null,
+        isVerified: booleanProp(user?.is_verified) ?? false,
     };
 }
 
 export function parseReelInfoResponse(
     json: unknown,
     payload: ReelPayload,
+    actionState?: { mediaId: string; hasLiked?: boolean; hasSaved?: boolean },
 ): ReelMedia {
     const root = objectProp(json);
     const item = Array.isArray(root?.items) ? objectProp(root.items[0]) : undefined;
-    const versions = (Array.isArray(item?.video_versions)
-        ? item.video_versions
-        : []
-    )
-        .map(objectProp)
-        .filter((version): version is JsonObject => Boolean(version))
-        .filter(version => stringProp(version.url))
-        .sort((a, b) => {
-            const height = (numberProp(b.height) ?? 0) - (numberProp(a.height) ?? 0);
-            return height ||
-                (numberProp(b.bandwidth) ?? 0) - (numberProp(a.bandwidth) ?? 0);
-        });
-    const videoUrl = stringProp(versions[0]?.url);
-    if (!videoUrl)
-        throw new Error('Instagram reel video URL was not returned');
+    const mediaId = instagramMediaId(item);
+    const shortcode = stringProp(item?.code) ?? stringProp(item?.shortcode);
+    if (!item || !mediaId || shortcode !== payload.shortcode ||
+        (payload.mediaId && !equivalentMediaId(mediaId, payload.mediaId)) ||
+        (actionState && !equivalentMediaId(mediaId, actionState.mediaId)))
+        throw new Error('Instagram reel REST identity did not match the requested reel');
+    const canDownload = booleanProp(item.is_third_party_downloads_eligible) ?? false;
+    const isCarousel = numberProp(item.media_type) === 8 ||
+        stringProp(item.product_type) === 'carousel_container';
+    if (isCarousel && (!Array.isArray(item.carousel_media) || !item.carousel_media.length))
+        throw new Error('Instagram reel carousel media was not returned');
+    const children = isCarousel ? (item.carousel_media as unknown[]).map(child => {
+        const parsed = objectProp(child);
+        if (!parsed) throw new Error('Instagram reel carousel contained malformed media');
+        return parsed;
+    }) : [item];
+    const items = children
+        .map((child, index) => reelItem(child, `${mediaId}:${index}`, canDownload));
+    if (!items.length || items.some(child => !child))
+        throw new Error('Instagram reel carousel contained unavailable media');
+    const caption = objectProp(item.caption);
     return {
+        id: mediaId,
         shortcode: payload.shortcode,
-        videoUrl,
-        durationSec: numberProp(item?.video_duration) ?? 0,
-        owner: stringProp(objectProp(item?.user)?.username) ?? '',
+        author: reelAuthor(item.user),
+        caption: stringProp(caption?.text),
+        takenAtMs: numberProp(item.taken_at) === undefined
+            ? undefined
+            : numberProp(item.taken_at)! * 1_000,
+        items: items as ReelMediaItem[],
+        likeCount: numberProp(item.like_count) ?? 0,
+        commentCount: numberProp(item.comment_count) ?? 0,
+        hasLiked: booleanProp(item.has_liked) ?? actionState?.hasLiked ?? false,
+        hasSaved: booleanProp(item.has_viewer_saved) ?? booleanProp(item.has_saved) ??
+            actionState?.hasSaved ?? false,
+        canSave: booleanProp(item.can_viewer_save) ?? true,
+        canDownload,
     };
+}
+
+export function parseReelCommentsResponse(json: unknown): ReelComments {
+    const root = objectProp(json);
+    if (!root || !Array.isArray(root.comments))
+        throw new Error('Instagram reel comments were not returned');
+    const items = root.comments.map(objectProp).filter((comment): comment is JsonObject => Boolean(comment)).map((comment): ReelComment | undefined => {
+        const id = stringProp(comment.pk) ?? stringProp(comment.id);
+        const text = stringProp(comment.text);
+        if (!id || !text) return undefined;
+        return {
+            id,
+            text,
+            createdAtMs: (numberProp(comment.created_at) ?? 0) * 1_000,
+            likeCount: numberProp(comment.comment_like_count) ?? 0,
+            hasLiked: booleanProp(comment.has_liked_comment) ?? false,
+            childCommentCount: numberProp(comment.child_comment_count) ?? 0,
+            author: reelAuthor(comment.user),
+        };
+    }).filter((comment): comment is ReelComment => Boolean(comment));
+    return {
+        items,
+        // The captures prove only this initial page. Do not expose an invented
+        // serialization of Instagram's structured next_min_id as a cursor.
+        hasNextPage: false,
+    };
+}
+
+export function parseReelLikeResponse(
+    json: unknown,
+    liked: boolean,
+): ReelLikeReceipt {
+    const result = objectProp(responseData(json)?.[liked ? 'xig_media_like' : 'xig_media_unlike']);
+    const mediaId = stringProp(objectProp(result?.media)?.id)?.split('_')[0];
+    if (!mediaId) throw new Error('Instagram reel like receipt was not returned');
+    return { mediaId, hasLiked: liked };
+}
+
+export function parseReelSaveResponse(
+    json: unknown,
+    saved: boolean,
+): ReelSaveReceipt {
+    const result = objectProp(responseData(json)?.[saved ? 'xig_media_save' : 'xig_media_unsave']);
+    const mediaId = stringProp(objectProp(result?.media)?.id)?.split('_')[0];
+    if (!mediaId) throw new Error('Instagram reel save receipt was not returned');
+    return { mediaId, hasSaved: saved };
 }

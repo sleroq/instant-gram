@@ -2,6 +2,7 @@ import '../lib/bridge';
 import { defineBackground } from 'wxt/utils/define-background';
 import browser from 'webextension-polyfill';
 import type { Result, RpcMap } from '../lib/domain';
+import { createSerialTaskQueue } from '../lib/errors';
 
 type PinStore = { pinned?: string[] };
 
@@ -40,10 +41,13 @@ const REMOTE_RPC_NAMES = [
     'getInbox',
     'getThread',
     'getReelMedia',
+    'getReelComments',
+    'setReelLiked',
+    'setReelSaved',
     'sendText',
     'setReaction',
 ] as const satisfies readonly DirectRemoteRpcName[];
-let pinQueue: Promise<unknown> = Promise.resolve();
+const enqueuePinMutation = createSerialTaskQueue();
 
 async function routeToAnchor<K extends RemoteRpcName>(
     name: K,
@@ -77,7 +81,7 @@ export default defineBackground(() => {
         onMessage<Parameters<RpcMap['togglePin']>[0], 'togglePin'>(
             'togglePin',
             ({ data }) => {
-                const run = pinQueue.then(async (): Promise<Awaited<ReturnType<RpcMap['togglePin']>>> => {
+                const run = enqueuePinMutation(async (): Promise<Awaited<ReturnType<RpcMap['togglePin']>>> => {
                     const result = await routeToAnchor('togglePin', data);
                     if (!result.ok) return result;
                     const pinned = [...new Set(await getPinned())];
@@ -90,7 +94,6 @@ export default defineBackground(() => {
                     ok: false,
                     error: { message: error instanceof Error ? error.message : 'Could not update conversation pin' },
                 }));
-                pinQueue = run;
                 return run;
             },
         );

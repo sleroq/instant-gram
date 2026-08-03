@@ -173,7 +173,7 @@ data.fetch__SlideThread.as_ig_direct_thread.slide_messages.page_info.has_next_pa
 
 ## 6. Reel-share fields inside message responses
 
-The HARs do not include the reel video lookup request, but they do include many DM reel shares. Parse these from `IGDThreadDetailQuery` / `IGDMessageListOffMsysQuery` message nodes:
+The DM HARs include many reel shares. Parse these from `IGDThreadDetailQuery` / `IGDMessageListOffMsysQuery` message nodes:
 
 ```txt
 node.content_type = MESSAGE_INLINE_SHARE
@@ -185,4 +185,20 @@ node.content.xma.header_title_text = <author username/name when present>
 node.content.xma.title_text or caption_body_text = <caption-ish text when present>
 ```
 
-Use the shortcode from `target_url` with the plan's `PolarisPostActionLoadPostQueryQuery` `/graphql/query` call, but verify that live once because it was not present in these HAR captures.
+The separate `examples/www.instagram.com-open-reel-from-chat-and-watch.har`
+captures the browser's follow-up media reads:
+
+```txt
+lines 3126–3139: GET /api/v1/media/3887864898364318881/info/
+line 3389: response items[0].pk = 3887864898364318881 and
+           items[0].id = 3887864898364318881_7750680154
+lines 1434–1447: GET /api/v1/media/3887864898364318881/comments/
+                 ?can_support_threading=true&permalink_enabled=false
+```
+
+The capture proves the initial comments request and response shape, but contains
+no comments request with `min_id`; do not infer pagination from `next_min_id`.
+The shortcode-to-ID `PolarisPostActionLoadPostQueryQuery` call is still the
+plan/live-bundle-derived step and is not present in the captures. Validate its
+returned code and numeric/compound media identity against the requested
+shortcode and the REST response before using the ID in a path or caching media.

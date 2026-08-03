@@ -48,6 +48,7 @@ export type Message = MessageMetadata &
               text: string;
           })
         | { kind: 'reaction_log'; fragment: string }
+        | { kind: 'activity'; text: string }
         | (SentMessageMetadata & {
               kind: 'reel_share';
               shortcode: string;
@@ -97,12 +98,44 @@ export type Thread = {
     lastMessage?: Message;
     cursor?: string;
 };
+export type ReelMediaItem = {
+    id: string;
+    width?: number;
+    height?: number;
+    posterUrl: string;
+    canDownload: boolean;
+    downloadUrl?: string;
+} & (
+    | { kind: 'image'; imageUrl: string }
+    | { kind: 'video'; videoUrl: string; durationSec: number }
+);
+export type ReelAuthor = User & { isVerified: boolean };
 export type ReelMedia = {
+    id: string;
     shortcode: string;
-    videoUrl: string;
-    durationSec: number;
-    owner: string;
+    author: ReelAuthor;
+    caption?: string;
+    takenAtMs?: number;
+    items: ReelMediaItem[];
+    likeCount: number;
+    commentCount: number;
+    hasLiked: boolean;
+    hasSaved: boolean;
+    canSave: boolean;
+    canDownload: boolean;
 };
+export type ReelComment = {
+    id: string;
+    text: string;
+    createdAtMs: number;
+    likeCount: number;
+    hasLiked: boolean;
+    childCommentCount: number;
+    author: ReelAuthor;
+};
+export type ReelComments = Page<ReelComment>;
+export type ReelLikeReceipt = { mediaId: string; hasLiked: boolean };
+export type ReelSaveReceipt = { mediaId: string; hasSaved: boolean };
 export type Page<T> = { items: T[]; cursor?: string; hasNextPage: boolean };
 export type ThreadMessages = Page<Message> & {
     thread?: Thread;
@@ -267,6 +300,17 @@ export type CoreRpcMap = {
         shortcode: string;
         mediaId?: string;
     }) => Result<ReelMedia>;
+    getReelComments: (payload: {
+        mediaId: string;
+    }) => Result<ReelComments>;
+    setReelLiked: (payload: {
+        mediaId: string;
+        liked: boolean;
+    }) => Result<ReelLikeReceipt>;
+    setReelSaved: (payload: {
+        mediaId: string;
+        saved: boolean;
+    }) => Result<ReelSaveReceipt>;
     getPins: () => { pinned: string[] };
     togglePin: (payload: {
         threadKey: string;

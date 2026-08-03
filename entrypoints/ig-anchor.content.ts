@@ -16,16 +16,21 @@ import {
 import { createInstagramRpcHandlers } from '../lib/instagram-api/handlers';
 import {
     parseReelInfoResponse,
+    parseReelCommentsResponse,
     parseReelMediaResponse,
 } from '../lib/instagram-api/parsers';
 import type { Result, RpcMap } from '../lib/domain';
 
 type ReelPayload = Parameters<RpcMap['getReelMedia']>[0];
+type ReelCommentsPayload = Parameters<RpcMap['getReelComments']>[0];
 type RemoteRpcName = Exclude<keyof RpcMap, 'getPins'>;
 const REMOTE_RPC_NAMES = [
     'getInbox',
     'getThread',
     'getReelMedia',
+    'getReelComments',
+    'setReelLiked',
+    'setReelSaved',
     'sendText',
     'setReaction',
     'togglePin',
@@ -253,15 +258,44 @@ async function fetchReelInfo(mediaId: string): Promise<unknown> {
 
 async function getReelMedia(value: unknown) {
     const payload = validateReelPayload(value);
-    if (payload.mediaId)
-        return parseReelInfoResponse(await fetchReelInfo(payload.mediaId), payload);
     const parsed = parseReelMediaResponse(
         await graphql(reelMediaRequest(payload)),
         payload,
     );
-    return 'mediaId' in parsed
-        ? parseReelInfoResponse(await fetchReelInfo(parsed.mediaId), payload)
-        : parsed;
+    const mediaId = parsed.mediaId;
+    if (!/^\d{1,64}$/.test(mediaId))
+        throw new Error('Invalid resolved Instagram reel media ID');
+    return parseReelInfoResponse(await fetchReelInfo(mediaId), payload, parsed);
+}
+
+function validateReelCommentsPayload(value: unknown): ReelCommentsPayload {
+    if (!isRecord(value)) throw new Error('Invalid Instagram reel comments payload');
+    if (Object.keys(value).some(key => key !== 'mediaId'))
+        throw new Error('Invalid Instagram reel comments payload fields');
+    if (typeof value.mediaId !== 'string' || !/^\d{1,64}$/.test(value.mediaId))
+        throw new Error('Invalid Instagram reel media ID');
+    return value as ReelCommentsPayload;
+}
+
+async function getReelComments(value: unknown) {
+    const payload = validateReelCommentsPayload(value);
+    const query = new URLSearchParams({
+        can_support_threading: 'true',
+        permalink_enabled: 'false',
+    });
+    const response = await fetch(
+        `https://www.instagram.com/api/v1/media/${payload.mediaId}/comments/?${query}`,
+        {
+            credentials: 'include',
+            headers: {
+                'x-ig-app-id': '936619743392459',
+                'x-asbd-id': '359341',
+            },
+        },
+    );
+    if (!response.ok)
+        throw new Error(`Instagram reel comments failed with ${response.status}`);
+    return parseReelCommentsResponse(await response.json());
 }
 
 export default defineContentScript({
@@ -278,6 +312,7 @@ export default defineContentScript({
                 viewerId: async () => (await harvestTokens()).viewerId,
             }),
             getReelMedia,
+            getReelComments,
         };
         for (const name of REMOTE_RPC_NAMES) {
             const handler = handlers[name] as (payload: unknown) => Promise<unknown>;

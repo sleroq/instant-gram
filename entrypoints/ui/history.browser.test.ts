@@ -112,6 +112,33 @@ test('image messages render with reserved geometry and a useful inbox summary', 
     await page.close();
 });
 
+test('activity and fallback messages stay friendly, inert, escaped, and free of empty media', async () => {
+    const page = await openHarness({ width: 900, height: 700 });
+    await page.evaluate(() => window.historyHarness.mount('events'));
+    await page.waitForFunction(() => document.querySelector('[data-message-id="future-fallback"]'));
+    const result = await page.evaluate(() => {
+        const activity = document.querySelector<HTMLElement>('[data-message-id="activity-message"]')!;
+        const historyText = document.querySelector('.messages')?.textContent ?? '';
+        return {
+            activityCentered: getComputedStyle(activity.querySelector('.message')!).justifyContent,
+            activityAction: Boolean(activity.querySelector('.message__reaction-trigger')),
+            images: document.querySelectorAll('.messages img').length,
+            boldElements: document.querySelectorAll('[data-message-id="ai-fallback"] b').length,
+            historyText,
+            summary: document.querySelector('.chat-row__snippet')?.textContent,
+        };
+    });
+    assert.equal(result.activityCentered, 'center');
+    assert.equal(result.activityAction, false);
+    assert.equal(result.images, 0);
+    assert.equal(result.boldElements, 0);
+    assert.match(result.historyText, /Meta AI response: <b>Safe answer<\/b>/);
+    assert.match(result.historyText, /Unsupported message/);
+    assert.doesNotMatch(result.historyText, /GEN_AI_RICH_RESPONSE_XMA|FUTURE_SECRET_CARD/);
+    assert.equal(result.summary, 'Unsupported message');
+    await page.close();
+});
+
 test('private chats reserve sender identity only for a known non-peer participant', async () => {
     const page = await openHarness({ width: 900, height: 600 });
     await page.evaluate(() => window.historyHarness.mount('identity-pm'));
@@ -631,8 +658,236 @@ test('context menus dismiss, restore focus, stay in the viewport, and close on t
     await secondChat.click({ button: 'right' });
     await page.getByRole('menuitem', { name: 'Pin conversation' }).click();
     await page.getByRole('button', { name: 'Second history, pinned', exact: true }).waitFor();
+    await page.waitForFunction(() =>
+        (document.activeElement as HTMLElement)?.dataset.threadId === 'second-thread');
     await page.getByRole('button', { name: 'Second history, pinned', exact: true }).click();
     await page.waitForFunction(() => document.querySelector('.conversation__header h2')?.textContent === 'Second history');
+    await page.close();
+});
+
+test('Vim keys navigate chats and bounded history, preserve thread focus, and respect editors and menus', async () => {
+    const page = await openHarness();
+    await page.evaluate(() => window.historyHarness.mount('thread-state'));
+    const selectedChat = page.locator('[data-thread-id="thread"]');
+    await selectedChat.focus();
+
+    await page.keyboard.press('k');
+    assert.equal(await page.evaluate(() => window.historyHarness.historyState('thread').selected), 'thread');
+    await page.keyboard.press('j');
+    await page.waitForFunction(() => window.historyHarness.historyState('thread').selected === 'second-thread');
+    assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement)?.dataset.threadId), 'second-thread');
+    await page.keyboard.press('j');
+    assert.equal(await page.evaluate(() => window.historyHarness.historyState('thread').selected), 'second-thread');
+    await page.keyboard.press('k');
+    await page.waitForFunction(() => window.historyHarness.historyState('thread').selected === 'thread');
+
+    await page.keyboard.press('l');
+    await page.waitForFunction(() =>
+        (document.activeElement as HTMLElement)?.dataset.messageId === 'm119');
+    assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement)?.dataset.messageId), 'm119');
+    await page.keyboard.press('j');
+    assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement)?.dataset.messageId), 'm119');
+    await page.keyboard.press('k');
+    assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement)?.dataset.messageId), 'm118');
+    await page.keyboard.press('h');
+    assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement)?.dataset.threadId), 'thread');
+    await page.keyboard.press('j');
+    await page.waitForFunction(() => window.historyHarness.historyState('thread').selected === 'second-thread');
+    await page.keyboard.press('l');
+    await page.waitForFunction(() =>
+        (document.activeElement as HTMLElement)?.dataset.messageId === 'm119');
+    assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement)?.dataset.messageId), 'm119');
+    await page.keyboard.press('h');
+    await page.keyboard.press('k');
+    await page.waitForFunction(() => window.historyHarness.historyState('thread').selected === 'thread');
+    await page.keyboard.press('l');
+    await page.waitForFunction(() =>
+        (document.activeElement as HTMLElement)?.dataset.messageId === 'm118');
+    assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement)?.dataset.messageId), 'm118');
+
+    await page.locator('[data-message-id="m80"]').focus();
+    const callsBeforeBoundary = await page.evaluate(() => window.historyHarness.calls().length);
+    await page.keyboard.press('k');
+    assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement)?.dataset.messageId), 'm80');
+    assert.equal(await page.evaluate(() => window.historyHarness.calls().length), callsBeforeBoundary);
+
+    const composer = page.getByRole('textbox', { name: 'Message' });
+    await composer.focus();
+    await page.keyboard.press('j');
+    assert.equal(await composer.inputValue(), 'j');
+    assert.equal(await page.evaluate(() => window.historyHarness.historyState('thread').selected), 'thread');
+
+    await selectedChat.click({ button: 'right' });
+    const menu = page.getByRole('menu', { name: 'Actions for History harness' });
+    await menu.waitFor();
+    await page.keyboard.press('j');
+    assert.equal(await menu.count(), 1);
+    assert.equal(await page.evaluate(() => window.historyHarness.historyState('thread').selected), 'thread');
+    await page.keyboard.press('Escape');
+    await page.close();
+});
+
+test('Vim selection minimally reveals virtual chats and rendered messages without paginating', async () => {
+    const page = await openHarness({ width: 900, height: 420 });
+    await page.evaluate(() => window.historyHarness.mount('vim-scroll'));
+    await page.evaluate(() => window.historyHarness.showInbox());
+
+    await page.keyboard.press('k');
+    assert.equal(await page.evaluate(() => window.historyHarness.historyState('thread').selected), 'thread');
+    await page.keyboard.press('k');
+    assert.equal(await page.evaluate(() => window.historyHarness.historyState('thread').selected), 'thread');
+    for (let index = 0; index < 49; index++) await page.keyboard.press('j');
+    await page.waitForFunction(() =>
+        (document.activeElement as HTMLElement)?.dataset.threadId === 'vim-thread-49');
+    const chatScroll = await page.locator('.chat-list').evaluate(scroller => ({
+        scrollTop: scroller.scrollTop,
+        rect: scroller.getBoundingClientRect(),
+        row: document.activeElement!.getBoundingClientRect(),
+    }));
+    assert.ok(chatScroll.scrollTop > 0);
+    assert.ok(chatScroll.row.top >= chatScroll.rect.top && chatScroll.row.bottom <= chatScroll.rect.bottom + 1);
+    await page.keyboard.press('j');
+    assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement)?.dataset.threadId), 'vim-thread-49');
+    assert.equal((await page.evaluate(() => window.historyHarness.calls())).some(cursor => cursor !== undefined), false);
+
+    await page.keyboard.press('l');
+    await page.waitForFunction(() => (document.activeElement as HTMLElement)?.dataset.messageId === 'm119');
+    const initialViewport = await page.evaluate(() =>
+        window.historyHarness.historyState('vim-thread-49').viewportIds);
+    for (let index = 0; index < 25; index++) await page.keyboard.press('k');
+    const historyScroll = await page.locator('.messages').evaluate(scroller => ({
+        scrollTop: scroller.scrollTop,
+        rect: scroller.getBoundingClientRect(),
+        row: document.activeElement!.getBoundingClientRect(),
+    }));
+    assert.ok(historyScroll.scrollTop < 1_000_000);
+    assert.ok(historyScroll.row.top >= historyScroll.rect.top - 1 && historyScroll.row.bottom <= historyScroll.rect.bottom + 1);
+    assert.deepEqual(
+        await page.evaluate(() => window.historyHarness.historyState('vim-thread-49').viewportIds),
+        initialViewport,
+    );
+    assert.equal((await page.evaluate(() => window.historyHarness.calls())).some(cursor => cursor !== undefined), false);
+
+    await page.keyboard.press('h');
+    await page.waitForFunction(() => (document.activeElement as HTMLElement)?.dataset.threadId === 'vim-thread-49');
+    await page.keyboard.press('l');
+    await page.waitForFunction(() => (document.activeElement as HTMLElement)?.dataset.messageId === 'm94');
+    await page.close();
+});
+
+test('Vim j and k establish the only chat and clamp at both boundaries', async () => {
+    const page = await openHarness();
+    await page.evaluate(() => window.historyHarness.mount('resize'));
+    await page.evaluate(() => window.historyHarness.showInbox());
+    await page.keyboard.press('j');
+    assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement)?.dataset.threadId), 'thread');
+    await page.keyboard.press('j');
+    await page.keyboard.press('k');
+    assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement)?.dataset.threadId), 'thread');
+    assert.equal(await page.evaluate(() => window.historyHarness.historyState('thread').selected), 'thread');
+    await page.close();
+});
+
+test('Vim keys honor DOM editing semantics including contenteditable variants', async () => {
+    const page = await openHarness();
+    await page.evaluate(() => window.historyHarness.mount('thread-state'));
+    const variants = [
+        '<div contenteditable></div>',
+        '<div contenteditable=""></div>',
+        '<div contenteditable="true"></div>',
+        '<div contenteditable="plaintext-only"></div>',
+        '<div contenteditable="true"><span></span></div>',
+    ];
+    for (const [index, markup] of variants.entries()) {
+        await page.evaluate(({ index, markup }) => {
+            const host = document.createElement('div');
+            host.id = `editor-${index}`;
+            host.innerHTML = markup;
+            document.body.append(host);
+            const editor = host.firstElementChild as HTMLElement;
+            editor.focus();
+            const span = host.querySelector('span');
+            if (span) {
+                const range = document.createRange();
+                range.selectNodeContents(span);
+                range.collapse(false);
+                const selection = getSelection();
+                selection?.removeAllRanges();
+                selection?.addRange(range);
+            }
+        }, { index, markup });
+        await page.keyboard.press('j');
+        assert.equal(await page.locator(`#editor-${index}`).textContent(), 'j', `contenteditable variant ${index}`);
+    }
+    for (const control of ['input', 'textarea', 'select']) {
+        const allowed = await page.evaluate(control => {
+            const element = document.createElement(control);
+            if (element instanceof HTMLSelectElement) {
+                element.append(new Option('one'), new Option('j option'));
+            }
+            document.body.append(element);
+            element.focus();
+            return element.dispatchEvent(new KeyboardEvent('keydown', {
+                key: 'j', bubbles: true, cancelable: true,
+            }));
+        }, control);
+        assert.equal(allowed, true, `${control} keydown was intercepted`);
+    }
+    await page.evaluate(() => {
+        const host = document.createElement('div');
+        host.id = 'editor-false';
+        host.innerHTML = '<div contenteditable="true"><span contenteditable="false" tabindex="0"></span></div>';
+        document.body.append(host);
+        (host.querySelector('[contenteditable="false"]') as HTMLElement).focus();
+    });
+    await page.keyboard.press('j');
+    assert.equal(await page.locator('#editor-false').textContent(), '');
+    assert.equal(await page.evaluate(() => window.historyHarness.historyState('thread').selected), 'second-thread');
+    await page.close();
+});
+
+test('Vim history scrolling does not turn a top-boundary key into older pagination', async () => {
+    const page = await openHarness({ width: 900, height: 420 });
+    await page.evaluate(() => window.historyHarness.mount('delayed'));
+    await page.locator('[data-message-id="m40"]').evaluate(row =>
+        (row as HTMLElement).focus({ preventScroll: true }));
+    const before = await page.evaluate(() => ({
+        calls: window.historyHarness.calls(),
+        viewportIds: window.historyHarness.historyState('thread').viewportIds,
+    }));
+    await page.keyboard.press('k');
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement)?.dataset.messageId), 'm40');
+    assert.deepEqual(await page.evaluate(() => window.historyHarness.calls()), before.calls);
+    assert.deepEqual(
+        await page.evaluate(() => window.historyHarness.historyState('thread').viewportIds),
+        before.viewportIds,
+    );
+    await page.close();
+});
+
+test('stale pin-action restoration cannot steal newer chat or pane focus', async () => {
+    const page = await openHarness();
+    await page.evaluate(() => window.historyHarness.mount('thread-state'));
+    await page.evaluate(() => window.historyHarness.showInbox());
+    const first = page.locator('[data-thread-id="thread"]');
+    const second = page.locator('[data-thread-id="second-thread"]');
+    await first.click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Pin conversation' }).evaluate((item, secondSelector) => {
+        (item as HTMLElement).click();
+        document.querySelector<HTMLElement>(secondSelector)!.focus();
+    }, '[data-thread-id="second-thread"]');
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement)?.dataset.threadId), 'second-thread');
+
+    await first.click();
+    await first.click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Unpin conversation' }).evaluate(item => {
+        (item as HTMLElement).click();
+        document.querySelector<HTMLElement>('[data-message-id="m119"]')?.focus();
+    });
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement)?.dataset.messageId), 'm119');
     await page.close();
 });
 

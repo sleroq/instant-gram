@@ -1,4 +1,11 @@
-import type { Message, MessageReaction, ReplyPreview, Thread } from '../../lib/domain';
+import type {
+    Message,
+    MessageReaction,
+    ReelComment,
+    ReelMedia,
+    ReplyPreview,
+    Thread,
+} from '../../lib/domain';
 import type { CompleteUiRpc, UiRpc } from './rpc';
 import {
     hasLocalOlderIds,
@@ -67,7 +74,34 @@ export type ReactionMutation = {
 export type PinMutation = {
     pin: boolean;
     status: 'pending' | 'error';
+    order: number;
     error?: string;
+};
+
+export type ReelMutation = {
+    desired: boolean;
+    status: 'pending' | 'error';
+    error?: string;
+    rollbackValue?: boolean;
+    rollbackCount?: number;
+};
+
+export type ReelState = {
+    shortcode: string;
+    mediaIdHint?: string;
+    media?: ReelMedia;
+    status: Status;
+    error?: string;
+    comments: {
+        byId: Record<string, ReelComment>;
+        listedIds: string[];
+        cursor?: string;
+        hasNextPage: boolean;
+        status: Status;
+        error?: string;
+    };
+    likeMutation?: ReelMutation;
+    saveMutation?: ReelMutation;
 };
 
 export type FrontendStoreRpc = UiRpc & Pick<CompleteUiRpc, 'sendText' | 'setReaction'>;
@@ -75,10 +109,15 @@ export type FrontendStoreRpc = UiRpc & Pick<CompleteUiRpc, 'sendText' | 'setReac
 export type FrontendState = {
     inbox: InboxState;
     pinnedIds: string[];
+    committedPinnedIds: string[];
     pinsStatus: Status;
     pinMutations: Record<string, PinMutation>;
     selectedThreadId?: string;
     histories: Record<string, HistoryState>;
+    reels: {
+        activeId?: string;
+        byId: Record<string, ReelState>;
+    };
 };
 
 const SIGNED_64_MAX = 9_223_372_036_854_775_807n;
@@ -95,9 +134,11 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
             isLoadingMore: false,
         },
         pinnedIds: [],
+        committedPinnedIds: [],
         pinsStatus: 'idle',
         pinMutations: {},
         histories: {},
+        reels: { byId: {} },
     };
     const listeners = new Set<() => void>();
     const historyRequests = new Map<string, symbol>();
@@ -109,8 +150,29 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
     const sendRequests = new Map<string, symbol>();
     const reactionRequests = new Map<string, symbol>();
     const pinRequests = new Map<string, symbol>();
-    const pinMutationOrder = new Map<string, number>();
+    const reelMediaRequests = new Map<string, symbol>();
+    const reelCommentRequests = new Map<string, symbol>();
+    const reelLikeRequests = new Map<string, symbol>();
+    const reelSaveRequests = new Map<string, symbol>();
+    const reelLikeReceiptRevisions = new Map<string, number>();
+    const reelSaveReceiptRevisions = new Map<string, number>();
+    const reelMediaSettledListeners = new Map<string, Set<() => void>>();
+    const reelPreloadQueue: { shortcode: string; mediaId?: string }[] = [];
+    const queuedReelPreloads = new Set<string>();
+    let activeReelPreloads = 0;
+    let reelPreloadsStarted = 0;
+    type PinOperation = {
+        threadId: string;
+        pin: boolean;
+        order: number;
+        status: 'pending' | 'succeeded' | 'failed';
+        authoritativeIds?: string[];
+    };
+    const pinOperations: PinOperation[] = [];
     let nextPinMutationOrder = 0;
+    let pinRevision = 0;
+    let nextPinRead = 0;
+    let latestPinRead = 0;
     const openedThreadIds = new Set<string>();
     let inboxRequest: symbol | undefined;
     let generation = 0;
@@ -125,6 +187,163 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
 
     function emit() {
         listeners.forEach(listener => listener());
+    }
+
+    function reelState(shortcode: string, mediaId?: string): ReelState {
+        const existing = state.reels.byId[shortcode];
+        if (existing) {
+            if (!existing.mediaIdHint && mediaId && /^\d+$/.test(mediaId))
+                existing.mediaIdHint = mediaId;
+            return existing;
+        }
+        return state.reels.byId[shortcode] = {
+            shortcode,
+            mediaIdHint: mediaId && /^\d+$/.test(mediaId) ? mediaId : undefined,
+            status: 'idle',
+            comments: {
+                byId: {},
+                listedIds: [],
+                hasNextPage: false,
+                status: 'idle',
+            },
+        };
+    }
+
+    function waitForReelMedia(shortcode: string) {
+        return new Promise<void>(resolve => {
+            const listeners = reelMediaSettledListeners.get(shortcode) ?? new Set();
+            listeners.add(resolve);
+            reelMediaSettledListeners.set(shortcode, listeners);
+        });
+    }
+
+    async function loadReelMedia(shortcode: string, mediaId?: string, force = false) {
+        const reel = reelState(shortcode, mediaId);
+        if (reelMediaRequests.has(shortcode)) {
+            await waitForReelMedia(shortcode);
+            return state.reels.byId[shortcode]?.media;
+        }
+        if (reel.media && !force) return reel.media;
+        const request = Symbol(`reel:${shortcode}`);
+        const requestGeneration = generation;
+        const likeReceiptRevision = reelLikeReceiptRevisions.get(shortcode) ?? 0;
+        const saveReceiptRevision = reelSaveReceiptRevisions.get(shortcode) ?? 0;
+        reelMediaRequests.set(shortcode, request);
+        reel.status = 'loading';
+        reel.error = undefined;
+        emit();
+        try {
+            const result = await rpc.getReelMedia({
+                shortcode,
+                mediaId: reel.mediaIdHint,
+            });
+            if (generation !== requestGeneration || reelMediaRequests.get(shortcode) !== request)
+                return undefined;
+            if (!result.ok) {
+                reel.status = 'error';
+                reel.error = result.error.message;
+                return undefined;
+            }
+            if (
+                result.value.shortcode !== shortcode ||
+                !/^\d+$/.test(result.value.id) ||
+                (reel.mediaIdHint !== undefined && result.value.id !== reel.mediaIdHint)
+            ) {
+                reel.status = 'error';
+                reel.error = 'Instagram reel response identity did not match the request';
+                return undefined;
+            }
+            let refreshedMedia = result.value;
+            const currentMedia = reel.media;
+            if (reel.likeMutation?.status === 'pending') {
+                const receiptSettledAfterRefreshStarted =
+                    (reelLikeReceiptRevisions.get(shortcode) ?? 0) !== likeReceiptRevision;
+                const rollbackValue = receiptSettledAfterRefreshStarted
+                    ? reel.likeMutation.rollbackValue ?? refreshedMedia.hasLiked
+                    : refreshedMedia.hasLiked;
+                const rollbackCount = receiptSettledAfterRefreshStarted
+                    ? Math.max(0, refreshedMedia.likeCount +
+                        (refreshedMedia.hasLiked === rollbackValue ? 0 : rollbackValue ? 1 : -1))
+                    : refreshedMedia.likeCount;
+                reel.likeMutation.rollbackValue = rollbackValue;
+                reel.likeMutation.rollbackCount = rollbackCount;
+                refreshedMedia = {
+                    ...refreshedMedia,
+                    hasLiked: reel.likeMutation.desired,
+                    likeCount: Math.max(0, rollbackCount +
+                        (rollbackValue === reel.likeMutation.desired
+                            ? 0
+                            : reel.likeMutation.desired ? 1 : -1)),
+                };
+            } else if (
+                currentMedia &&
+                (reelLikeReceiptRevisions.get(shortcode) ?? 0) !== likeReceiptRevision
+            ) {
+                refreshedMedia = {
+                    ...refreshedMedia,
+                    hasLiked: currentMedia.hasLiked,
+                    likeCount: currentMedia.likeCount,
+                };
+            }
+            if (reel.saveMutation?.status === 'pending') {
+                if ((reelSaveReceiptRevisions.get(shortcode) ?? 0) === saveReceiptRevision)
+                    reel.saveMutation.rollbackValue = refreshedMedia.hasSaved;
+                refreshedMedia = { ...refreshedMedia, hasSaved: reel.saveMutation.desired };
+            } else if (
+                currentMedia &&
+                (reelSaveReceiptRevisions.get(shortcode) ?? 0) !== saveReceiptRevision
+            ) {
+                refreshedMedia = { ...refreshedMedia, hasSaved: currentMedia.hasSaved };
+            }
+            reel.media = refreshedMedia;
+            reel.mediaIdHint = result.value.id;
+            reel.status = 'ready';
+            return reel.media;
+        } catch (error) {
+            if (generation === requestGeneration && reelMediaRequests.get(shortcode) === request) {
+                reel.status = 'error';
+                reel.error = errorMessage(error);
+            }
+            return undefined;
+        } finally {
+            if (generation === requestGeneration && reelMediaRequests.get(shortcode) === request) {
+                reelMediaRequests.delete(shortcode);
+                emit();
+                reelMediaSettledListeners.get(shortcode)?.forEach(listener => listener());
+                reelMediaSettledListeners.delete(shortcode);
+            }
+        }
+    }
+
+    function drainReelPreloads() {
+        while (activeReelPreloads < 2 && reelPreloadQueue.length) {
+            const next = reelPreloadQueue.shift()!;
+            queuedReelPreloads.delete(next.shortcode);
+            if (state.reels.byId[next.shortcode]?.media || reelMediaRequests.has(next.shortcode)) continue;
+            activeReelPreloads++;
+            reelPreloadsStarted++;
+            void loadReelMedia(next.shortcode, next.mediaId).finally(() => {
+                activeReelPreloads--;
+                if (generation >= 0) drainReelPreloads();
+            });
+        }
+    }
+
+    function scheduleReelsFromMessages(messages: Message[]) {
+        for (const message of messages) {
+            if (message.kind !== 'reel_share') continue;
+            const shortcode = message.shortcode;
+            reelState(shortcode, message.mediaId);
+            if (
+                reelPreloadsStarted + reelPreloadQueue.length >= 8 ||
+                queuedReelPreloads.has(shortcode) ||
+                reelMediaRequests.has(shortcode) ||
+                state.reels.byId[shortcode]?.media
+            ) continue;
+            queuedReelPreloads.add(shortcode);
+            reelPreloadQueue.push({ shortcode, mediaId: message.mediaId });
+        }
+        drainReelPreloads();
     }
 
     function mergeThreads(items: Thread[], readRevision: number) {
@@ -206,47 +425,80 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
 
     async function loadPins() {
         const requestGeneration = generation;
+        const readRevision = pinRevision;
+        const read = ++nextPinRead;
+        latestPinRead = read;
         state.pinsStatus = 'loading';
         emit();
         try {
             const result = await rpc.getPins();
-            if (generation !== requestGeneration) return;
-            state.pinnedIds = applyPendingPins([...new Set(result.pinned)]);
+            if (
+                generation !== requestGeneration || latestPinRead !== read ||
+                readRevision !== pinRevision
+            ) return;
+            state.committedPinnedIds = [...new Set(result.pinned)];
+            reconcilePins();
             state.pinsStatus = 'ready';
         } catch {
-            if (generation !== requestGeneration) return;
+            if (
+                generation !== requestGeneration || latestPinRead !== read ||
+                readRevision !== pinRevision
+            ) return;
             state.pinsStatus = 'error';
         }
-        emit();
+        if (
+            generation === requestGeneration && latestPinRead === read &&
+            readRevision === pinRevision
+        ) emit();
     }
 
-    function applyPendingPins(base: string[]) {
+    function replayPinOperations(base: string[]) {
         const ids = [...base];
-        const pending = Object.entries(state.pinMutations)
-            .filter(([, mutation]) => mutation.status === 'pending')
-            .sort(([left], [right]) =>
-                (pinMutationOrder.get(left) ?? 0) - (pinMutationOrder.get(right) ?? 0));
-        for (const [threadId, mutation] of pending) {
-            const existing = ids.indexOf(threadId);
+        for (const operation of pinOperations) {
+            if (operation.status === 'failed') continue;
+            const existing = ids.indexOf(operation.threadId);
             if (existing >= 0) ids.splice(existing, 1);
-            if (mutation.pin) ids.unshift(threadId);
+            if (operation.pin) ids.unshift(operation.threadId);
         }
         return ids;
+    }
+
+    function reconcilePins() {
+        state.pinnedIds = replayPinOperations(state.committedPinnedIds);
+    }
+
+    function commitSettledPinOperations() {
+        while (pinOperations[0]?.status !== 'pending') {
+            const operation = pinOperations.shift();
+            if (!operation) break;
+            if (operation.status === 'succeeded') {
+                state.committedPinnedIds = operation.authoritativeIds!;
+                delete state.pinMutations[operation.threadId];
+            } else {
+                state.pinMutations[operation.threadId] = {
+                    pin: operation.pin,
+                    order: operation.order,
+                    status: 'error',
+                    error: state.pinMutations[operation.threadId]?.error,
+                };
+            }
+        }
+        reconcilePins();
     }
 
     async function togglePin(threadId: string) {
         const thread = state.inbox.byId[threadId];
         if (!thread?.threadFbid || pinRequests.has(threadId)) return false;
         const pin = !state.pinnedIds.includes(threadId);
-        const originalIndex = state.pinnedIds.indexOf(threadId);
         const request = Symbol(threadId);
         const requestGeneration = generation;
+        const order = ++nextPinMutationOrder;
+        const operation: PinOperation = { threadId, pin, order, status: 'pending' };
         pinRequests.set(threadId, request);
-        pinMutationOrder.set(threadId, ++nextPinMutationOrder);
-        state.pinMutations[threadId] = { pin, status: 'pending' };
-        state.pinnedIds = pin
-            ? [threadId, ...state.pinnedIds.filter(id => id !== threadId)]
-            : state.pinnedIds.filter(id => id !== threadId);
+        pinOperations.push(operation);
+        pinRevision++;
+        state.pinMutations[threadId] = { pin, order, status: 'pending' };
+        reconcilePins();
         emit();
 
         try {
@@ -262,26 +514,23 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
                 result.value.receipt.threadFbid !== thread.threadFbid ||
                 result.value.receipt.isPinned !== pin
             ) throw new Error('Instagram conversation pin receipt did not match the request');
-            delete state.pinMutations[threadId];
-            pinMutationOrder.delete(threadId);
-            state.pinnedIds = applyPendingPins([...new Set(result.value.pinned)]);
+            operation.status = 'succeeded';
+            operation.authoritativeIds = [...new Set(result.value.pinned)];
+            pinRevision++;
+            commitSettledPinOperations();
             return true;
         } catch (error) {
             if (generation !== requestGeneration || pinRequests.get(threadId) !== request)
                 return false;
-            if (pin) {
-                state.pinnedIds = state.pinnedIds.filter(id => id !== threadId);
-            } else if (!state.pinnedIds.includes(threadId)) {
-                const index = originalIndex < 0
-                    ? state.pinnedIds.length
-                    : Math.min(originalIndex, state.pinnedIds.length);
-                state.pinnedIds.splice(index, 0, threadId);
-            }
+            operation.status = 'failed';
+            pinRevision++;
             state.pinMutations[threadId] = {
                 pin,
+                order,
                 status: 'error',
                 error: errorMessage(error),
             };
+            commitSettledPinOperations();
             return false;
         } finally {
             if (generation === requestGeneration && pinRequests.get(threadId) === request) {
@@ -340,6 +589,7 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
                 if (!history.byId[message.id]) history.listedIds.push(message.id);
                 history.byId[message.id] = message;
             }
+            scheduleReelsFromMessages(result.value.items);
             history.cursor = result.value.cursor;
             history.hasOlder = result.value.hasNextPage;
             history.viewerId = result.value.viewerId;
@@ -435,7 +685,11 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
                 thumbUrl: message.images[0]?.previewUrl ?? message.images[0]?.url,
             };
             case 'reaction_log': return { kind: 'unavailable', label: message.fragment };
-            case 'unsupported': return { kind: 'unavailable', label: message.fallback.label };
+            case 'activity': return { kind: 'unavailable', label: message.text };
+            case 'unsupported': return {
+                kind: 'unavailable',
+                label: message.fallback.preview || message.fallback.label,
+            };
         }
     }
 
@@ -671,6 +925,7 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
             }
         }
         if (olderIds.length) history.listedIds = [...olderIds, ...history.listedIds];
+        scheduleReelsFromMessages(items);
         return olderIds.length;
     }
 
@@ -783,6 +1038,185 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
         return { requested: true, completion: requestOlderHistory(threadId, 'visible') };
     }
 
+    async function loadReelComments(shortcode: string) {
+        const reel = state.reels.byId[shortcode];
+        const mediaId = reel?.media?.id ?? reel?.mediaIdHint;
+        if (
+            !reel || !mediaId || reelCommentRequests.has(shortcode) ||
+            reel.comments.status === 'ready'
+        ) return reel?.comments.status === 'ready';
+        const request = Symbol(`reel-comments:${shortcode}`);
+        const requestGeneration = generation;
+        reelCommentRequests.set(shortcode, request);
+        reel.comments.status = 'loading';
+        reel.comments.error = undefined;
+        emit();
+        try {
+            const result = await rpc.getReelComments({ mediaId });
+            if (generation !== requestGeneration || reelCommentRequests.get(shortcode) !== request)
+                return false;
+            if (!result.ok) {
+                reel.comments.status = 'error';
+                reel.comments.error = result.error.message;
+                return false;
+            }
+            for (const comment of result.value.items) {
+                if (!reel.comments.byId[comment.id]) reel.comments.listedIds.push(comment.id);
+                reel.comments.byId[comment.id] = comment;
+            }
+            reel.comments.cursor = result.value.cursor;
+            reel.comments.hasNextPage = result.value.hasNextPage;
+            reel.comments.status = 'ready';
+            return true;
+        } catch (error) {
+            if (generation === requestGeneration && reelCommentRequests.get(shortcode) === request) {
+                reel.comments.status = 'error';
+                reel.comments.error = errorMessage(error);
+            }
+            return false;
+        } finally {
+            if (generation === requestGeneration && reelCommentRequests.get(shortcode) === request) {
+                reelCommentRequests.delete(shortcode);
+                emit();
+            }
+        }
+    }
+
+    async function openReel(shortcode: string, mediaId?: string) {
+        const requestGeneration = generation;
+        state.reels.activeId = shortcode;
+        reelState(shortcode, mediaId);
+        emit();
+        let media: ReelMedia | undefined;
+        if (reelMediaRequests.has(shortcode)) {
+            await waitForReelMedia(shortcode);
+            media = state.reels.byId[shortcode]?.media;
+        } else {
+            media = await loadReelMedia(shortcode, mediaId);
+        }
+        if (
+            generation !== requestGeneration || !media ||
+            state.reels.activeId !== shortcode
+        ) return false;
+        return loadReelComments(shortcode);
+    }
+
+    async function setReelLiked(shortcode: string) {
+        const reel = state.reels.byId[shortcode];
+        const media = reel?.media;
+        if (!reel || !media || reelLikeRequests.has(shortcode)) return false;
+        const desired = !media.hasLiked;
+        const previous = media.hasLiked;
+        const previousCount = media.likeCount;
+        const request = Symbol(`reel-like:${shortcode}`);
+        const requestGeneration = generation;
+        reelLikeRequests.set(shortcode, request);
+        reel.media = {
+            ...media,
+            hasLiked: desired,
+            likeCount: Math.max(0, media.likeCount + (desired ? 1 : -1)),
+        };
+        reel.likeMutation = {
+            desired,
+            status: 'pending',
+            rollbackValue: previous,
+            rollbackCount: previousCount,
+        };
+        emit();
+        try {
+            const result = await rpc.setReelLiked({ mediaId: media.id, liked: desired });
+            if (generation !== requestGeneration || reelLikeRequests.get(shortcode) !== request)
+                return false;
+            if (!result.ok || result.value.mediaId !== media.id || result.value.hasLiked !== desired) {
+                reel.media = {
+                    ...reel.media!,
+                    hasLiked: reel.likeMutation?.rollbackValue ?? previous,
+                    likeCount: reel.likeMutation?.rollbackCount ?? previousCount,
+                };
+                reel.likeMutation = {
+                    desired,
+                    status: 'error',
+                    error: result.ok ? 'Reel like receipt did not match the request' : result.error.message,
+                };
+                return false;
+            }
+            reel.media = { ...reel.media!, hasLiked: result.value.hasLiked };
+            reelLikeReceiptRevisions.set(
+                shortcode,
+                (reelLikeReceiptRevisions.get(shortcode) ?? 0) + 1,
+            );
+            reel.likeMutation = undefined;
+            return true;
+        } catch (error) {
+            if (generation === requestGeneration && reelLikeRequests.get(shortcode) === request) {
+                reel.media = {
+                    ...reel.media!,
+                    hasLiked: reel.likeMutation?.rollbackValue ?? previous,
+                    likeCount: reel.likeMutation?.rollbackCount ?? previousCount,
+                };
+                reel.likeMutation = { desired, status: 'error', error: errorMessage(error) };
+            }
+            return false;
+        } finally {
+            if (generation === requestGeneration && reelLikeRequests.get(shortcode) === request) {
+                reelLikeRequests.delete(shortcode);
+                emit();
+            }
+        }
+    }
+
+    async function setReelSaved(shortcode: string) {
+        const reel = state.reels.byId[shortcode];
+        const media = reel?.media;
+        if (!reel || !media || reelSaveRequests.has(shortcode)) return false;
+        const desired = !media.hasSaved;
+        const previous = media.hasSaved;
+        const request = Symbol(`reel-save:${shortcode}`);
+        const requestGeneration = generation;
+        reelSaveRequests.set(shortcode, request);
+        reel.media = { ...media, hasSaved: desired };
+        reel.saveMutation = { desired, status: 'pending', rollbackValue: previous };
+        emit();
+        try {
+            const result = await rpc.setReelSaved({ mediaId: media.id, saved: desired });
+            if (generation !== requestGeneration || reelSaveRequests.get(shortcode) !== request)
+                return false;
+            if (!result.ok || result.value.mediaId !== media.id || result.value.hasSaved !== desired) {
+                reel.media = {
+                    ...reel.media!,
+                    hasSaved: reel.saveMutation?.rollbackValue ?? previous,
+                };
+                reel.saveMutation = {
+                    desired,
+                    status: 'error',
+                    error: result.ok ? 'Reel save receipt did not match the request' : result.error.message,
+                };
+                return false;
+            }
+            reel.media = { ...reel.media!, hasSaved: result.value.hasSaved };
+            reelSaveReceiptRevisions.set(
+                shortcode,
+                (reelSaveReceiptRevisions.get(shortcode) ?? 0) + 1,
+            );
+            reel.saveMutation = undefined;
+            return true;
+        } catch (error) {
+            if (generation === requestGeneration && reelSaveRequests.get(shortcode) === request) {
+                reel.media = {
+                    ...reel.media!,
+                    hasSaved: reel.saveMutation?.rollbackValue ?? previous,
+                };
+                reel.saveMutation = { desired, status: 'error', error: errorMessage(error) };
+            }
+            return false;
+        } finally {
+            if (generation === requestGeneration && reelSaveRequests.get(shortcode) === request) {
+                reelSaveRequests.delete(shortcode);
+                emit();
+            }
+        }
+    }
+
     function cancelWarmups() {
         warmupGeneration++;
         warmupTimers.forEach(timer => window.clearTimeout(timer));
@@ -881,7 +1315,19 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
             sendRequests.clear();
             reactionRequests.clear();
             pinRequests.clear();
-            pinMutationOrder.clear();
+            reelMediaRequests.clear();
+            reelCommentRequests.clear();
+            reelLikeRequests.clear();
+            reelSaveRequests.clear();
+            reelLikeReceiptRevisions.clear();
+            reelSaveReceiptRevisions.clear();
+            reelMediaSettledListeners.forEach(listeners =>
+                listeners.forEach(listener => listener()),
+            );
+            reelMediaSettledListeners.clear();
+            reelPreloadQueue.length = 0;
+            queuedReelPreloads.clear();
+            pinOperations.length = 0;
             inboxRequest = undefined;
         },
         loadNextInboxPage() {
@@ -1001,6 +1447,28 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
             if (!emoji) return Promise.resolve(false);
             return runReaction(threadId, messageId, emoji);
         },
+        openReel,
+        closeReel() {
+            if (!state.reels.activeId) return;
+            state.reels.activeId = undefined;
+            emit();
+        },
+        retryReel(shortcode: string) {
+            const reel = state.reels.byId[shortcode];
+            if (!reel) return Promise.resolve(undefined);
+            reel.status = 'idle';
+            reel.error = undefined;
+            return loadReelMedia(shortcode, reel.mediaIdHint, true);
+        },
+        retryReelComments(shortcode: string) {
+            const reel = state.reels.byId[shortcode];
+            if (!reel) return Promise.resolve(false);
+            reel.comments.status = 'idle';
+            reel.comments.error = undefined;
+            return loadReelComments(shortcode);
+        },
+        toggleReelLiked: setReelLiked,
+        toggleReelSaved: setReelSaved,
         togglePin,
         messageRowKey(threadId: string, messageId: string) {
             return state.histories[threadId]?.rowKeyByMessageId[messageId] ?? messageId;

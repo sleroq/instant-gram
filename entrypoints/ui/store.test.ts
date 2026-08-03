@@ -3,6 +3,7 @@ import test from 'node:test';
 import type {
     Message, Page, Result, SentTextMessage, SetReactionResult, Thread, ThreadMessages,
 } from '../../lib/domain.ts';
+import { createSerialTaskQueue } from '../../lib/errors.ts';
 import type { CompleteUiRpc, UiRpc } from './rpc.ts';
 import { createFrontendStore } from './store.ts';
 import { computeChatWindow } from './virtual-list.ts';
@@ -16,6 +17,29 @@ test('chat window remains bounded after long scrolls', () => {
 test('chat window handles the top and exact end', () => {
     assert.deepEqual(computeChatWindow(0, 10), { start: 0, end: 10 });
     assert.deepEqual(computeChatWindow(72 * 999, 1_000), { start: 969, end: 1_000 });
+});
+
+test('background mutation queue preserves invocation order through failures', async () => {
+    const enqueue = createSerialTaskQueue();
+    const events: string[] = [];
+    let releaseFirst!: () => void;
+    const first = enqueue(async () => {
+        events.push('first:start');
+        await new Promise<void>(resolve => { releaseFirst = resolve; });
+        events.push('first:end');
+        throw new Error('denied');
+    });
+    const second = enqueue(async () => {
+        events.push('second:start');
+        events.push('second:end');
+        return 'persisted';
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(events, ['first:start']);
+    releaseFirst();
+    await assert.rejects(first, /denied/);
+    assert.equal(await second, 'persisted');
+    assert.deepEqual(events, ['first:start', 'first:end', 'second:start', 'second:end']);
 });
 
 test('inbox pagination is single-flight and deduplicates overlapping IDs', async () => {
@@ -264,14 +288,174 @@ test('conversation pins are optimistic, single-flight, authoritative, and roll b
     assert.equal(await first, false);
     assert.deepEqual(store.state.pinnedIds, ['b']);
     assert.deepEqual(store.state.pinMutations.a, {
-        pin: true, status: 'error', error: 'denied',
+        pin: true, order: 1, status: 'error', error: 'denied',
     });
 
     assert.equal(await store.togglePin('a'), true);
     assert.deepEqual(store.state.pinnedIds, ['a', 'b']);
     assert.equal(store.state.pinMutations.a, undefined);
-    assert.equal(toggleCalls[0]?.threadFbid, 'a');
+    assert.equal(toggleCalls[0]?.threadFbid, '1');
     store.destroy();
+});
+
+test('pin reads cannot overwrite a mutation whether the read or mutation finishes first', async () => {
+    for (const mutationFinishesFirst of [false, true]) {
+        let resolvePins!: (value: { pinned: string[] }) => void;
+        let resolveToggle!: (value: Awaited<ReturnType<CompleteUiRpc['togglePin']>>) => void;
+        const rpc = fakeRpc(async () => ({
+            ok: true,
+            value: { items: [thread('a'), thread('b')], hasNextPage: false },
+        }), undefined, () => new Promise(resolve => { resolvePins = resolve; }),
+        undefined, undefined, payload => new Promise(resolve => { resolveToggle = resolve; }));
+        const store = createFrontendStore(rpc);
+        store.start();
+        await settle();
+        const mutation = store.togglePin('a');
+        assert.deepEqual(store.state.pinnedIds, ['a']);
+
+        if (mutationFinishesFirst) {
+            resolveToggle({
+                ok: true,
+                value: { pinned: ['a', 'b'], receipt: { threadFbid: '1', isPinned: true } },
+            });
+            await mutation;
+            resolvePins({ pinned: ['b'] });
+        } else {
+            resolvePins({ pinned: ['b'] });
+            await settle();
+            assert.deepEqual(store.state.pinnedIds, ['a']);
+            resolveToggle({
+                ok: true,
+                value: { pinned: ['a', 'b'], receipt: { threadFbid: '1', isPinned: true } },
+            });
+            await mutation;
+        }
+        await settle();
+        assert.deepEqual(store.state.committedPinnedIds, ['a', 'b']);
+        assert.deepEqual(store.state.pinnedIds, ['a', 'b']);
+        store.destroy();
+    }
+});
+
+test('cross-thread pin completions commit in invocation order and replay failures', async () => {
+    const resolvers = new Map<string, (value: Awaited<ReturnType<CompleteUiRpc['togglePin']>>) => void>();
+    const rpc = fakeRpc(async () => ({
+        ok: true,
+        value: { items: [thread('a'), thread('b'), thread('c')], hasNextPage: false },
+    }), undefined, async () => ({ pinned: ['c'] }), undefined, undefined, payload =>
+        new Promise(resolve => { resolvers.set(payload.threadKey, resolve); }));
+    const store = createFrontendStore(rpc);
+    store.start();
+    await settle();
+
+    const first = store.togglePin('a');
+    const second = store.togglePin('b');
+    assert.deepEqual(store.state.pinnedIds, ['b', 'a', 'c']);
+    resolvers.get('b')!({
+        ok: true,
+        value: { pinned: ['b', 'c'], receipt: { threadFbid: '2', isPinned: true } },
+    });
+    await settle();
+    assert.deepEqual(store.state.pinnedIds, ['b', 'a', 'c']);
+    resolvers.get('a')!({ ok: false, error: { message: 'first denied' } });
+    assert.equal(await first, false);
+    assert.equal(await second, true);
+    assert.deepEqual(store.state.committedPinnedIds, ['b', 'c']);
+    assert.deepEqual(store.state.pinnedIds, ['b', 'c']);
+    assert.equal(store.state.pinMutations.a.status, 'error');
+    assert.equal(store.state.pinMutations.b, undefined);
+    store.destroy();
+});
+
+test('a pin read begun during a mutation refreshes only its committed baseline', async () => {
+    let pinRead = 0;
+    let resolveRead!: (value: { pinned: string[] }) => void;
+    let resolveToggle!: (value: Awaited<ReturnType<CompleteUiRpc['togglePin']>>) => void;
+    const rpc = fakeRpc(async () => ({
+        ok: true,
+        value: { items: [thread('a'), thread('b')], hasNextPage: false },
+    }), undefined, () => ++pinRead === 1
+        ? Promise.resolve({ pinned: ['b'] })
+        : new Promise(resolve => { resolveRead = resolve; }),
+    undefined, undefined, () => new Promise(resolve => { resolveToggle = resolve; }));
+    const store = createFrontendStore(rpc);
+    store.start();
+    await settle();
+    const mutation = store.togglePin('a');
+    store.start();
+    await settle();
+    resolveRead({ pinned: ['b'] });
+    await settle();
+    assert.deepEqual(store.state.committedPinnedIds, ['b']);
+    assert.deepEqual(store.state.pinnedIds, ['a', 'b']);
+    resolveToggle({
+        ok: true,
+        value: { pinned: ['a', 'b'], receipt: { threadFbid: '1', isPinned: true } },
+    });
+    assert.equal(await mutation, true);
+    assert.deepEqual(store.state.pinnedIds, ['a', 'b']);
+    store.destroy();
+});
+
+test('only the latest overlapping pin read may commit data or status', async () => {
+    const reads: Array<{
+        resolve: (value: { pinned: string[] }) => void;
+        reject: (error: Error) => void;
+    }> = [];
+    const rpc = fakeRpc(async () => ({
+        ok: true,
+        value: { items: [thread('a'), thread('b')], hasNextPage: false },
+    }), undefined, () => new Promise((resolve, reject) => reads.push({ resolve, reject })));
+    const store = createFrontendStore(rpc);
+
+    store.start();
+    await settle();
+    store.start();
+    await settle();
+    assert.equal(reads.length, 2);
+    reads[1].resolve({ pinned: ['b'] });
+    await settle();
+    assert.deepEqual(store.state.committedPinnedIds, ['b']);
+    assert.equal(store.state.pinsStatus, 'ready');
+    reads[0].resolve({ pinned: ['a'] });
+    await settle();
+    assert.deepEqual(store.state.committedPinnedIds, ['b']);
+    assert.equal(store.state.pinsStatus, 'ready');
+
+    store.start();
+    await settle();
+    store.start();
+    await settle();
+    reads[3].resolve({ pinned: ['a', 'b'] });
+    await settle();
+    reads[2].reject(new Error('stale read failed'));
+    await settle();
+    assert.deepEqual(store.state.committedPinnedIds, ['a', 'b']);
+    assert.equal(store.state.pinsStatus, 'ready');
+    store.destroy();
+});
+
+test('destroy ignores late pin mutation and read completions', async () => {
+    let resolvePins!: (value: { pinned: string[] }) => void;
+    let resolveToggle!: (value: Awaited<ReturnType<CompleteUiRpc['togglePin']>>) => void;
+    const rpc = fakeRpc(async () => ({
+        ok: true,
+        value: { items: [thread('a')], hasNextPage: false },
+    }), undefined, () => new Promise(resolve => { resolvePins = resolve; }),
+    undefined, undefined, () => new Promise(resolve => { resolveToggle = resolve; }));
+    const store = createFrontendStore(rpc);
+    store.start();
+    await settle();
+    const mutation = store.togglePin('a');
+    store.destroy();
+    resolvePins({ pinned: ['stale'] });
+    resolveToggle({
+        ok: true,
+        value: { pinned: ['a'], receipt: { threadFbid: '1', isPinned: true } },
+    });
+    assert.equal(await mutation, false);
+    assert.deepEqual(store.state.committedPinnedIds, []);
+    assert.deepEqual(store.state.pinnedIds, ['a']);
 });
 
 test('older history deduplicates overlaps, stays bounded, and preloads once', async () => {
@@ -692,6 +876,378 @@ test('a mismatched reaction receipt rolls back, and completion after destroy is 
     assert.equal(store.state.histories.a.byId.target.reactions?.[0].reaction, 'LATE');
 });
 
+test('reel shares preload with a bounded deduped cache while comments and mutations stay intent-driven', async () => {
+    installWindowTimers();
+    const mediaCalls: string[] = [];
+    let commentCalls = 0;
+    const reelMessages = Array.from({ length: 10 }, (_, index): Message => ({
+        kind: 'reel_share',
+        id: `message-${index}`,
+        senderId: 'sender',
+        ts: index,
+        shortcode: `S${index}`,
+        mediaId: String(1000 + index),
+        targetUrl: `https://www.instagram.com/reel/S${index}/`,
+        thumbUrl: 'https://cdn.example/thumb.jpg',
+        author: 'alice',
+    }));
+    reelMessages.push({ ...reelMessages[0], id: 'duplicate-share' });
+    const rpc = fakeRpc(async () => ({
+        ok: true,
+        value: { items: [thread('a')], hasNextPage: false },
+    }), async () => ({
+        ok: true,
+        value: { items: reelMessages, hasNextPage: false, viewerId: 'viewer' },
+    }));
+    rpc.getReelMedia = async payload => {
+        mediaCalls.push(payload.shortcode);
+        return {
+            ok: true,
+            value: {
+                id: payload.mediaId!,
+                shortcode: payload.shortcode,
+                author: {
+                    id: 'owner', username: 'alice', fullName: 'Alice', picUrl: null,
+                    isVerified: false,
+                },
+                items: [{
+                    id: payload.mediaId!, kind: 'video',
+                    videoUrl: 'https://cdn.example/video.mp4',
+                    posterUrl: 'https://cdn.example/poster.jpg', durationSec: 5,
+                    canDownload: true,
+                }],
+                likeCount: 4,
+                commentCount: 1,
+                hasLiked: false,
+                hasSaved: false,
+                canSave: true,
+                canDownload: true,
+            },
+        };
+    };
+    rpc.getReelComments = async () => {
+        commentCalls++;
+        return {
+            ok: true,
+            value: {
+                items: [{
+                    id: 'comment', text: 'hello', createdAtMs: 1,
+                    likeCount: 0, hasLiked: false, childCommentCount: 0,
+                    author: {
+                        id: 'commenter', username: 'bob', fullName: 'Bob', picUrl: null,
+                        isVerified: false,
+                    },
+                }],
+                hasNextPage: false,
+            },
+        };
+    };
+    rpc.setReelLiked = async payload => ({
+        ok: true,
+        value: { mediaId: payload.mediaId, hasLiked: payload.liked },
+    });
+    rpc.setReelSaved = async () => ({ ok: false, error: { message: 'save failed' } });
+
+    const store = createFrontendStore(rpc);
+    store.start();
+    await settle();
+    store.selectThread('a');
+    for (let index = 0; index < 12; index++) await settle();
+
+    assert.equal(mediaCalls.length, 8);
+    assert.equal(new Set(mediaCalls).size, 8);
+    assert.equal(commentCalls, 0);
+    assert.equal(store.state.reels.byId.S0.media?.items[0]?.kind, 'video');
+
+    assert.equal(await store.openReel('S0', '1000'), true);
+    assert.equal(commentCalls, 1);
+    assert.deepEqual(store.state.reels.byId.S0.comments.listedIds, ['comment']);
+    assert.equal(await store.toggleReelLiked('S0'), true);
+    assert.equal(store.state.reels.byId.S0.media?.hasLiked, true);
+    assert.equal(store.state.reels.byId.S0.media?.likeCount, 5);
+    assert.equal(await store.toggleReelSaved('S0'), false);
+    assert.equal(store.state.reels.byId.S0.media?.hasSaved, false);
+    assert.match(store.state.reels.byId.S0.saveMutation?.error ?? '', /save failed/);
+    store.destroy();
+});
+
+test('reel opens join one deferred media flight and close gates comments without discarding a started page', async () => {
+    const rpc = fakeRpc(async () => ({ ok: true, value: { items: [], hasNextPage: false } }));
+    let mediaCalls = 0;
+    let resolveMedia!: (value: Awaited<ReturnType<CompleteUiRpc['getReelMedia']>>) => void;
+    rpc.getReelMedia = async () => {
+        mediaCalls++;
+        return new Promise(resolve => { resolveMedia = resolve; });
+    };
+    let commentCalls = 0;
+    let resolveComments!: (value: Awaited<ReturnType<CompleteUiRpc['getReelComments']>>) => void;
+    rpc.getReelComments = async () => {
+        commentCalls++;
+        return new Promise(resolve => { resolveComments = resolve; });
+    };
+    const store = createFrontendStore(rpc);
+    const first = store.openReel('ABC', '100');
+    const joined = store.openReel('ABC', '100');
+    assert.equal(mediaCalls, 1);
+    store.closeReel();
+    resolveMedia({ ok: true, value: reelMedia('ABC', '100', 'https://cdn/old.mp4') });
+    assert.equal(await first, false);
+    assert.equal(await joined, false);
+    assert.equal(commentCalls, 0);
+
+    const opened = store.openReel('ABC', '100');
+    await settle();
+    assert.equal(commentCalls, 1);
+    store.closeReel();
+    resolveComments({ ok: true, value: { items: [], hasNextPage: false } });
+    assert.equal(await opened, true);
+    assert.equal(store.state.reels.byId.ABC.comments.status, 'ready');
+    store.destroy();
+});
+
+test('reel responses are identity checked, retries refresh URLs, and duplicate mutations are single-flight', async () => {
+    const rpc = fakeRpc(async () => ({ ok: true, value: { items: [], hasNextPage: false } }));
+    let mediaCalls = 0;
+    rpc.getReelMedia = async payload => ({
+        ok: true,
+        value: reelMedia(
+            payload.shortcode,
+            payload.mediaId!,
+            mediaCalls++ === 0 ? 'https://cdn/expired.mp4' : 'https://cdn/fresh.mp4',
+        ),
+    });
+    rpc.getReelComments = async () => ({ ok: true, value: { items: [], hasNextPage: false } });
+    let likeCalls = 0;
+    let resolveLike!: (value: Awaited<ReturnType<CompleteUiRpc['setReelLiked']>>) => void;
+    rpc.setReelLiked = async () => {
+        likeCalls++;
+        return new Promise(resolve => { resolveLike = resolve; });
+    };
+    let saveCalls = 0;
+    let resolveSave!: (value: Awaited<ReturnType<CompleteUiRpc['setReelSaved']>>) => void;
+    rpc.setReelSaved = async () => {
+        saveCalls++;
+        return new Promise(resolve => { resolveSave = resolve; });
+    };
+    const store = createFrontendStore(rpc);
+    assert.equal(await store.openReel('ABC', '100'), true);
+    assert.equal(store.state.reels.byId.ABC.media?.items[0]?.downloadUrl, 'https://cdn/expired.mp4');
+    const refresh = store.retryReel('ABC');
+    const joinedRefresh = store.retryReel('ABC');
+    await refresh;
+    await joinedRefresh;
+    assert.equal(mediaCalls, 2);
+    assert.equal(store.state.reels.byId.ABC.media?.items[0]?.downloadUrl, 'https://cdn/fresh.mp4');
+
+    const like = store.toggleReelLiked('ABC');
+    assert.equal(await store.toggleReelLiked('ABC'), false);
+    assert.equal(likeCalls, 1);
+    resolveLike({ ok: true, value: { mediaId: '999', hasLiked: true } });
+    assert.equal(await like, false);
+    assert.equal(store.state.reels.byId.ABC.media?.hasLiked, false);
+    const save = store.toggleReelSaved('ABC');
+    assert.equal(await store.toggleReelSaved('ABC'), false);
+    assert.equal(saveCalls, 1);
+    resolveSave({ ok: true, value: { mediaId: '100', hasSaved: true } });
+    assert.equal(await save, true);
+    store.destroy();
+
+    const mismatchRpc = fakeRpc(async () => ({ ok: true, value: { items: [], hasNextPage: false } }));
+    mismatchRpc.getReelMedia = async () => ({
+        ok: true, value: reelMedia('WRONG', '999', 'https://cdn/wrong.mp4'),
+    });
+    const mismatchStore = createFrontendStore(mismatchRpc);
+    assert.equal(await mismatchStore.openReel('ABC', '100'), false);
+    assert.equal(mismatchStore.state.reels.byId.ABC.media, undefined);
+    assert.match(mismatchStore.state.reels.byId.ABC.error ?? '', /identity did not match/);
+    mismatchStore.destroy();
+});
+
+test('reel refreshes reconcile pending, successful, and failed like/save mutations', async () => {
+    const rpc = fakeRpc(async () => ({ ok: true, value: { items: [], hasNextPage: false } }));
+    const mediaResolvers: Array<(value: Awaited<ReturnType<CompleteUiRpc['getReelMedia']>>) => void> = [];
+    let mediaCalls = 0;
+    rpc.getReelMedia = async () => {
+        if (mediaCalls++ === 0) {
+            return {
+                ok: true,
+                value: { ...reelMedia('ABC', '100', 'https://cdn/initial.mp4'), likeCount: 10 },
+            };
+        }
+        return new Promise(resolve => mediaResolvers.push(resolve));
+    };
+    rpc.getReelComments = async () => ({ ok: true, value: { items: [], hasNextPage: false } });
+
+    const likeResolvers: Array<(value: Awaited<ReturnType<CompleteUiRpc['setReelLiked']>>) => void> = [];
+    rpc.setReelLiked = async () => new Promise(resolve => likeResolvers.push(resolve));
+    const saveResolvers: Array<(value: Awaited<ReturnType<CompleteUiRpc['setReelSaved']>>) => void> = [];
+    rpc.setReelSaved = async () => new Promise(resolve => saveResolvers.push(resolve));
+
+    const store = createFrontendStore(rpc);
+    assert.equal(await store.openReel('ABC', '100'), true);
+
+    // A receipt that wins the race remains authoritative over the older refresh response.
+    const firstRefresh = store.retryReel('ABC');
+    const like = store.toggleReelLiked('ABC');
+    likeResolvers.shift()!({ ok: true, value: { mediaId: '100', hasLiked: true } });
+    assert.equal(await like, true);
+    mediaResolvers.shift()!({
+        ok: true,
+        value: {
+            ...reelMedia('ABC', '100', 'https://cdn/refreshed-after-like.mp4'),
+            likeCount: 10,
+            commentCount: 20,
+        },
+    });
+    await firstRefresh;
+    assert.equal(store.state.reels.byId.ABC.media?.hasLiked, true);
+    assert.equal(store.state.reels.byId.ABC.media?.likeCount, 11);
+    assert.equal(store.state.reels.byId.ABC.media?.commentCount, 20);
+
+    // A refresh that wins preserves pending save intent until its matching receipt settles.
+    const save = store.toggleReelSaved('ABC');
+    const secondRefresh = store.retryReel('ABC');
+    mediaResolvers.shift()!({
+        ok: true,
+        value: {
+            ...reelMedia('ABC', '100', 'https://cdn/refreshed-before-save.mp4'),
+            hasLiked: true,
+            likeCount: 11,
+            hasSaved: false,
+            commentCount: 30,
+        },
+    });
+    await secondRefresh;
+    assert.equal(store.state.reels.byId.ABC.media?.hasSaved, true);
+    saveResolvers.shift()!({ ok: true, value: { mediaId: '100', hasSaved: true } });
+    assert.equal(await save, true);
+    assert.equal(store.state.reels.byId.ABC.media?.hasSaved, true);
+    assert.equal(store.state.reels.byId.ABC.media?.commentCount, 30);
+
+    // Failure restores the baseline supplied by the overlapping fresh read, including counts.
+    const unlike = store.toggleReelLiked('ABC');
+    const thirdRefresh = store.retryReel('ABC');
+    mediaResolvers.shift()!({
+        ok: true,
+        value: {
+            ...reelMedia('ABC', '100', 'https://cdn/refreshed-before-failure.mp4'),
+            hasLiked: true,
+            hasSaved: true,
+            likeCount: 40,
+            commentCount: 50,
+        },
+    });
+    await thirdRefresh;
+    assert.equal(store.state.reels.byId.ABC.media?.hasLiked, false);
+    assert.equal(store.state.reels.byId.ABC.media?.likeCount, 39);
+    likeResolvers.shift()!({ ok: false, error: { message: 'unlike failed' } });
+    assert.equal(await unlike, false);
+    assert.equal(store.state.reels.byId.ABC.media?.hasLiked, true);
+    assert.equal(store.state.reels.byId.ABC.media?.likeCount, 40);
+    assert.equal(store.state.reels.byId.ABC.media?.commentCount, 50);
+    assert.match(store.state.reels.byId.ABC.likeMutation?.error ?? '', /unlike failed/);
+
+    const unsave = store.toggleReelSaved('ABC');
+    const fourthRefresh = store.retryReel('ABC');
+    mediaResolvers.shift()!({
+        ok: true,
+        value: {
+            ...reelMedia('ABC', '100', 'https://cdn/refreshed-before-save-failure.mp4'),
+            hasLiked: true,
+            hasSaved: true,
+            likeCount: 40,
+            commentCount: 60,
+        },
+    });
+    await fourthRefresh;
+    assert.equal(store.state.reels.byId.ABC.media?.hasSaved, false);
+    saveResolvers.shift()!({ ok: false, error: { message: 'unsave failed' } });
+    assert.equal(await unsave, false);
+    assert.equal(store.state.reels.byId.ABC.media?.hasSaved, true);
+    assert.equal(store.state.reels.byId.ABC.media?.commentCount, 60);
+    assert.match(store.state.reels.byId.ABC.saveMutation?.error ?? '', /unsave failed/);
+    store.destroy();
+});
+
+test('chained reel mutation failures retain receipts across older refreshes', async () => {
+    const rpc = fakeRpc(async () => ({ ok: true, value: { items: [], hasNextPage: false } }));
+    const mediaResolvers: Array<(value: Awaited<ReturnType<CompleteUiRpc['getReelMedia']>>) => void> = [];
+    let mediaCalls = 0;
+    rpc.getReelMedia = async () => {
+        if (mediaCalls++ === 0) return {
+            ok: true,
+            value: { ...reelMedia('ABC', '100', 'https://cdn/initial.mp4'), likeCount: 10 },
+        };
+        return new Promise(resolve => mediaResolvers.push(resolve));
+    };
+    rpc.getReelComments = async () => ({ ok: true, value: { items: [], hasNextPage: false } });
+    const likeResolvers: Array<(value: Awaited<ReturnType<CompleteUiRpc['setReelLiked']>>) => void> = [];
+    rpc.setReelLiked = async () => new Promise(resolve => likeResolvers.push(resolve));
+    const saveResolvers: Array<(value: Awaited<ReturnType<CompleteUiRpc['setReelSaved']>>) => void> = [];
+    rpc.setReelSaved = async () => new Promise(resolve => saveResolvers.push(resolve));
+
+    const store = createFrontendStore(rpc);
+    assert.equal(await store.openReel('ABC', '100'), true);
+
+    // The refresh predates the like receipt, but settles during the unlike request.
+    const likeRefresh = store.retryReel('ABC');
+    const like = store.toggleReelLiked('ABC');
+    likeResolvers.shift()!({ ok: true, value: { mediaId: '100', hasLiked: true } });
+    assert.equal(await like, true);
+    const unlike = store.toggleReelLiked('ABC');
+    mediaResolvers.shift()!({
+        ok: true,
+        value: {
+            ...reelMedia('ABC', '100', 'https://cdn/older-like-refresh.mp4'),
+            likeCount: 10,
+            commentCount: 70,
+        },
+    });
+    await likeRefresh;
+    assert.equal(store.state.reels.byId.ABC.media?.hasLiked, false);
+    assert.equal(store.state.reels.byId.ABC.media?.likeCount, 10);
+    likeResolvers.shift()!({ ok: false, error: { message: 'unlike failed' } });
+    assert.equal(await unlike, false);
+    assert.equal(store.state.reels.byId.ABC.media?.hasLiked, true);
+    assert.equal(store.state.reels.byId.ABC.media?.likeCount, 11);
+    assert.equal(store.state.reels.byId.ABC.media?.commentCount, 70);
+
+    // Save receipts have the same ordering guarantee when an older read lands during unsave.
+    const saveRefresh = store.retryReel('ABC');
+    const save = store.toggleReelSaved('ABC');
+    saveResolvers.shift()!({ ok: true, value: { mediaId: '100', hasSaved: true } });
+    assert.equal(await save, true);
+    const unsave = store.toggleReelSaved('ABC');
+    mediaResolvers.shift()!({
+        ok: true,
+        value: {
+            ...reelMedia('ABC', '100', 'https://cdn/older-save-refresh.mp4'),
+            hasLiked: true,
+            likeCount: 11,
+            commentCount: 80,
+        },
+    });
+    await saveRefresh;
+    assert.equal(store.state.reels.byId.ABC.media?.hasSaved, false);
+    saveResolvers.shift()!({ ok: false, error: { message: 'unsave failed' } });
+    assert.equal(await unsave, false);
+    assert.equal(store.state.reels.byId.ABC.media?.hasSaved, true);
+    assert.equal(store.state.reels.byId.ABC.media?.commentCount, 80);
+    store.destroy();
+});
+
+test('destroyed reel store ignores deferred completions', async () => {
+    const rpc = fakeRpc(async () => ({ ok: true, value: { items: [], hasNextPage: false } }));
+    let resolveMedia!: (value: Awaited<ReturnType<CompleteUiRpc['getReelMedia']>>) => void;
+    rpc.getReelMedia = async () => new Promise(resolve => { resolveMedia = resolve; });
+    const store = createFrontendStore(rpc);
+    const opening = store.openReel('ABC', '100');
+    store.destroy();
+    resolveMedia({ ok: true, value: reelMedia('ABC', '100', 'https://cdn/late.mp4') });
+    assert.equal(await opening, false);
+    assert.equal(store.state.reels.byId.ABC.media, undefined);
+});
+
 function fakeRpc(
     getInbox: UiRpc['getInbox'],
     getThread: UiRpc['getThread'] = async () => emptyHistory(),
@@ -723,6 +1279,12 @@ function fakeRpc(
             ok: false,
             error: { message: 'not used' },
         }),
+        getReelComments: async () => ({
+            ok: false,
+            error: { message: 'not used' },
+        }),
+        setReelLiked: async () => ({ ok: false, error: { message: 'not used' } }),
+        setReelSaved: async () => ({ ok: false, error: { message: 'not used' } }),
     };
 }
 
@@ -730,10 +1292,33 @@ function emptyHistory(): Result<ThreadMessages> {
     return { ok: true, value: { items: [], hasNextPage: false, viewerId: 'viewer' } };
 }
 
+function reelMedia(shortcode: string, id: string, url: string) {
+    return {
+        id,
+        shortcode,
+        author: { id: 'owner', username: 'alice', fullName: 'Alice', picUrl: null, isVerified: false },
+        items: [{
+            id,
+            kind: 'video' as const,
+            videoUrl: url,
+            posterUrl: url,
+            durationSec: 1,
+            canDownload: true,
+            downloadUrl: url,
+        }],
+        likeCount: 0,
+        commentCount: 0,
+        hasLiked: false,
+        hasSaved: false,
+        canSave: true,
+        canDownload: true,
+    };
+}
+
 function thread(key: string): Thread {
     return {
         key,
-        threadFbid: key,
+        threadFbid: String(key.charCodeAt(0) - 96),
         title: key,
         isGroup: false,
         isMuted: false,

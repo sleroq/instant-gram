@@ -262,6 +262,50 @@ export const INSTAGRAM_GRAPHQL_OPERATIONS = {
             },
         }),
     ),
+    PolarisAPILikePostMutation: mutation(
+        FRIENDLY_NAMES.likeReel,
+        DOC_IDS.likeReel,
+        (input: { mediaId: string; clientMutationId: string }, context) => ({
+            input: {
+                media_id: input.mediaId,
+                actor_id: context.viewerId,
+                client_mutation_id: input.clientMutationId,
+            },
+        }),
+    ),
+    PolarisAPIUnlikePostMutation: mutation(
+        FRIENDLY_NAMES.unlikeReel,
+        DOC_IDS.unlikeReel,
+        (input: { mediaId: string; clientMutationId: string }, context) => ({
+            input: {
+                media_id: input.mediaId,
+                actor_id: context.viewerId,
+                client_mutation_id: input.clientMutationId,
+            },
+        }),
+    ),
+    PolarisAPISavePostMutation: mutation(
+        FRIENDLY_NAMES.saveReel,
+        DOC_IDS.saveReel,
+        (input: { mediaId: string; clientMutationId: string }, context) => ({
+            input: {
+                media_id: input.mediaId,
+                actor_id: context.viewerId,
+                client_mutation_id: input.clientMutationId,
+            },
+        }),
+    ),
+    PolarisAPIUnsavePostMutation: mutation(
+        FRIENDLY_NAMES.unsaveReel,
+        DOC_IDS.unsaveReel,
+        (input: { mediaId: string; clientMutationId: string }, context) => ({
+            input: {
+                media_id: input.mediaId,
+                actor_id: context.viewerId,
+                client_mutation_id: input.clientMutationId,
+            },
+        }),
+    ),
     IGDEmojiPickerQuery: query(
         FRIENDLY_NAMES.emojiPicker,
         DOC_IDS.emojiPicker,

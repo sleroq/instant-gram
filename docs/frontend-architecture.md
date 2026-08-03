@@ -34,6 +34,9 @@ shapes and should be treated as reference evidence, not copied into components.
 getInbox({ cursor? }): Result<Page<Thread>>
 getThread({ threadKey, cursor? }): Result<ThreadMessages>
 getReelMedia({ shortcode, mediaId? }): Result<ReelMedia>
+getReelComments({ mediaId }): Result<ReelComments>
+setReelLiked({ mediaId, liked }): Result<ReelLikeReceipt>
+setReelSaved({ mediaId, saved }): Result<ReelSaveReceipt>
 getPins(): { pinned: string[] }
 togglePin({ threadKey, threadFbid, pin }): Result<{ pinned, receipt }>
 sendText({ threadFbid, text, replyToMessageId?, offlineThreadingId }): Result<SentTextMessage>
@@ -46,7 +49,7 @@ requires only `sendText` and `setReaction`. `rpc.ts` sends each message to
 `background`; it does not interpret results. Keep the discriminated `Result<T>`
 check in actions at the store boundary.
 
-The extension bridge is a closed capability list. Only the three mutation RPCs
+The extension bridge is a closed capability list. DM and reel mutation RPCs
 above are routed through UI, background, and content script; the broader
 Instagram operation catalog (including generic GraphQL execution, read markers,
 message pins, and richer sends) is not exposed to UI code. The content-script
@@ -121,9 +124,17 @@ type HistoryState = {
 type FrontendState = {
     inbox: InboxState;
     pinnedIds: string[];
+    committedPinnedIds: string[];
     pinsStatus: Status;
+    pinMutations: Record<string, {
+        pin: boolean;
+        order: number;
+        status: 'pending' | 'error';
+        error?: string;
+    }>;
     selectedThreadId?: string;
     histories: Record<string, HistoryState>;
+    reels: { activeId?: string; byId: Record<string, ReelState> };
 };
 ```
 
@@ -156,6 +167,49 @@ optimistic DOM row survives ID reconciliation. The viewport remains capped at 80
 Components must iterate ordered IDs and look up entities. Do not duplicate
 thread/message objects into pinned, selected, or viewport arrays.
 
+### Reel cache and open intent
+
+Reels use `shortcode` as the stable normalized key. Each `ReelState` holds one
+`ReelMedia` entity plus normalized comment `listedIds`/`byId`, independent media
+and comment status/error state, and visible like/save mutation state. Media IDs
+remain operation identifiers and do not replace the stable shortcode key.
+`ReelMedia.items` represents one video/image or every ordered carousel slide;
+only captured positive `media_type`/`product_type` carousel discriminators select
+`carousel_media`, so stray child fields on a single item cannot change its shape.
+each item exposes its direct CDN media URL, explicit download eligibility/source,
+poster, dimensions when available, and video duration. A malformed carousel is
+rejected as a whole so slide cardinality is never silently changed. Author
+profile metadata, caption/counts, liked/saved state, and download eligibility
+are parsed outside UI components.
+
+Every loaded initial or older history page scans its messages for reel shares.
+The store deduplicates by shortcode, starts at most two reel preloads at once,
+and spends at most eight preload starts per store lifetime. This includes inbox
+warmups, so a later modal open reads the same cache synchronously rather than
+creating a component-owned request/cache. Explicit open is outside that budget
+and waits for an overlapping preload instead of issuing a duplicate request.
+
+Comments are deliberately not part of preload. `openReel(shortcode, mediaId?)`
+records modal intent, ensures media, and only then requests the initial comments
+page. The captures prove no comment cursor request, so this is deliberately one
+lazy page. Closing before media settles prevents the comments request. Comment rows
+are normalized by comment ID. Like and save are separate per-reel single-flights:
+the store applies the boolean/count change optimistically, accepts only a
+matching media-ID/state receipt, and otherwise restores the snapshot while
+retaining an error mutation for accessible UI feedback. The unlike capture
+reported a stale `has_liked: true`; the operation-specific parser therefore
+uses the matched unlike receipt as authoritative `false` rather than exposing
+that contradictory field.
+
+Forced reel-info refreshes reconcile independently with those like/save flights.
+A refresh overlays pending intent while replacing its rollback baseline with the
+fresh read; a later failure therefore restores refreshed metadata, not the
+pre-request snapshot. If a matching mutation receipt settles after a refresh
+started, that receipt's boolean and optimistic like count remain authoritative
+over the older read while all unrelated refreshed metadata is retained. This
+also protects a chained opposite mutation: the older read may update metadata,
+but cannot replace that mutation's receipt-backed rollback baseline.
+
 ### Pin normalization and displayed order
 
 Pins load independently from inbox. `loadPins` deduplicates persisted IDs with a
@@ -165,10 +219,26 @@ Pins load independently from inbox. `loadPins` deduplicates persisted IDs with a
 2. emits loaded pinned IDs in persisted pin order;
 3. emits inbox IDs not in that pinned set, preserving server order.
 
-Conversation pin/unpin is store-owned and optimistic. It uses the normalized
+Conversation pin/unpin is store-owned and optimistic. `committedPinnedIds` is
+the latest authoritative persisted baseline; `pinnedIds` is that baseline with
+the ordered in-flight operation journal replayed in invocation order. Settled
+operations commit only from the head of that journal, so cross-thread responses
+cannot invert optimistic precedence even if they settle out of order. A failure
+is removed from replay and retained as visible row error state. Pin reads capture
+both a pin revision and a monotonically increasing read token. Only the latest
+read in the current store generation may commit its data or ready/error status,
+and only while its captured revision still matches. Thus overlapping refreshes
+can run (including a post-mutation refresh) without an older success or rejection
+overwriting the newer result. A read begun before a mutation cannot overwrite its
+completed receipt, while a read that settles during an unchanged pending mutation
+may refresh only the committed baseline beneath the still-replayed optimistic
+operation.
+
+The mutation uses the normalized
 `Thread.threadFbid` operation identifier retained separately from `Thread.key`
-(never substituting the route/key), serializes
-durable updates in the background, and reconciles only a matching authoritative
+(never substituting the opaque route/key). Mutation FBIDs and authoritative
+receipt IDs must be numeric Instagram string IDs. The background serializes
+durable updates, and the store reconciles only a matching authoritative
 `{ id, is_pin }` receipt. Per-thread flights are deduplicated; failures roll back
 the optimistic order and remain visible on the row. `Thread.serverIsPin` is read
 metadata and is not substituted for persisted `pinnedIds`.
@@ -191,6 +261,16 @@ Do not reuse it for older-page lookahead.
 `MessagePane` renders the bounded viewport, opens new chats at the newest row,
 restores visited chats from an ID-plus-offset anchor, groups adjacent senders,
 and renders every current domain message variant and reply preview.
+
+Message parsing owns the explicit Instagram content-type inventory. Textual
+conversation administration (group image/name changes, participant removal, and
+new-friend notices) crosses the background/UI boundary as the protocol-neutral
+`activity` message variant. Activity rows have no sender identity and are
+centered and non-actionable. Known non-rich events carry a normalized friendly
+fallback label/preview; `contentType` remains diagnostic metadata and is never
+shown in normal inbox, history, or reply UI. Future unknown values use
+“Unsupported message”, and malformed or absent media URLs never create image
+entities.
 
 Sender runs remain a presentation derived from normalized `viewportIds` and
 `byId`; they are not another cache. A run breaks on sender, date, or the existing
@@ -247,6 +327,13 @@ remain gated until `retryOlderHistory(id)` explicitly clears that cursor.
 - `pinRequests` permits one conversation pin mutation per thread. The background
   serializes storage commits so persisted prepend order follows invocation order;
   other pending optimistic pins are replayed over each authoritative list.
+- `reelMediaRequests` and `reelCommentRequests` permit one read per shortcode;
+  opening during preload joins its settlement, while comments require open
+  intent. `reelLikeRequests` and `reelSaveRequests` serialize those actions
+  independently per shortcode.
+- Reel retries force a fresh info read and atomically replace signed item URLs
+  only after shortcode and media identity validation, so an expired CDN URL does
+  not remain permanently pinned in cache.
 - Every request captures the store `generation` and its unique symbol. Result,
   error, and `finally` mutation occur only when both still match.
 - `destroy()` increments `generation`, clears listeners/request registries and
@@ -299,6 +386,24 @@ action, or thread replacement, and return focus after Escape. Message-row keys i
 the thread identity so transient state cannot survive a switch between histories
 that happen to contain the same message ID; optimistic/server reconciliation
 within one thread still uses `rowKeyByMessageId` unchanged.
+
+Plain `j`/`k` keys move within the active pane. In the inbox they clamp through
+`orderedThreadIds()` and select the focused conversation; with no current chat,
+either key establishes the first loaded conversation. In history they clamp
+through the currently rendered bounded `viewportIds` rows without moving the
+window or requesting a page. `h` returns to the selected chat row and `l` enters
+the selected history, restoring a per-thread focused message ID when it remains
+rendered or otherwise choosing the newest rendered row. Every movement reveals
+the focused row with nearest-edge, non-animated scrolling. A short-lived DOM
+scroll intent lets inbox and history handlers distinguish this navigation from
+pagination intent, so keyboard movement neither fetches nor replaces a bounded
+history window. This focus memory is DOM navigation state, not a message cache.
+Inputs, textareas, selects, DOM-editable hosts and descendants (respecting
+`contenteditable="false"`), modifier chords, context menus, reaction pickers, and
+dialog-like surfaces suppress these bindings. Context-menu pin actions restore
+the invoking row after reordering only while the originating selection and focus
+intent remain current; focus/pane/thread changes, row teardown, and newer intent
+cancel the queued animation frames.
 
 Menus expose only capabilities already owned by this frontend. Selected and
 unselected chat rows offer Pin conversation or Unpin conversation by right click,
@@ -520,7 +625,7 @@ Do not reintroduce Telegram-scale machinery without measured need:
 
 - eager loading of every inbox page;
 - outlying/around-message ranges or forward network pagination;
-- forums, topics, scheduled/saved messages, comments, unread jumps, search,
+- forums, topics, scheduled messages, unread jumps, search,
   attachments/live typing, live tails, and full media playback systems;
 - Telegram's global action framework, MTProto/GramJS worker, PWA/Tauri stack,
   folder/multi-tab viewport system, heavy-animation registry, FasterDOM,

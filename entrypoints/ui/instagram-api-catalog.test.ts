@@ -105,6 +105,29 @@ test('reaction builder matches the HAR-backed mutation variables exactly', () =>
     );
 });
 
+test('reel like and save mutations match captured documents and variables', () => {
+    const input = { mediaId: '3953224267254190889', clientMutationId: '7' };
+    const variables = {
+        input: {
+            media_id: input.mediaId,
+            actor_id: context.viewerId,
+            client_mutation_id: '7',
+        },
+    };
+    assert.deepEqual([
+        operations.PolarisAPILikePostMutation.docId,
+        operations.PolarisAPILikePostMutation.buildVariables(input, context),
+        operations.PolarisAPIUnlikePostMutation.docId,
+        operations.PolarisAPISavePostMutation.docId,
+        operations.PolarisAPIUnsavePostMutation.docId,
+    ], [
+        '27358573637160660', variables,
+        '37071567952434061',
+        '27326721586982367',
+        '27203919972607144',
+    ]);
+});
+
 test('conversation pin and unpin use distinct current web documents and exact variables', () => {
     const pin = operations.useIGDPinThreadMutation;
     const unpin = operations.useIGDUnpinThreadMutation;
@@ -119,7 +142,7 @@ test('conversation pin and unpin use distinct current web documents and exact va
 });
 
 test('catalog is a closed DM allowlist', () => {
-    assert.equal(Object.keys(operations).length, 31);
+    assert.equal(Object.keys(operations).length, 35);
     assert.equal(isInstagramGraphqlOperationName('IGDirectReactionSendMutation'), true);
     for (const shellOperation of [
         'PolarisFeedTimelinePaginationQuery',

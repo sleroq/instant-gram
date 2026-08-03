@@ -7,7 +7,8 @@ import { createFrontendStore } from '../entrypoints/ui/store';
 import '../entrypoints/ui/styles.scss';
 
 type Scenario = 'continuous' | 'delayed' | 'resize' | 'selection' | 'image' | 'mutations' |
-    'older-send' | 'thread-state' | 'identity-pm' | 'identity-group' | 'outgoing-prepend';
+    'older-send' | 'thread-state' | 'identity-pm' | 'identity-group' | 'outgoing-prepend' |
+    'events' | 'vim-scroll';
 
 let activeStore: ReturnType<typeof createFrontendStore> | undefined;
 let resolveVisible: ((result: Result<ThreadMessages>) => void) | undefined;
@@ -18,7 +19,7 @@ let sentCount = 0;
 
 const thread = {
     key: 'thread',
-    threadFbid: 'thread-fbid',
+    threadFbid: '1001',
     title: 'History harness',
     isGroup: false,
     isMuted: false,
@@ -31,8 +32,16 @@ const thread = {
 const secondThread = {
     ...thread,
     key: 'second-thread',
+    threadFbid: '1002',
     title: 'Second history',
 };
+
+const vimThreads = Array.from({ length: 50 }, (_, index) => ({
+    ...thread,
+    key: index === 0 ? thread.key : `vim-thread-${index}`,
+    threadFbid: String(2_000 + index),
+    title: `Vim history ${index + 1}`,
+}));
 
 const imageMessage: Message = {
     kind: 'image',
@@ -45,6 +54,31 @@ const imageMessage: Message = {
         height: 960,
     }],
 };
+
+const eventMessages: Message[] = [
+    {
+        kind: 'activity',
+        id: 'activity-message',
+        ts: 1_000,
+        text: 'Alice changed the group name.',
+    },
+    {
+        kind: 'unsupported',
+        id: 'ai-fallback',
+        senderId: 'ai',
+        ts: 2_000,
+        contentType: 'GEN_AI_RICH_RESPONSE_XMA',
+        fallback: { label: 'Meta AI response', preview: '<b>Safe answer</b>' },
+    },
+    {
+        kind: 'unsupported',
+        id: 'future-fallback',
+        senderId: 'sender',
+        ts: 3_000,
+        contentType: 'FUTURE_SECRET_CARD',
+        fallback: { label: 'Unsupported message' },
+    },
+];
 
 const identityUsers = [
     { id: 'bob', username: 'bob', fullName: 'Bob', picUrl: null },
@@ -147,6 +181,10 @@ async function mount(scenario: Scenario) {
                     ? { ok: true as const, value: {
                         items: identityMessages(scenario), hasNextPage: false, viewerId: 'viewer',
                     } }
+                : scenario === 'events'
+                    ? { ok: true as const, value: {
+                        items: eventMessages, hasNextPage: false, viewerId: 'viewer',
+                    } }
                 : scenario === 'older-send' || scenario === 'thread-state'
                     ? page(0, 120, undefined, false, true)
                     : page(0, 40, undefined, false, true);
@@ -158,6 +196,8 @@ async function mount(scenario: Scenario) {
             value: {
                 items: scenario === 'selection' || scenario === 'thread-state'
                     ? [thread, secondThread]
+                    : scenario === 'vim-scroll'
+                        ? vimThreads
                     : scenario === 'image'
                         ? [{ ...thread, lastMessage: imageMessage }]
                         : scenario === 'identity-pm' || scenario === 'identity-group'
@@ -168,6 +208,8 @@ async function mount(scenario: Scenario) {
                                 isGroup: scenario === 'identity-group',
                                 users: identityUsers,
                             }]
+                            : scenario === 'events'
+                                ? [{ ...thread, lastMessage: eventMessages[2] }]
                         : [thread],
                 hasNextPage: false,
             },
@@ -230,6 +272,9 @@ async function mount(scenario: Scenario) {
             },
         }),
         getReelMedia: async () => ({ ok: false, error: { message: 'not used' } }),
+        getReelComments: async () => ({ ok: false, error: { message: 'not used' } }),
+        setReelLiked: async () => ({ ok: false, error: { message: 'not used' } }),
+        setReelSaved: async () => ({ ok: false, error: { message: 'not used' } }),
         getThread: payload => {
             calls.push(payload.cursor);
             if (payload.threadKey === secondThread.key) {
@@ -237,6 +282,7 @@ async function mount(scenario: Scenario) {
                     ? page(0, 120, undefined, false, true)
                     : page(0, 40));
             }
+            if (scenario === 'vim-scroll') return Promise.resolve(page(0, 120));
             if (!payload.cursor) return Promise.resolve(initial);
             if (payload.cursor === 'c1' && (
                 scenario === 'delayed' || scenario === 'selection' || scenario === 'outgoing-prepend'

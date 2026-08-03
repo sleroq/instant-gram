@@ -17,6 +17,8 @@ import {
     parsePinnedMessageResponse,
     parsePinnedThreadResponse,
     parseReactionMutationResponse,
+    parseReelLikeResponse,
+    parseReelSaveResponse,
     parseSentCutoutStickerResponse,
     parseSentTextResponse,
     parseSecondaryGraphqlResponse,
@@ -38,10 +40,14 @@ type AsyncHandlers<Map extends Record<keyof Map, (...args: never[]) => unknown>>
 };
 type CanonicalHandlerRpcMap = Pick<
     RpcMap,
-    'getInbox' | 'getThread' | 'sendText' | 'setReaction' | 'togglePin'
+    'getInbox' | 'getThread' | 'sendText' | 'setReaction' | 'setReelLiked' |
+    'setReelSaved' | 'togglePin'
 >;
 export type InstagramRpcHandlers = AsyncHandlers<CanonicalHandlerRpcMap>;
-type CatalogHandlerRpcMap = Pick<RpcMap, 'getInbox' | 'getThread'> & InstagramRpcMap;
+type CatalogHandlerRpcMap = Pick<
+    RpcMap,
+    'getInbox' | 'getThread' | 'setReelLiked' | 'setReelSaved'
+> & InstagramRpcMap;
 export type InstagramCatalogHandlers = AsyncHandlers<CatalogHandlerRpcMap>;
 
 type InstagramHandlerOptions = {
@@ -236,6 +242,7 @@ function createInstagramHandlers(
 ) {
     const now = options.now ?? Date.now;
     let mailboxId: string | undefined;
+    let reelMutationId = 0;
 
     async function requireMailboxId(): Promise<string> {
         if (mailboxId) return mailboxId;
@@ -368,12 +375,48 @@ function createInstagramHandlers(
                 await execute('IGDirectReactionSendMutation', input),
             );
         },
+        async setReelLiked(value: unknown) {
+            const payload = record(value);
+            exactKeys(payload, ['mediaId', 'liked']);
+            const mediaId = numericStringId(payload.mediaId, 'reel media ID');
+            if (typeof payload.liked !== 'boolean')
+                throw new Error('Invalid Instagram reel liked state');
+            const input = {
+                mediaId,
+                clientMutationId: String(++reelMutationId),
+            };
+            const receipt = parseReelLikeResponse(await execute(
+                payload.liked ? 'PolarisAPILikePostMutation' : 'PolarisAPIUnlikePostMutation',
+                input,
+            ), payload.liked);
+            if (receipt.mediaId !== mediaId || receipt.hasLiked !== payload.liked)
+                throw new Error('Instagram reel like receipt did not match the request');
+            return receipt;
+        },
+        async setReelSaved(value: unknown) {
+            const payload = record(value);
+            exactKeys(payload, ['mediaId', 'saved']);
+            const mediaId = numericStringId(payload.mediaId, 'reel media ID');
+            if (typeof payload.saved !== 'boolean')
+                throw new Error('Invalid Instagram reel saved state');
+            const input = {
+                mediaId,
+                clientMutationId: String(++reelMutationId),
+            };
+            const receipt = parseReelSaveResponse(await execute(
+                payload.saved ? 'PolarisAPISavePostMutation' : 'PolarisAPIUnsavePostMutation',
+                input,
+            ), payload.saved);
+            if (receipt.mediaId !== mediaId || receipt.hasSaved !== payload.saved)
+                throw new Error('Instagram reel save receipt did not match the request');
+            return receipt;
+        },
         async togglePin(value: unknown) {
             const payload = record(value);
             exactKeys(payload, ['threadKey', 'threadFbid', 'pin']);
             requiredString(payload.threadKey, 'thread key');
             const input = {
-                threadFbid: requiredString(payload.threadFbid, 'thread FBID'),
+                threadFbid: numericStringId(payload.threadFbid, 'thread FBID'),
             };
             if (typeof payload.pin !== 'boolean')
                 throw new Error('Invalid Instagram conversation pin state');
@@ -459,6 +502,8 @@ export function createInstagramRpcHandlers(
         getThread: handlers.getThread,
         sendText: handlers.sendText,
         setReaction: handlers.setReaction,
+        setReelLiked: handlers.setReelLiked,
+        setReelSaved: handlers.setReelSaved,
         togglePin: handlers.togglePin,
     };
 }
@@ -492,6 +537,10 @@ export const INSTAGRAM_RPC_OPERATION_REACHABILITY = {
     useIGDMarkThreadAsReadValidationMutation: 'markThreadRead',
     IGDirectTextSendMutation: 'sendText',
     IGDirectReactionSendMutation: 'setReaction',
+    PolarisAPILikePostMutation: 'setReelLiked',
+    PolarisAPIUnlikePostMutation: 'setReelLiked',
+    PolarisAPISavePostMutation: 'setReelSaved',
+    PolarisAPIUnsavePostMutation: 'setReelSaved',
     IGDEmojiPickerQuery: 'executeInstagramGraphql',
     IGDComposerRichContentTray_AvatarAvailableQuery: 'executeInstagramGraphql',
     IGDComposerRichContentStickersV2Query: 'executeInstagramGraphql',

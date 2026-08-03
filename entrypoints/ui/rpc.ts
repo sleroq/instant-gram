@@ -13,7 +13,8 @@ export type CompleteUiRpc = {
 // corresponding capabilities as they are implemented.
 export type UiRpc = Pick<
     CompleteUiRpc,
-    'getInbox' | 'getThread' | 'getReelMedia' | 'getPins' | 'togglePin'
+    'getInbox' | 'getThread' | 'getReelMedia' | 'getReelComments' |
+    'setReelLiked' | 'setReelSaved' | 'getPins' | 'togglePin'
 >;
 
 async function call<K extends RpcName>(name: K, payload: RpcPayload<K>) {
@@ -24,6 +25,9 @@ export const uiRpc: CompleteUiRpc = {
     getInbox: payload => call('getInbox', payload),
     getThread: payload => call('getThread', payload),
     getReelMedia: payload => call('getReelMedia', payload),
+    getReelComments: payload => call('getReelComments', payload),
+    setReelLiked: payload => call('setReelLiked', payload),
+    setReelSaved: payload => call('setReelSaved', payload),
     getPins: () => call('getPins', undefined),
     togglePin: payload => call('togglePin', payload),
     sendText: payload => call('sendText', payload),

@@ -10,6 +10,11 @@ import {
     parsePinnedMessageResponse,
     parsePinnedThreadResponse,
     parseReactionMutationResponse,
+    parseReelCommentsResponse,
+    parseReelInfoResponse,
+    parseReelMediaResponse,
+    parseReelLikeResponse,
+    parseReelSaveResponse,
     parseSentCutoutStickerResponse,
     parseSentTextResponse,
     parseSecondaryGraphqlResponse,
@@ -103,14 +108,18 @@ test('thread FBID is retained independently from the stable UI key', () => {
 
 test('conversation pin receipt requires authoritative id and boolean state', () => {
     assert.deepEqual(parsePinnedThreadResponse({
-        data: { xig_direct_pin_thread: { is_pin: false, id: 'mutation-fbid' } },
-    }), { threadFbid: 'mutation-fbid', isPinned: false });
+        data: { xig_direct_pin_thread: { is_pin: false, id: '1789001' } },
+    }), { threadFbid: '1789001', isPinned: false });
     assert.throws(
-        () => parsePinnedThreadResponse({ data: { xig_direct_pin_thread: { is_pin: 'false', id: 'mutation-fbid' } } }),
+        () => parsePinnedThreadResponse({ data: { xig_direct_pin_thread: { is_pin: 'false', id: '1789001' } } }),
         /receipt was not returned/,
     );
     assert.throws(
         () => parsePinnedThreadResponse({ data: { xig_direct_pin_thread: { is_pin: true } } }),
+        /receipt was not returned/,
+    );
+    assert.throws(
+        () => parsePinnedThreadResponse({ data: { xig_direct_pin_thread: { is_pin: true, id: 'route-key' } } }),
         /receipt was not returned/,
     );
 });
@@ -227,7 +236,7 @@ test('thread parsing keeps images, reactions, structured fallbacks, and pin stat
         });
 });
 
-test('old aliases and admin XMA text remain supported', () => {
+test('old aliases and admin XMA text normalize as protocol-neutral activity', () => {
     const message = parseMessage({
         item_id: 'activity-1',
         sender_id: 'sender-1',
@@ -240,9 +249,188 @@ test('old aliases and admin XMA text remain supported', () => {
             ],
         },
     });
-    assert.equal(message?.kind, 'unsupported');
-    if (message?.kind === 'unsupported')
-        assert.equal(message.fallback.label, 'Alice removed Bob');
+    assert.equal(message?.kind, 'activity');
+    if (message?.kind === 'activity')
+        assert.equal(message.text, 'Alice removed Bob');
+});
+
+test('HAR-evidenced message types have an explicit rich, activity, fallback, or suppressed policy', () => {
+    const base = { sender_fbid: 'sender-1', timestamp_ms: '1783181919592' };
+    const cases = [
+        {
+            type: 'TEXT',
+            node: { content: { text_fragments: [{ plaintext: 'fragment-only text' }] } },
+            expected: 'text',
+        },
+        {
+            type: 'IMAGES',
+            node: { content: { attachments: [{ preview_cdn_url: 'https://cdn.example/photo.jpg' }] } },
+            expected: 'image',
+        },
+        {
+            type: 'MESSAGE_INLINE_SHARE',
+            node: { content: { xma: {
+                __typename: 'SlideMessageStandardXMA',
+                title_text: 'Shared post',
+                subtitle_text: 'Post caption',
+                preview_image: { url: 'https://cdn.example/post.jpg' },
+            } } },
+            expected: 'inline_share',
+        },
+        { type: 'REACTION_LOG_XMAT', node: {}, expected: undefined },
+        {
+            type: 'CHANGE_THREAD_IMAGE_XMAT',
+            node: { content: { text_fragments: [{ plaintext: 'Alice changed the group image.' }] } },
+            expected: 'activity',
+        },
+        {
+            type: 'CHANGE_THREAD_NAME_XMAT',
+            node: { content: { text_fragments: [{ plaintext: 'Alice named the group Friends.' }] } },
+            expected: 'activity',
+        },
+        { type: 'MONTAGE_SHARE_XMA', node: { text_body: 'Story reply' }, expected: 'unsupported' },
+        {
+            type: 'REMOVE_PARTICIPANT_XMAT',
+            node: { content: { text_fragments: [{ plaintext: 'Alice removed Bob' }] } },
+            expected: 'activity',
+        },
+        { type: 'GEN_AI_RICH_RESPONSE_XMA', node: { text_body: 'AI answer' }, expected: 'unsupported' },
+        { type: 'GEN_AI_SEARCH_PLUGIN_RESPONSE_XMA', node: { text_body: 'Search answer' }, expected: 'unsupported' },
+        { type: 'IG_REELS_BLEND_VISITATION_XMAT', node: {}, expected: 'unsupported' },
+        {
+            type: 'THREAD_IGD_NEW_FRIEND_BUMP_XMAT',
+            node: { content: { text_fragments: [{ plaintext: 'You can now message each other.' }] } },
+            expected: 'activity',
+        },
+    ] as const;
+
+    for (const [index, item] of cases.entries()) {
+        const message = parseMessage({
+            ...base,
+            message_id: `inventory-${index}`,
+            content_type: item.type,
+            ...item.node,
+        });
+        assert.equal(message?.kind, item.expected, item.type);
+    }
+});
+
+test('inline-share aliases normalize detailed cards and incomplete media to friendly fallbacks', () => {
+    const detailed = [
+        {
+            __typename: 'SlideMessagePortraitXMA',
+            xmaHeaderTitle: 'Portrait author',
+            caption_body_text: 'Portrait caption',
+            xmaPreviewImage: { url: 'https://cdn.example/portrait.jpg' },
+        },
+        {
+            __typename: 'SlideMessageStandardXMA',
+            title_text: 'Standard post',
+            subtitle_text: 'Standard subtitle',
+            preview_image: { url: 'https://cdn.example/standard.jpg' },
+        },
+        {
+            __typename: 'SlideMessageLayeredXMA',
+            xmaTitle: 'Layered share',
+            subtitle_text: 'Layered subtitle',
+            preview_image: { url: 'https://cdn.example/layered.jpg' },
+        },
+    ];
+    for (const [index, xma] of detailed.entries()) {
+        const message = parseMessage({
+            message_id: `share-${index}`,
+            content_type: 'MESSAGE_INLINE_SHARE',
+            content: { xma },
+        });
+        assert.equal(message?.kind, 'inline_share');
+        if (message?.kind === 'inline_share') {
+            assert.ok(message.title);
+            assert.ok(message.thumbUrl);
+        }
+    }
+
+    const incomplete = [
+        { content: undefined, label: 'Shared post' },
+        { content: {}, label: 'Shared post' },
+        {
+            content: { xma: {
+                __typename: 'SlideMessagePlaceholderXMA',
+                title_text: 'Message unavailable',
+                subtitle_text: 'This content is no longer available.',
+            } },
+            label: 'Message unavailable',
+        },
+        {
+            content: { xma: { title_text: 'Broken preview', preview_image: { url: '' } } },
+            label: 'Broken preview',
+        },
+    ];
+    for (const [index, item] of incomplete.entries()) {
+        const message = parseMessage({
+            message_id: `incomplete-${index}`,
+            content_type: 'MESSAGE_INLINE_SHARE',
+            content: item.content,
+        });
+        assert.equal(message?.kind, 'unsupported');
+        if (message?.kind === 'unsupported') {
+            assert.equal(message.fallback.label, item.label);
+            assert.equal(message.fallback.thumbUrl, undefined);
+        }
+    }
+});
+
+test('attachment-less photos and future types retain safe normalized diagnostics', () => {
+    const photo = parseMessage({ message_id: 'photo', content_type: 'IMAGES', content: {} });
+    assert.equal(photo?.kind, 'unsupported');
+    if (photo?.kind === 'unsupported') assert.equal(photo.fallback.label, 'Photo');
+
+    const unknown = parseMessage({ sender_fbid: 'sender', timestamp_ms: '1234', content_type: 'FUTURE_CARD' });
+    assert.equal(unknown?.kind, 'unsupported');
+    if (unknown?.kind === 'unsupported') {
+        assert.equal(unknown.contentType, 'FUTURE_CARD');
+        assert.equal(unknown.fallback.label, 'Unsupported message');
+        assert.equal(unknown.id, 'sender:1234:FUTURE_CARD');
+    }
+});
+
+test('reply previews use normalized media labels without requiring an image URL', () => {
+    const shareReply = parseMessage({
+        message_id: 'replying-to-share',
+        content_type: 'TEXT',
+        text_body: 'Nice',
+        replied_to_message: {
+            message_id: 'share',
+            content_type: 'MESSAGE_INLINE_SHARE',
+            content: {
+                xma: {
+                    __typename: 'SlideMessageLayeredXMA',
+                    xmaTitle: 'Layered reply',
+                    subtitle_text: 'Reply subtitle',
+                },
+            },
+        },
+    });
+    assert.deepEqual(shareReply?.kind === 'text' ? shareReply.replyPreview : undefined, {
+        kind: 'media',
+        title: 'Layered reply',
+        subtitle: 'Reply subtitle',
+        thumbUrl: undefined,
+    });
+
+    const photoReply = parseMessage({
+        message_id: 'replying-to-photo',
+        content_type: 'TEXT',
+        text_body: 'Photo reply',
+        replied_to_message: {
+            message_id: 'photo',
+            content_type: 'IMAGES',
+            content: {},
+        },
+    });
+    assert.deepEqual(photoReply?.kind === 'text' ? photoReply.replyPreview : undefined, {
+        kind: 'media',
+        title: 'Photo',
+    });
 });
 
 test('reactions are normalized on every renderable message variant', () => {
@@ -555,4 +743,144 @@ test('mutation parsers reject malformed successful GraphQL envelopes', () => {
         } }),
         /malformed/,
     );
+});
+
+test('reel info represents video and carousel media with profile and action state', () => {
+    const base = {
+        pk: '3953224267254190889',
+        code: 'ABC',
+        user: {
+            pk: 'owner-1', username: 'alice', full_name: 'Alice',
+            profile_pic_url: 'https://cdn.example/avatar.jpg', is_verified: true,
+        },
+        caption: { text: 'Caption' },
+        like_count: 3,
+        comment_count: 4,
+        has_liked: true,
+        has_viewer_saved: true,
+        can_viewer_save: true,
+        is_third_party_downloads_eligible: true,
+    };
+    const parsed = parseReelInfoResponse({ items: [{
+        ...base,
+        media_type: 8,
+        product_type: 'carousel_container',
+        carousel_media: [{
+            pk: 'slide-video', video_duration: 5,
+            video_versions: [{ url: 'https://cdn.example/video.mp4', width: 720, height: 1280 }],
+            image_versions2: { candidates: [{ url: 'https://cdn.example/poster.jpg', width: 720, height: 1280 }] },
+        }, {
+            pk: 'slide-image',
+            image_versions2: { candidates: [{ url: 'https://cdn.example/image.jpg', width: 1080, height: 1080 }] },
+        }],
+    }] }, { shortcode: 'ABC' });
+
+    assert.equal(parsed.id, '3953224267254190889');
+    assert.deepEqual(parsed.author, {
+        id: 'owner-1', username: 'alice', fullName: 'Alice',
+        picUrl: 'https://cdn.example/avatar.jpg', isVerified: true,
+    });
+    assert.deepEqual(parsed.items.map(item => item.kind), ['video', 'image']);
+    assert.equal(parsed.items[0]?.posterUrl, 'https://cdn.example/poster.jpg');
+    assert.equal(parsed.items[0]?.canDownload, true);
+    assert.equal(parsed.items[0]?.downloadUrl, 'https://cdn.example/video.mp4');
+    assert.equal(parsed.hasLiked, true);
+    assert.equal(parsed.hasSaved, true);
+    assert.equal(parsed.canDownload, true);
+});
+
+test('reel identities and complete mixed carousels are required end to end', () => {
+    assert.deepEqual(parseReelMediaResponse({ data: { xdt_shortcode_media: {
+        pk: '3953224267254190889', id: '3953224267254190889_5654194264', code: 'ABC',
+    } } }, { shortcode: 'ABC', mediaId: '3953224267254190889' }), {
+        mediaId: '3953224267254190889', hasLiked: undefined, hasSaved: undefined,
+    });
+    assert.throws(() => parseReelMediaResponse({ data: { xdt_shortcode_media: {
+        pk: 'not-numeric', code: 'ABC',
+    } } }, { shortcode: 'ABC' }), /identity did not match/);
+    assert.throws(() => parseReelMediaResponse({ data: { xdt_shortcode_media: {
+        pk: '3953224267254190889', id: '999_5654194264', code: 'ABC',
+    } } }, { shortcode: 'ABC' }), /identity did not match/);
+    assert.throws(() => parseReelMediaResponse({ data: { xdt_shortcode_media: {
+        pk: '3953224267254190889', code: 'WRONG',
+    } } }, { shortcode: 'ABC' }), /identity did not match/);
+
+    const media = {
+        pk: '3953224267254190889', id: '3953224267254190889_5654194264', code: 'ABC',
+        media_type: 8, product_type: 'carousel_container',
+        is_third_party_downloads_eligible: false,
+        carousel_media: [{ image_versions2: { candidates: [{ url: 'https://cdn/one.jpg' }] } },
+            null,
+            { video_versions: [{ url: 'https://cdn/three.mp4' }] }],
+    };
+    assert.throws(
+        () => parseReelInfoResponse({ items: [media] }, { shortcode: 'ABC' }, {
+            mediaId: '3953224267254190889',
+        }),
+        /malformed media/,
+    );
+    assert.throws(() => parseReelInfoResponse({ items: [{
+        ...media, carousel_media: media.carousel_media.filter(Boolean), code: 'WRONG',
+    }] }, { shortcode: 'ABC' }, { mediaId: '3953224267254190889' }), /identity did not match/);
+    assert.throws(() => parseReelInfoResponse({ items: [{
+        ...media, carousel_media: media.carousel_media.filter(Boolean), pk: '3953224267254190999',
+        id: '3953224267254190999_5654194264',
+    }] }, { shortcode: 'ABC' }, { mediaId: '3953224267254190889' }), /identity did not match/);
+
+    for (const carousel_media of [undefined, null, {}, []]) {
+        assert.throws(() => parseReelInfoResponse({ items: [{
+            ...media,
+            carousel_media,
+        }] }, { shortcode: 'ABC' }), /carousel media was not returned/);
+    }
+    assert.throws(() => parseReelInfoResponse({ items: [{
+        ...media,
+        media_type: 1,
+        product_type: 'carousel_container',
+        carousel_media: null,
+    }] }, { shortcode: 'ABC' }), /carousel media was not returned/);
+
+    const single = {
+        ...media,
+        media_type: 1,
+        product_type: 'feed',
+        image_versions2: { candidates: [{ url: 'https://cdn/parent.jpg' }] },
+    };
+    for (const carousel_media of [[], [{
+        image_versions2: { candidates: [{ url: 'https://cdn/not-a-slide.jpg' }] },
+    }]]) {
+        const parsed = parseReelInfoResponse({ items: [{
+            ...single,
+            carousel_media,
+        }] }, { shortcode: 'ABC' });
+        assert.equal(parsed.items.length, 1);
+        assert.equal(parsed.items[0]?.kind, 'image');
+        assert.equal(parsed.items[0]?.downloadUrl, undefined);
+        assert.equal(parsed.items[0]?.posterUrl, 'https://cdn/parent.jpg');
+    }
+});
+
+test('reel comments and action receipts normalize only the captured initial REST page', () => {
+    assert.deepEqual(parseReelCommentsResponse({
+        comments: [{
+            pk: 'comment-1', text: 'Hello', created_at: 1_700_000_000,
+            comment_like_count: 2, has_liked_comment: false, child_comment_count: 1,
+            user: { pk: 'user-1', username: 'bob', full_name: 'Bob', is_verified: false },
+        }],
+        has_more_comments: true,
+        next_min_id: { cached_comments_cursor: 'next' },
+    }), {
+        items: [{
+            id: 'comment-1', text: 'Hello', createdAtMs: 1_700_000_000_000,
+            likeCount: 2, hasLiked: false, childCommentCount: 1,
+            author: { id: 'user-1', username: 'bob', fullName: 'Bob', picUrl: null, isVerified: false },
+        }],
+        hasNextPage: false,
+    });
+    assert.deepEqual(parseReelLikeResponse({ data: {
+        xig_media_unlike: { media: { id: '3953224267254190889_5654194264', has_liked: true } },
+    } }, false), { mediaId: '3953224267254190889', hasLiked: false });
+    assert.deepEqual(parseReelSaveResponse({ data: {
+        xig_media_save: { media: { id: '3953224267254190889_5654194264' } },
+    } }, true), { mediaId: '3953224267254190889', hasSaved: true });
 });
