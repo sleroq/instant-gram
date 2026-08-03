@@ -1,16 +1,14 @@
 ---
 # icr-5say
 title: Render and leave reactions
-status: todo
+status: scrapped
 type: milestone
 priority: high
 tags:
     - dm
     - reactions
 created_at: 2026-07-04T16:58:10Z
-updated_at: 2026-08-03T13:17:24Z
-blocked_by:
-    - icr-9qjx
+updated_at: 2026-08-03T13:35:41Z
 ---
 
 Render structured reactions and let a user create or change one from the current TypeScript/Teact UI.
@@ -26,3 +24,9 @@ Render structured reactions and let a user create or change one from the current
 - Add an accessible message action and small fixed emoji picker (`❤ 😂 😮 😢 😡 👍`).
 - Route `sendReaction({ threadKey, messageId, emoji })` through domain, UI RPC, background, and anchor using the documented create/change mutation.
 - Optimistically update local state and reconcile failure. Do not implement removal without a confirmed request shape.
+
+
+
+## Disposition
+
+Merged into `icr-9qjx`. Reaction parsing, optimistic mutation state, UI, rollback, and verification share the same domain/RPC/store boundary as sending and are now phased within one milestone.

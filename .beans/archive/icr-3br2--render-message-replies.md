@@ -8,9 +8,7 @@ tags:
     - dm
     - replies
 created_at: 2026-07-04T16:57:40Z
-updated_at: 2026-08-03T13:17:24Z
-blocked_by:
-    - icr-9qjx
+updated_at: 2026-08-03T13:35:42Z
 ---
 
 Large milestone for making replies first-class in parsed messages and rendered bubbles.

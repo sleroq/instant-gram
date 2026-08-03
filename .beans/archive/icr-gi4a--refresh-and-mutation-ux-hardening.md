@@ -1,17 +1,14 @@
 ---
 # icr-gi4a
 title: Refresh and mutation UX hardening
-status: todo
+status: scrapped
 type: milestone
 priority: normal
 tags:
     - dm
     - ux
 created_at: 2026-07-04T16:58:23Z
-updated_at: 2026-08-03T13:17:24Z
-blocked_by:
-    - icr-4an3
-    - icr-5say
+updated_at: 2026-08-03T13:35:41Z
 ---
 
 Harden refresh, de-duplication, and failure UX after future text/reply/reaction mutations in the current normalized Teact store.
@@ -25,3 +22,9 @@ Harden refresh, de-duplication, and failure UX after future text/reply/reaction 
 - Document manual QA for send, reply, reaction, refresh, and authentication recovery.
 
 Do not add MQTT/live-websocket support; active-thread refresh is the intended first path.
+
+
+
+## Disposition
+
+Merged into `icr-9qjx`. Reconciliation, de-duplication, failure recovery, inbox metadata, and scroll behavior are definition-of-done requirements rather than a deferred hardening milestone.
