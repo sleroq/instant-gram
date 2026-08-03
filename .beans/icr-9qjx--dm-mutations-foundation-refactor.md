@@ -10,7 +10,7 @@ tags:
     - replies
     - reactions
 created_at: 2026-07-04T16:57:29Z
-updated_at: 2026-08-03T13:36:40Z
+updated_at: 2026-08-03T13:51:32Z
 ---
 
 # DM mutations: send, reply, and react
@@ -105,3 +105,57 @@ Useful invariants adapted to this smaller client:
 - Telegram focuses an own optimistic send and uses near-bottom checks for incoming updates: [`apiUpdaters/messages.ts` L282–306](https://github.com/Ajaxy/telegram-tt/blob/a323b1f29f5b91e9a32b8c14866234e925fb0bfa/src/global/actions/apiUpdaters/messages.ts#L282-L306), [`MessageList.tsx` L943–987](https://github.com/Ajaxy/telegram-tt/blob/a323b1f29f5b91e9a32b8c14866234e925fb0bfa/src/components/middle/MessageList.tsx#L943-L987). ICR deliberately preserves an older-reading anchor when the composer is used away from bottom, matching this project's existing scroll requirement; the new-message affordance provides explicit navigation.
 
 Omit Telegram's GramJS worker/update pipeline, topics, scheduled/paid messages, albums/uploads, multitab viewports, send-collapse animations, unread-reaction effects, and wholesale refresh/reset machinery. If incoming synchronization is later added, preserve optimistic rows and surviving viewport IDs rather than resetting history; Telegram's broader refresh behavior is referenceable at [`sync.ts` L119–219](https://github.com/Ajaxy/telegram-tt/blob/a323b1f29f5b91e9a32b8c14866234e925fb0bfa/src/global/actions/api/sync.ts#L119-L219).
+
+
+## Update — API catalog and action capture (2026-08-03)
+
+The plan remains the right scope—text send (including reply) and create/change
+reaction—but Phase 1 must now integrate the new catalog rather than recreate
+protocol constants. The new API work is not yet live mutation transport:
+`INSTAGRAM_GRAPHQL_OPERATIONS` is an allowlisted descriptor catalog, while the
+canonical UI `RpcMap`, background routes, and content-script handlers still
+expose read-only calls. `InstagramRpcMap` is a prospective capability list and
+must not be passed through wholesale.
+
+### Superseding Phase-1 details
+
+- Reuse `lib/instagram-api/catalog.ts` as the sole source for
+  `IGDirectTextSendMutation` and `IGDirectReactionSendMutation` document IDs,
+  names, endpoint, and HAR-backed variable builders. Do not add duplicate
+  config constants or another generic mutation builder.
+- Add only two canonical typed RPCs to `RpcMap` and its bridge/background/anchor
+  routes: `sendText` and `setReaction`. The store generates and supplies the
+  collision-resistant numeric `offlineThreadingId`; it must be included in the
+  transport payload so the same ID survives retry. Keep the remaining catalog
+  operations (message actions, read markers, pins, stickers, music, generic
+  allowlisted execution) outside this milestone.
+- Correct the reaction result contract. It is **not** a boolean success:
+  validate `data.xig_direct_reaction_send_with_slide_messaging_response.slide_message`
+  and return its target `id` plus the authoritative `reactions` array. Parse
+  that array into `MessageReaction` and replace the optimistic list on success.
+  A 200 response is insufficient. Text continues to validate
+  `data.xig_direct_text_send_with_slide_messaging_response.message_id` and
+  `timestamp_ms` (with `id` available in the capture).
+- The catalog currently proves the variables and contains focused builder tests;
+  extend those tests with mutation response decoders and malformed-200 cases.
+  Keep decoding/validation at the anchor boundary—not in the UI or generic
+  catalog—and continue to use the existing `Result<T>` envelope.
+- `getMessageActions` can eventually make reply/react availability
+  server-authoritative, but it is an extra per-row query and is not needed for
+  this initial writer. Render actions only for loaded, renderable server
+  messages; reject local optimistic rows and retain the documented
+  no-removal scope.
+
+### New integration acceptance criteria
+
+- No direct `executeInstagramGraphql` exposure is used by the UI for this
+  milestone; mutation RPCs remain narrow, typed capabilities.
+- `sendText` retry sends the original `offlineThreadingId`, while its optimistic
+  row remains a single stable render identity.
+- `setReaction` returns and reconciles the server reaction list, not merely a
+  success flag; malformed text or reaction GraphQL data produces `Result` error
+  without overwriting optimistic state.
+
+The broader catalog does create follow-on opportunities (read markers, pinning,
+cutout stickers, and richer composer content), but they have distinct protocol,
+entity, and interaction boundaries and must not expand icr-9qjx.
