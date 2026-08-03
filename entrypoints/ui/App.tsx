@@ -23,7 +23,7 @@ export default function App({ store }: AppProps) {
         : undefined;
 
     return (
-        <main className="app-shell">
+        <main className={`app-shell${selected ? ' app-shell--conversation-selected' : ''}`}>
             <aside className="sidebar">
                 <header className="sidebar__header">
                     <span className="brand-mark">IC</span>
@@ -43,9 +43,11 @@ export default function App({ store }: AppProps) {
                     />
                 ) : (
                     <div className="conversation-state conversation-state--welcome">
-                        <div className="welcome-icon">✦</div>
-                        <h2>Select a conversation</h2>
-                        <p>Choose a chat to view its recent messages.</p>
+                        <div className="welcome-card">
+                            <div className="welcome-icon" aria-hidden="true">✦</div>
+                            <h2>Select a conversation</h2>
+                            <p>Choose a chat to view its recent messages.</p>
+                        </div>
                     </div>
                 )}
             </section>
@@ -118,10 +120,13 @@ function ChatList({ store }: AppProps) {
                 ))}
             </div>
             {state.inbox.isLoadingMore && (
-                <div className="chat-list__tail" role="status">Loading more…</div>
+                <div className="chat-list__tail status-surface" role="status">
+                    <span className="spinner spinner--small" aria-hidden="true" />
+                    <span>Loading more…</span>
+                </div>
             )}
             {state.inbox.error && ids.length > 0 && (
-                <div className="chat-list__tail chat-list__tail--error" role="alert">
+                <div className="chat-list__tail chat-list__tail--error status-surface" role="alert">
                     <span>{state.inbox.error}</span>
                     <button type="button" onClick={store.retryInbox}>Retry</button>
                 </div>
@@ -143,6 +148,7 @@ function ChatRow({ thread, index, selected, pinned, onSelect }: ChatRowProps) {
     const snippet = thread.lastMessage ? messageSummary(thread.lastMessage) : 'No messages yet';
     return (
         <button
+            type="button"
             className={`chat-row${selected ? ' chat-row--selected' : ''}`}
             style={{ transform: `translateY(${index * ROW_HEIGHT}px)` }}
             onClick={onSelect}
@@ -166,8 +172,8 @@ function ChatRow({ thread, index, selected, pinned, onSelect }: ChatRowProps) {
                 <span className="chat-row__bottomline">
                     <span className="chat-row__snippet">{snippet}</span>
                     <span className="chat-row__badges">
-                        {thread.isMuted && <span title="Muted" aria-hidden="true">⌁</span>}
-                        {pinned && <span title="Pinned" aria-hidden="true">◆</span>}
+                        {thread.isMuted && <span className="chat-row__badge" title="Muted" aria-hidden="true">⌁</span>}
+                        {pinned && <span className="chat-row__badge chat-row__badge--accent" title="Pinned" aria-hidden="true">◆</span>}
                     </span>
                 </span>
             </span>
@@ -447,6 +453,14 @@ function MessagePane({
     return (
         <>
             <header className="conversation__header">
+                <button
+                    type="button"
+                    className="conversation__back"
+                    onClick={store.showInbox}
+                    aria-label="Back to inbox"
+                >
+                    <span aria-hidden="true">←</span>
+                </button>
                 <span className="avatar avatar--small">
                     {thread.users[0]?.picUrl ? (
                         <img src={thread.users[0].picUrl} alt="" width="40" height="40" />
@@ -477,10 +491,13 @@ function MessagePane({
                 {history?.status === 'ready' && (
                     <>
                         {(history.isLoadingOlder || history.isPreloadingOlder) && (
-                            <div className="messages__loading" role="status">Loading older messages…</div>
+                            <div className="messages__loading status-surface" role="status">
+                                <span className="spinner spinner--small" aria-hidden="true" />
+                                <span>Loading older messages…</span>
+                            </div>
                         )}
                         {history.error && history.viewportIds.length > 0 && (
-                            <div className="messages__error" role="alert">
+                            <div className="messages__error status-surface" role="alert">
                                 <span>{history.error}</span>
                                 <button type="button" onClick={() => store.retryOlderHistory(thread.key)}>
                                     Retry
@@ -492,7 +509,7 @@ function MessagePane({
                             {!history.hasOlder &&
                                 !hasLocalOlderIds(history.listedIds, history.viewportIds) &&
                                 history.viewportIds.length > 0 && (
-                                <div className="messages__beginning">Beginning of conversation</div>
+                                <div className="messages__beginning status-surface">Beginning of conversation</div>
                             )}
                             <div className="messages__rows" teactFastList>
                                 {history.viewportIds.map((id, index) => {
@@ -537,7 +554,7 @@ const MessageRow = memo(function MessageRow({
         <div data-message-id={message.id}>
             {showDate && (
                 <div className="message-date">
-                    <time dateTime={new Date(message.ts).toISOString()}>{formatMessageDate(message.ts)}</time>
+                    <time className="status-surface" dateTime={new Date(message.ts).toISOString()}>{formatMessageDate(message.ts)}</time>
                 </div>
             )}
             <div className={`message${outgoing ? ' message--outgoing' : ''}${grouped ? ' message--grouped' : ''}${message.kind === 'reaction_log' ? ' message--log' : ''}`}>
@@ -545,10 +562,12 @@ const MessageRow = memo(function MessageRow({
                     {'replyPreview' in message && message.replyPreview && (
                         <ReplyPreview preview={message.replyPreview} />
                     )}
-                    <MessageContent message={message} />
-                    <time dateTime={new Date(message.ts).toISOString()}>
-                        {formatMessageTime(message.ts)}
-                    </time>
+                    <div className="message__body">
+                        <MessageContent message={message} />
+                        <time dateTime={new Date(message.ts).toISOString()}>
+                            {formatMessageTime(message.ts)}
+                        </time>
+                    </div>
                 </div>
             </div>
         </div>
@@ -611,11 +630,13 @@ function ListState({
             className={`list-state${error ? ' list-state--error' : ''}`}
             role={error ? 'alert' : spinner ? 'status' : undefined}
         >
-            {spinner && <span className="spinner" aria-hidden="true" />}
-            <span>{label}</span>
-            {actionLabel && onAction && (
-                <button type="button" onClick={onAction}>{actionLabel}</button>
-            )}
+            <div className="list-state__surface status-surface">
+                {spinner && <span className="spinner" aria-hidden="true" />}
+                <span>{label}</span>
+                {actionLabel && onAction && (
+                    <button type="button" onClick={onAction}>{actionLabel}</button>
+                )}
+            </div>
         </div>
     );
 }

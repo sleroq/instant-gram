@@ -374,6 +374,50 @@ the budgets.
 
 ## Performance, style, and accessibility invariants
 
+### Dark visual tokens and floating shell
+
+`entrypoints/ui/styles.scss` owns the dark-by-default visual system. Semantic
+CSS custom properties on `:root` are the source of truth for canvas, panel and
+elevated surfaces, hover/selection, primary/muted text, accent/focus, danger,
+scroll cues, and incoming/outgoing messages. Components consume those
+properties; data state and theme values do not move into `App.tsx` or the frontend store.
+There is intentionally no light-theme branch in the current product scope.
+
+The desktop shell uses 16px outer spacing and a 16px inter-panel gap. The
+sidebar is a non-resizable, full-height 24px-radius floating island, while the
+conversation title is contained by its own 32px-radius floating header. The
+title text is not a separate decorative chip. Interactive rows and status/control surfaces use a
+shared 16px radius, layered dark backgrounds, spacing, and restrained elevation
+rather than decorative light borders. Borders remain only when they communicate
+focus, danger, reply context, loading progress, or another functional affordance.
+Scrollbars remain six pixels wide.
+Chat rows remain exactly 72px high: their eight-pixel horizontal inset and
+rounded fill do not change the spacer or translate geometry.
+
+Responsive shell presentation belongs exclusively to `styles.scss`; selection
+remains in the normalized store and `App.tsx` only derives a shell modifier from
+`selectedThreadId`. At widths of at least 1024px the sidebar is fixed at 390px
+and explicitly `resize: none`. Between 641px and 1023px it is clamped to
+`clamp(280px, 38vw, 360px)`, preserving a flexible conversation column. At
+640px and below, CSS shows the inbox when selection is empty and the
+conversation when selection exists. The compact back button dispatches
+`showInbox`, which clears selection without deleting cached history, bounded
+viewport IDs, or logical anchors. It does not create a second responsive state
+owner. At heights of 520px and below, outer padding, gaps, radii, and island
+shadows are removed; inbox and history keep their internal scrolling, stable
+scrollbar gutters, and six-pixel scrollbars within the full viewport height.
+
+Existing transient UI (`ListState`, inbox/history tails, history loading and
+errors, beginning markers, and date markers) shares the `status-surface` visual
+treatment. This is a styling convention for rendered surfaces, not a generic
+popup component or new state owner. Empty/welcome states, message cards, reply
+previews, and retry controls use the same layered palette and radius scale.
+Pressed states reduce opacity, focus remains a visible outline, and danger,
+reply-context, and spinner borders are retained only for their functional cue.
+
+Only transform and opacity are used for interaction motion, with the global
+reduced-motion override retained.
+
 - Keep chat DOM at no more than 25 plus six overscan rows; planned history DOM
   at no more than 80 message rows.
 - Never request the same cursor concurrently. Preserve explicit failure gates.

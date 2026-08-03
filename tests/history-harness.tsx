@@ -122,12 +122,14 @@ window.historyHarness = {
         resolveVisible = undefined;
     },
     select: (threadId: string) => activeStore?.selectThread(threadId),
+    showInbox: () => activeStore?.showInbox(),
     historyState: (threadId: string) => {
         const history = activeStore?.state.histories[threadId];
         return {
             selected: activeStore?.state.selectedThreadId,
             viewportIds: history?.viewportIds,
             isReplacingViewport: history?.isReplacingViewport,
+            scrollAnchor: history?.scrollAnchor,
         };
     },
 };
@@ -139,10 +141,12 @@ declare global {
             calls: () => Array<string | undefined>;
             resolveVisible: () => void;
             select: (threadId: string) => void;
+            showInbox: () => void;
             historyState: (threadId: string) => {
                 selected?: string;
                 viewportIds?: string[];
                 isReplacingViewport?: boolean;
+                scrollAnchor?: { id: string; offset: number };
             };
         };
     }

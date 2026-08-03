@@ -362,6 +362,15 @@ export function createFrontendStore(rpc: UiRpc) {
         void loadInitialHistory(threadId);
     }
 
+    function showInbox() {
+        if (!state.selectedThreadId) return;
+        cancelWarmups();
+        warmupsStarted = 0;
+        visibleWarmupKey = '';
+        state.selectedThreadId = undefined;
+        emit();
+    }
+
     function warmVisibleThreads(visibleIds: string[]) {
         const visibleKey = visibleIds.join('\u0000');
         if (visibleKey !== visibleWarmupKey) {
@@ -494,6 +503,7 @@ export function createFrontendStore(rpc: UiRpc) {
             };
         },
         selectThread,
+        showInbox,
         warmVisibleThreads,
         orderedThreadIds,
     };
