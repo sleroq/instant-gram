@@ -192,18 +192,20 @@ test('compact shell shows one pane and the rounded back control returns to inbox
     await page.close();
 });
 
-test('short viewport removes outer chrome while preserving internal message scrolling', async () => {
+test('short viewport keeps messages scrolling beneath the overlaid header', async () => {
     const page = await openHarness({ width: 900, height: 360 });
     await page.evaluate(() => window.historyHarness.mount('resize'));
     await page.waitForFunction(() => document.querySelector('[data-message-id]'));
     const result = await page.evaluate(() => {
         const sidebar = document.querySelector<HTMLElement>('.sidebar')!;
+        const header = document.querySelector<HTMLElement>('.conversation__header')!;
         const messages = document.querySelector<HTMLElement>('.messages')!;
         const rect = messages.getBoundingClientRect();
         return {
             shellPadding: getComputedStyle(document.querySelector('.app-shell')!).padding,
             sidebarRadius: getComputedStyle(sidebar).borderRadius,
             sidebarShadow: getComputedStyle(sidebar).boxShadow,
+            headerBottom: header.getBoundingClientRect().bottom,
             messageTop: rect.top,
             messageBottom: rect.bottom,
             messageHeight: rect.height,
@@ -214,7 +216,7 @@ test('short viewport removes outer chrome while preserving internal message scro
     assert.equal(result.shellPadding, '0px');
     assert.equal(result.sidebarRadius, '0px');
     assert.equal(result.sidebarShadow, 'none');
-    assert.ok(result.messageTop >= 64 && result.messageBottom <= 360);
+    assert.ok(result.messageTop < result.headerBottom && result.messageBottom <= 360);
     assert.ok(result.messageHeight > 100);
     assert.equal(result.scrollable, true);
     assert.ok(result.overflow <= 0);

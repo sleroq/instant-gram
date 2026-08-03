@@ -23,6 +23,10 @@
     --color-focus: #cba2ff;
     --color-incoming: #1d1926;
     --color-outgoing: #38234f;
+    --background-canvas:
+        radial-gradient(circle at 78% 8%, rgba(141, 90, 200, 0.14), transparent 34%),
+        radial-gradient(circle at 12px 12px, rgba(203, 162, 255, 0.07) 1px, transparent 1.5px) 0 0 / 24px 24px,
+        var(--color-canvas);
     --shadow-island: 0 16px 40px rgba(0, 0, 0, 0.28);
     --shadow-elevated: 0 8px 24px rgba(0, 0, 0, 0.3);
 }
@@ -69,7 +73,7 @@ body,
 body {
     overflow: hidden;
     color: var(--color-text);
-    background: var(--color-canvas);
+    background: var(--background-canvas);
     font: 14px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
@@ -98,7 +102,7 @@ a:focus-visible {
     min-width: 0;
     padding: 16px;
     overflow: hidden;
-    background: var(--color-canvas);
+    background: var(--background-canvas);
 }
 
 .sidebar {
@@ -395,18 +399,20 @@ a:focus-visible {
 }
 
 .conversation {
+    position: relative;
     display: flex;
     min-height: 0;
     min-width: 0;
     flex-direction: column;
-    gap: 12px;
-    background:
-        radial-gradient(circle at 12px 12px, rgba(203, 162, 255, 0.035) 1px, transparent 1.5px) 0 0 / 24px 24px,
-        var(--color-canvas);
+    background: transparent;
 }
 
 .conversation__header {
+    position: absolute;
     z-index: 1;
+    top: 0;
+    right: 0;
+    left: 0;
     margin: 0 16px;
     border-radius: $radius-pill;
     box-shadow: var(--shadow-island);
@@ -442,7 +448,7 @@ a:focus-visible {
     width: min(760px, 100%);
     min-height: 0;
     margin: 0 auto;
-    padding: 12px 28px 24px;
+    padding: 88px 28px 24px;
     flex: 1;
     flex-direction: column;
     overflow: auto;
@@ -473,7 +479,7 @@ a:focus-visible {
 .messages__error {
     position: absolute;
     z-index: 2;
-    top: 12px;
+    top: 76px;
     left: 50%;
     margin: 0;
     transform: translateX(-50%);
@@ -697,7 +703,6 @@ a:focus-visible {
 
     .conversation {
         display: none;
-        gap: 0;
     }
 
     .app-shell--conversation-selected {
@@ -723,7 +728,7 @@ a:focus-visible {
     .messages {
         width: 100%;
         margin: 0;
-        padding: 10px 14px 18px;
+        padding: 74px 14px 18px;
     }
 
     .message__bubble {
@@ -746,10 +751,6 @@ a:focus-visible {
         box-shadow: none;
     }
 
-    .conversation {
-        gap: 0;
-    }
-
     .conversation__header {
         margin: 0;
         border-radius: 0;
@@ -757,7 +758,7 @@ a:focus-visible {
     }
 
     .messages {
-        padding-block: 8px 12px;
+        padding-block: 72px 12px;
     }
 
     .list-state,
