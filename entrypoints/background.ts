@@ -39,16 +39,8 @@ const REMOTE_RPC_NAMES = [
     'getInbox',
     'getThread',
     'getReelMedia',
-    'getMessageRequests',
-    'getThreadInfo',
-    'getMessageActions',
-    'getUnreadCount',
     'sendText',
     'setReaction',
-    'markThreadRead',
-    'pinMessage',
-    'sendCutoutSticker',
-    'executeInstagramGraphql',
 ] as const satisfies readonly RemoteRpcName[];
 
 async function routeToAnchor<K extends RemoteRpcName>(

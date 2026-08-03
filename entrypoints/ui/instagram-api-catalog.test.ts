@@ -83,6 +83,28 @@ test('text and read builders preserve captured nulls and string timestamps', () 
     );
 });
 
+test('reaction builder matches the HAR-backed mutation variables exactly', () => {
+    assert.deepEqual(
+        operations.IGDirectReactionSendMutation.buildVariables(
+            {
+                threadFbid: '340282366841710300949128133551876018644',
+                messageId: 'mid.$cAABa-Z8DgqJu9RqQy2iUnYadFQdn',
+                emoji: '❤',
+            },
+            context,
+        ),
+        {
+            input: {
+                emoji: '❤',
+                item_id: '',
+                message_id: 'mid.$cAABa-Z8DgqJu9RqQy2iUnYadFQdn',
+                reaction_status: 'created',
+                thread_id: '340282366841710300949128133551876018644',
+            },
+        },
+    );
+});
+
 test('catalog is a closed DM allowlist', () => {
     assert.equal(Object.keys(operations).length, 29);
     assert.equal(isInstagramGraphqlOperationName('IGDirectReactionSendMutation'), true);

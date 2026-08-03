@@ -7,11 +7,13 @@ import type {
     MessageReaction,
     MessageRequestFolder,
     MutationSuccess,
+    SetReactionResult,
     InstagramSecondaryGraphqlResult,
     Page,
     ReelMedia,
     ReplyPreview,
     SentMessage,
+    SentTextMessage,
     Thread,
     ThreadInfo,
     ThreadMessages,
@@ -614,14 +616,32 @@ function mutationSuccess(condition: boolean, message: string): MutationSuccess {
     return { success: true };
 }
 
-export function parseReactionMutationResponse(json: unknown): MutationSuccess {
+function parseMutationReactions(value: unknown): MessageReaction[] {
+    if (!Array.isArray(value))
+        throw new Error('Instagram reaction receipt was malformed');
+    return value.map(value => {
+        const reaction = objectProp(value);
+        const senderId = stringProp(reaction?.sender_fbid);
+        const emoji = stringProp(reaction?.reaction);
+        const timestampMs = parseTimestampMs(reaction?.reaction_timestamp_ms);
+        if (!senderId || !emoji || timestampMs === undefined)
+            throw new Error('Instagram reaction receipt was malformed');
+        return { senderId, reaction: emoji, timestampMs };
+    });
+}
+
+export function parseReactionMutationResponse(json: unknown): SetReactionResult {
     const receipt = objectProp(
         responseData(json)?.xig_direct_reaction_send_with_slide_messaging_response,
     );
-    return mutationSuccess(
-        objectProp(receipt?.slide_message) !== undefined,
-        'Instagram reaction receipt was not returned',
-    );
+    const message = objectProp(receipt?.slide_message);
+    const messageId = stringProp(message?.id);
+    if (!message || !messageId)
+        throw new Error('Instagram reaction receipt was not returned');
+    return {
+        messageId,
+        reactions: parseMutationReactions(message.reactions),
+    };
 }
 
 export function parseMarkThreadReadResponse(json: unknown): MutationSuccess {
@@ -653,11 +673,17 @@ function sentMessage(value: unknown, clientRequestId: string): SentMessage {
     };
 }
 
-export function parseSentTextResponse(json: unknown, clientRequestId: string): SentMessage {
-    return sentMessage(
+export function parseSentTextResponse(json: unknown, clientRequestId: string): SentTextMessage {
+    const receipt = objectProp(
         responseData(json)?.xig_direct_text_send_with_slide_messaging_response,
-        clientRequestId,
     );
+    const messageId = stringProp(receipt?.message_id);
+    if (!messageId)
+        throw new Error('Instagram sent message ID was not returned');
+    const timestampMs = parseTimestampMs(receipt?.timestamp_ms);
+    if (timestampMs === undefined)
+        throw new Error('Instagram sent message timestamp was not returned');
+    return { messageId, timestampMs, clientRequestId };
 }
 
 export function parseSentCutoutStickerResponse(json: unknown, clientRequestId: string): SentMessage {

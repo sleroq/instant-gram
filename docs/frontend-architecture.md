@@ -36,11 +36,25 @@ getThread({ threadKey, cursor? }): Result<ThreadMessages>
 getReelMedia({ shortcode, mediaId? }): Result<ReelMedia>
 getPins(): { pinned: string[] }
 togglePin({ threadKey }): { pinned: string[] }
+sendText({ threadFbid, text, replyToMessageId?, offlineThreadingId }): Result<SentTextMessage>
+setReaction({ threadFbid, messageId, emoji }): Result<SetReactionResult>
 ```
 
-`UiRpc` mechanically maps those signatures to promises. `rpc.ts` sends each
-message to `background`; it does not interpret results. Keep the discriminated
-`Result<T>` check in actions at the store boundary.
+`CompleteUiRpc` mechanically maps those signatures to promises. The read-only
+`UiRpc` subset keeps read dependencies narrow; the frontend store additionally
+requires only `sendText` and `setReaction`. `rpc.ts` sends each message to
+`background`; it does not interpret results. Keep the discriminated `Result<T>`
+check in actions at the store boundary.
+
+The extension bridge is a closed capability list. Only the two mutation RPCs
+above are routed through UI, background, and content script; the broader
+Instagram operation catalog (including generic GraphQL execution, read markers,
+server pins, and richer sends) is not exposed to UI code. The content-script
+anchor executes catalog descriptors and converts thrown request/decoder errors
+to `Result` failures. Text success requires both server message ID and timestamp;
+reaction success requires the matching target ID and the complete authoritative
+reaction array. Document IDs and exact request variables remain solely in
+`lib/config.ts` and `lib/instagram-api/catalog.ts`.
 
 Cursor names are easy to confuse:
 
@@ -60,7 +74,7 @@ means moving through local loaded IDs. Pagination may omit
 `ThreadMessages.thread`; merge messages by `message.id`, not response object
 identity. `viewerId` determines outgoing presentation.
 
-## Current state: Milestones 1 and 2
+## Current state: Milestones 1–3
 
 The exact implemented structure in `store.ts` is:
 
@@ -92,6 +106,12 @@ type HistoryState = {
     isReplacingViewport: boolean;
     failedOlderCursor?: string;
     scrollAnchor?: { id: string; offset: number };
+    draft: string;
+    replyTargetId?: string;
+    pendingSends: Record<string, PendingSend>;
+    failedSends: Record<string, FailedSend>;
+    rowKeyByMessageId: Record<string, string>;
+    reactionMutations: Record<string, ReactionMutation>;
     error?: string;
 };
 
@@ -105,7 +125,9 @@ type FrontendState = {
 ```
 
 The implementation adds `isReplacingViewport` to the plan's state sketch so DOM
-replacement and sentinel triggering cannot overlap.
+replacement and sentinel triggering cannot overlap. Drafts, reply targets, send
+delivery state, stable row-key bridges, and reaction flights are per history;
+components do not maintain parallel mutation caches.
 
 ### Normalization and ordering
 
@@ -118,6 +140,15 @@ Histories use the same separation: `listedIds` is all contiguous loaded IDs in
 chronological order, `viewportIds` is the bounded 40–80 ID DOM window, and
 `byId` is message lookup. Older pages prepend only unseen IDs and replace every
 received entity, so overlaps update content without duplicating rows.
+
+Accepted outgoing sends append one optimistic `local:<offlineThreadingId>` entity
+to `byId`/`listedIds`. They append to `viewportIds` only when the component's
+immediate pre-dispatch bottom measurement permits following newest; otherwise
+the bounded viewport and logical anchor remain unchanged. Reconciliation replaces
+the local ID with the server ID in every normalized index, removes any duplicate
+server ID already received, and records the local ID under the server ID in
+`rowKeyByMessageId`. `MessageRow` uses that bridge as its domain key, so the
+optimistic DOM row survives ID reconciliation. The viewport remains capped at 80.
 
 Components must iterate ordered IDs and look up entities. Do not duplicate
 thread/message objects into pinned, selected, or viewport arrays.
@@ -179,6 +210,15 @@ remain gated until `retryOlderHistory(id)` explicitly clears that cursor.
   per thread while allowing different chats to warm concurrently.
 - `olderHistoryRequests: Map<threadId, symbol>` permits one older request per
   thread across user-visible loads, short-viewport fills, and lookahead.
+- `sendRequests` permits one attempt per thread/local ID. Failed retries reuse
+  the original 19-digit signed-64-bit `offlineThreadingId` and row rather than
+  appending another message; different threads may send concurrently.
+- `reactionRequests` permits one mutation per thread/message pair. The store
+  snapshots reactions, applies the viewer choice optimistically, installs the
+  response array on success, and rolls back with visible error state on failure.
+  Local optimistic messages cannot be reaction targets. A history read that
+  overlaps a pending reaction refreshes the rollback baseline while retaining
+  the viewer's optimistic choice.
 - Every request captures the store `generation` and its unique symbol. Result,
   error, and `finally` mutation occur only when both still match.
 - `destroy()` increments `generation`, clears listeners/request registries and
@@ -190,6 +230,31 @@ remain gated until `retryOlderHistory(id)` explicitly clears that cursor.
 
 This protection is an ownership rule: all RPC actions need explicit
 single-flight and stale-generation handling at the store boundary.
+
+### Mutation reconciliation and follow rules
+
+The store accepts only non-empty trimmed text in a ready history with a viewer
+and mutation-capable thread ID. Acceptance clears that history's controlled
+draft/reply target, preserves reply preview data on the optimistic message, and
+updates the normalized inbox snippet/activity. Unpinned threads move to the
+front; explicit persisted pin order remains authoritative. Inbox reads capture a
+mutation revision and cannot regress an outgoing snippet that was accepted after
+the read began (or one with newer activity).
+
+Pending send failures keep the message and expose retry/remove. A successful
+retry atomically installs the server ID/timestamp without a history refetch.
+Reaction results similarly reconcile from the mutation receipt, not polling.
+Malformed successful GraphQL envelopes become ordinary mutation failures at the
+anchor boundary and therefore cannot install partial server state.
+
+`MessagePane` owns only DOM geometry: it measures true bottom state immediately
+before dispatch and records a thread-scoped follow intent. A bottom send appends
+to the bounded window and scrolls after render. A send from a scrolled-up or
+older local window leaves `viewportIds` and the logical anchor intact and shows
+“Go to newest message”; that action switches to the newest 40 loaded IDs before
+scrolling. Follow intent is cleared on thread changes so it cannot affect a
+restored chat. Enter submits, Shift+Enter inserts a newline, and drafts remain
+store-owned per thread.
 
 ### Warmup generations, timers, and budget
 
@@ -311,6 +376,16 @@ continuously intersecting sentinel drain with exact request/preload counts,
 delayed-RPC anchor drift below 1px after user scrolling, and resize correction
 through the production `ResizeObserver` path.
 
+Mutation coverage is split at the same ownership boundaries. Catalog/handler/
+parser tests pin exact text/reply/reaction variables, authoritative receipts,
+reaction normalization, and malformed HTTP-200 data. Store tests cover send
+insertion, duplicate-safe retry, all-index reconciliation, stable row keys,
+bounded/scrolled-up windows, inbox read races, per-thread drafts, reaction
+single-flight/rollback/read overlap, and stale completions. Production browser
+tests cover composer keys, reply/cancel, accessible delivery recovery and emoji
+picker, narrow layout, stable DOM identity, bottom follow, older-window anchor
+preservation/newest navigation, and thread-scoped follow state.
+
 Replacement state lives in normalized history while DOM measurements remain in
 `MessagePane`. Intersection state survives observer transitions and reevaluates
 after debounce, request/preload settlement, replacement, and resize. The store
@@ -359,7 +434,7 @@ Do not reintroduce Telegram-scale machinery without measured need:
 - eager loading of every inbox page;
 - outlying/around-message ranges or forward network pagination;
 - forums, topics, scheduled/saved messages, comments, unread jumps, search,
-  composer/live typing, live tails, and full media playback systems;
+  attachments/live typing, live tails, and full media playback systems;
 - Telegram's global action framework, MTProto/GramJS worker, PWA/Tauri stack,
   folder/multi-tab viewport system, heavy-animation registry, FasterDOM,
   generalized observer abstraction, or custom scroll animator;
@@ -418,8 +493,8 @@ reply-context, and spinner borders are retained only for their functional cue.
 Only transform and opacity are used for interaction motion, with the global
 reduced-motion override retained.
 
-- Keep chat DOM at no more than 25 plus six overscan rows; planned history DOM
-  at no more than 80 message rows.
+- Keep chat DOM at no more than 25 plus six overscan rows and history DOM at no
+  more than 80 message rows.
 - Never request the same cursor concurrently. Preserve explicit failure gates.
 - Keep page merges and viewport shifts below a 50ms long task; planned prepend
   anchor drift is below 1px.
@@ -437,7 +512,7 @@ reduced-motion override retained.
 
 Before changing frontend behavior:
 
-1. Decide whether current Milestone 1 or deferred Milestone 2 owns it.
+1. Identify whether inbox reads, bounded history, or DM mutations own it.
 2. Keep the RPC signature in `lib/domain.ts`, transport in `rpc.ts`, async/cache
    policy in the existing store, pure geometry in a helper, and DOM in TSX.
 3. Preserve normalized `ordered/listed IDs + byId`, stable keys, cursor meaning,

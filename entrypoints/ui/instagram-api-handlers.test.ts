@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { INSTAGRAM_GRAPHQL_OPERATIONS } from '../../lib/instagram-api/catalog.ts';
 import {
+    createInstagramCatalogHandlers,
     createInstagramRpcHandlers,
     INSTAGRAM_RPC_OPERATION_REACHABILITY,
     parseInstagramGraphqlPayload,
@@ -24,7 +25,7 @@ function executor(
 
 test('markThreadRead accepts captured false validation after a successful receipt', async () => {
     const calls: Call[] = [];
-    const handlers = createInstagramRpcHandlers(
+    const handlers = createInstagramCatalogHandlers(
         executor(
             {
                 useIGDMarkThreadAsReadMutation: {
@@ -72,62 +73,63 @@ test('markThreadRead accepts captured false validation after a successful receip
 
 test('semantic handlers dispatch to the catalog with exact caller-supplied send IDs', async () => {
     const calls: Call[] = [];
-    const handlers = createInstagramRpcHandlers(
-        executor(
-            {
-                IGDirectTextSendMutation: {
-                    data: {
-                        xig_direct_text_send_with_slide_messaging_response: {
-                            message_id: 'sent-message',
-                        },
+    const execute = executor(
+        {
+            IGDirectTextSendMutation: {
+                data: {
+                    xig_direct_text_send_with_slide_messaging_response: {
+                        message_id: 'sent-message',
+                        timestamp_ms: '1785763880444',
                     },
                 },
-                IGDThreadListOffMsysPaginationQuery: {
-                    data: {
-                        fetch__SlideMailbox: {
-                            threads_by_folder: {
-                                edges: [],
-                                page_info: { has_next_page: false },
-                            },
-                        },
-                    },
-                },
-                PolarisDirectInboxQuery: {
-                    data: {
-                        get_slide_mailbox_for_iris_subscription: {
-                            id: 'mailbox-viewer',
-                            threads_by_folder: {
-                                edges: [],
-                                page_info: { has_next_page: false },
-                            },
+            },
+            IGDThreadListOffMsysPaginationQuery: {
+                data: {
+                    fetch__SlideMailbox: {
+                        threads_by_folder: {
+                            edges: [],
+                            page_info: { has_next_page: false },
                         },
                     },
                 },
             },
-            calls,
-        ),
+            PolarisDirectInboxQuery: {
+                data: {
+                    get_slide_mailbox_for_iris_subscription: {
+                        id: 'mailbox-viewer',
+                        threads_by_folder: {
+                            edges: [],
+                            page_info: { has_next_page: false },
+                        },
+                    },
+                },
+            },
+        },
+        calls,
     );
+    const handlers = createInstagramRpcHandlers(execute);
+    const catalogHandlers = createInstagramCatalogHandlers(execute);
 
     assert.deepEqual(await handlers.sendText({
         threadFbid: 'thread',
         text: 'hello',
         replyToMessageId: 'reply',
-        clientRequestId: '7489792462469606177',
+        offlineThreadingId: '0007489792462469606177',
     }), {
         messageId: 'sent-message',
-        timestampMs: undefined,
-        clientRequestId: '7489792462469606177',
+        timestampMs: 1_785_763_880_444,
+        clientRequestId: '0007489792462469606177',
     });
     assert.deepEqual(await handlers.sendText({
         threadFbid: 'thread',
         text: 'again',
-        clientRequestId: '9001',
+        offlineThreadingId: '9001',
     }), {
         messageId: 'sent-message',
-        timestampMs: undefined,
+        timestampMs: 1_785_763_880_444,
         clientRequestId: '9001',
     });
-    await handlers.getMessageRequests({ folder: 'SPAM', cursor: 'next' });
+    await catalogHandlers.getMessageRequests({ folder: 'SPAM', cursor: 'next' });
 
     assert.deepEqual(calls, [
         {
@@ -136,7 +138,7 @@ test('semantic handlers dispatch to the catalog with exact caller-supplied send 
                 threadFbid: 'thread',
                 text: 'hello',
                 replyToMessageId: 'reply',
-                offlineThreadingId: '7489792462469606177',
+                offlineThreadingId: '0007489792462469606177',
             },
         },
         {
@@ -165,6 +167,39 @@ test('semantic handlers dispatch to the catalog with exact caller-supplied send 
     ]);
 });
 
+test('reaction handler returns the authoritative captured reaction state', async () => {
+    const calls: Call[] = [];
+    const handlers = createInstagramCatalogHandlers(executor({
+        IGDirectReactionSendMutation: {
+            data: {
+                xig_direct_reaction_send_with_slide_messaging_response: {
+                    slide_message: {
+                        id: 'message-1',
+                        reactions: [{
+                            reaction: '❤',
+                            reaction_timestamp_ms: '1783181919592',
+                            sender_fbid: 'viewer-1',
+                        }],
+                    },
+                },
+            },
+        },
+    }, calls));
+
+    assert.deepEqual(await handlers.setReaction({
+        threadFbid: 'thread-1', messageId: 'message-1', emoji: '❤',
+    }), {
+        messageId: 'message-1',
+        reactions: [{
+            senderId: 'viewer-1', reaction: '❤', timestampMs: 1_783_181_919_592,
+        }],
+    });
+    assert.deepEqual(calls, [{
+        operation: 'IGDirectReactionSendMutation',
+        input: { threadFbid: 'thread-1', messageId: 'message-1', emoji: '❤' },
+    }]);
+});
+
 test('unread count includes pending and spam bounded pages', async () => {
     const calls: Call[] = [];
     const mailbox = (id: string, hasNextPage: boolean) => ({
@@ -173,7 +208,7 @@ test('unread count includes pending and spam bounded pages', async () => {
             page_info: { has_next_page: hasNextPage },
         },
     });
-    const handlers = createInstagramRpcHandlers(executor({
+    const handlers = createInstagramCatalogHandlers(executor({
         IGDBadgeCountOffMsysQuery: {
             data: { get_slide_mailbox_for_iris_subscription: mailbox('inbox', true) },
         },
@@ -185,7 +220,7 @@ test('unread count includes pending and spam bounded pages', async () => {
         },
     }, calls), { now: () => 1_800_000_000_000 });
 
-    assert.deepEqual(await handlers.getUnreadCount(undefined), {
+    assert.deepEqual(await handlers.getUnreadCount(), {
         countedTotal: 3,
         inbox: { count: 1, hasMore: true },
         requests: { count: 1, hasMore: false },
@@ -196,7 +231,7 @@ test('unread count includes pending and spam bounded pages', async () => {
 
 test('pin returns authoritative IDs and cutout send reuses supplied request ID', async () => {
     const calls: Call[] = [];
-    const handlers = createInstagramRpcHandlers(executor({
+    const handlers = createInstagramCatalogHandlers(executor({
         useIGDPinMessageOffMsysMutation: {
             data: { xig_direct_pin_message: { pinned_messages: [{ message_id: 'm1' }] } },
         },
@@ -217,7 +252,7 @@ test('pin returns authoritative IDs and cutout send reuses supplied request ID',
 
 test('secondary GraphQL is discriminated, closed, and accepts captured empty search', async () => {
     const calls: Call[] = [];
-    const handlers = createInstagramRpcHandlers(
+    const handlers = createInstagramCatalogHandlers(
         executor(
             {
                 IGDComposerRichContentMusicSearchQuery: {
@@ -277,24 +312,24 @@ test('secondary GraphQL is discriminated, closed, and accepts captured empty sea
 
 test('credentialed handler boundary rejects empty IDs and invalid values before dispatch', async () => {
     const calls: Call[] = [];
-    const handlers = createInstagramRpcHandlers(executor({}, calls));
+    const handlers = createInstagramCatalogHandlers(executor({}, calls));
     await assert.rejects(
-        handlers.sendText({ threadFbid: '', text: 'hello', clientRequestId: '1' }),
+        handlers.sendText({ threadFbid: '', text: 'hello', offlineThreadingId: '1' }),
         /thread FBID/,
     );
     await assert.rejects(
-        handlers.sendText({ threadFbid: 'thread', text: ' '.repeat(2), clientRequestId: '1' }),
+        handlers.sendText({ threadFbid: 'thread', text: ' '.repeat(2), offlineThreadingId: '1' }),
         /message text/,
     );
     await assert.rejects(
         handlers.sendText({
-            threadFbid: 'thread', text: 'hello', clientRequestId: 'not-numeric',
+            threadFbid: 'thread', text: 'hello', offlineThreadingId: 'not-numeric',
         }),
-        /client request ID/,
+        /offline threading ID/,
     );
     await assert.rejects(
         handlers.sendText({ threadFbid: 'thread', text: 'hello' } as never),
-        /client request ID/,
+        /offline threading ID/,
     );
     await assert.rejects(
         handlers.sendCutoutSticker({

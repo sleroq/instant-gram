@@ -22,6 +22,13 @@ import type { Result, RpcMap } from '../lib/domain';
 
 type ReelPayload = Parameters<RpcMap['getReelMedia']>[0];
 type RemoteRpcName = Exclude<keyof RpcMap, 'getPins' | 'togglePin'>;
+const REMOTE_RPC_NAMES = [
+    'getInbox',
+    'getThread',
+    'getReelMedia',
+    'sendText',
+    'setReaction',
+] as const satisfies readonly RemoteRpcName[];
 
 type GraphqlRequest = {
     friendlyName: string;
@@ -271,7 +278,7 @@ export default defineContentScript({
             }),
             getReelMedia,
         };
-        for (const name of Object.keys(handlers) as RemoteRpcName[]) {
+        for (const name of REMOTE_RPC_NAMES) {
             const handler = handlers[name] as (payload: unknown) => Promise<unknown>;
             onMessage(name, async ({ data }) => {
                 try {

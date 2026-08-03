@@ -143,6 +143,11 @@ export type SentMessage = {
     timestampMs?: number;
     clientRequestId: string;
 };
+export type SentTextMessage = SentMessage & { timestampMs: number };
+export type SetReactionResult = {
+    messageId: string;
+    reactions: MessageReaction[];
+};
 export type MutationSuccess = { success: true };
 export type PinMessageResult = { pinnedMessageIds: string[] };
 
@@ -282,13 +287,13 @@ export type InstagramRpcMap = {
         threadFbid: string;
         text: string;
         replyToMessageId?: string;
-        clientRequestId: string;
-    }) => Result<SentMessage>;
+        offlineThreadingId: string;
+    }) => Result<SentTextMessage>;
     setReaction: (payload: {
         threadFbid: string;
         messageId: string;
         emoji: string;
-    }) => Result<MutationSuccess>;
+    }) => Result<SetReactionResult>;
     markThreadRead: (payload: {
         threadIgId: string;
         messageId: string;
@@ -310,4 +315,6 @@ export type InstagramRpcMap = {
     ) => Result<InstagramSecondaryGraphqlResult>;
 };
 
-export type RpcMap = CoreRpcMap & InstagramRpcMap;
+/** Capabilities exposed to the extension UI and routed through the background. */
+export type RpcMap = CoreRpcMap &
+    Pick<InstagramRpcMap, 'sendText' | 'setReaction'>;

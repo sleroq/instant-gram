@@ -9,8 +9,8 @@ export type CompleteUiRpc = {
     [K in RpcName]: (...args: Parameters<RpcMap[K]>) => Promise<RpcResult<K>>;
 };
 
-// Store/test dependencies only require the core surface; the exported adapter
-// below is checked against and exposes the complete RPC map.
+// Read-store dependencies remain narrow; mutation actions can depend on the
+// corresponding capabilities as they are implemented.
 export type UiRpc = Pick<
     CompleteUiRpc,
     'getInbox' | 'getThread' | 'getReelMedia' | 'getPins' | 'togglePin'
@@ -26,15 +26,6 @@ export const uiRpc: CompleteUiRpc = {
     getReelMedia: payload => call('getReelMedia', payload),
     getPins: () => call('getPins', undefined),
     togglePin: payload => call('togglePin', payload),
-    getMessageRequests: payload => call('getMessageRequests', payload),
-    getThreadInfo: payload => call('getThreadInfo', payload),
-    getMessageActions: payload => call('getMessageActions', payload),
-    getUnreadCount: () => call('getUnreadCount', undefined),
     sendText: payload => call('sendText', payload),
     setReaction: payload => call('setReaction', payload),
-    markThreadRead: payload => call('markThreadRead', payload),
-    pinMessage: payload => call('pinMessage', payload),
-    sendCutoutSticker: payload => call('sendCutoutSticker', payload),
-    executeInstagramGraphql: payload =>
-        call('executeInstagramGraphql', payload),
 };

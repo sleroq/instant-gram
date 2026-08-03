@@ -1,4 +1,4 @@
-import type { UIEvent } from 'react';
+import type { ChangeEvent, FormEvent, KeyboardEvent, UIEvent } from 'react';
 import {
     memo,
     useEffect,
@@ -12,6 +12,7 @@ import { hasLocalOlderIds } from './history-window';
 import { computeChatWindow } from './virtual-list';
 
 const ROW_HEIGHT = 72;
+const REACTION_EMOJIS = ['❤', '😂', '😮', '😢', '😡', '👍'];
 
 type AppProps = { store: FrontendStore };
 
@@ -200,6 +201,7 @@ function MessagePane({
     const continuationTimersRef = useRef(new Set<number>());
     const activeThreadRef = useRef(thread.key);
     const openedThreadRef = useRef('');
+    const followNewestThreadRef = useRef<string>();
     const viewportKey = history?.viewportIds.join('\u0000') ?? '';
 
     activeThreadRef.current = thread.key;
@@ -308,6 +310,7 @@ function MessagePane({
     useLayoutEffect(() => {
         clearRevealTimer();
         clearContinuationTimers();
+        followNewestThreadRef.current = undefined;
         return () => {
             clearRevealTimer();
             clearContinuationTimers();
@@ -373,6 +376,15 @@ function MessagePane({
         history?.isPreloadingOlder,
         history?.isReplacingViewport,
     ]);
+
+    useLayoutEffect(() => {
+        if (followNewestThreadRef.current !== thread.key) return;
+        const scroller = scrollerRef.current;
+        if (!scroller) return;
+        scroller.scrollTop = scroller.scrollHeight;
+        followNewestThreadRef.current = undefined;
+        updateResizeAnchor(scroller, resizeAnchorRef);
+    }, [thread.key, viewportKey]);
 
     useEffect(() => {
         const root = scrollerRef.current;
@@ -450,6 +462,34 @@ function MessagePane({
         updateResizeAnchor(scroller, resizeAnchorRef);
     };
 
+    const submitDraft = () => {
+        const currentHistory = store.state.histories[thread.key];
+        const scroller = scrollerRef.current;
+        if (!currentHistory || !scroller) return;
+        // This measurement intentionally happens immediately before dispatch.
+        const latestLoadedId = currentHistory.listedIds.at(-1);
+        const followNewest = Boolean(
+            latestLoadedId &&
+            currentHistory.viewportIds.includes(latestLoadedId) &&
+            isAtBottom(scroller),
+        );
+        const localId = store.sendText(thread.key, currentHistory.draft, {
+            followNewest,
+            replyToMessageId: currentHistory.replyTargetId,
+        });
+        if (localId && followNewest) followNewestThreadRef.current = thread.key;
+    };
+
+    const showNewest = () => {
+        followNewestThreadRef.current = thread.key;
+        store.revealNewestHistory(thread.key);
+    };
+
+    const latestId = history?.listedIds.at(-1);
+    const hasNewerMessages = Boolean(
+        latestId && history && !history.viewportIds.includes(latestId),
+    );
+
     return (
         <>
             <header className="conversation__header">
@@ -522,8 +562,14 @@ function MessagePane({
                                     );
                                     return (
                                         <MessageRow
-                                            key={id}
+                                            key={store.messageRowKey(thread.key, id)}
+                                            store={store}
+                                            threadId={thread.key}
                                             message={message}
+                                            viewerId={history.viewerId}
+                                            pending={history.pendingSends[id]}
+                                            failed={history.failedSends[id]}
+                                            reactionMutation={history.reactionMutations[id]}
                                             outgoing={senderId(message) === history.viewerId}
                                             grouped={grouped}
                                             showDate={showDate}
@@ -535,21 +581,58 @@ function MessagePane({
                     </>
                 )}
             </div>
+            {hasNewerMessages && (
+                <button type="button" className="newest-message" onClick={showNewest}>
+                    Go to newest message
+                </button>
+            )}
+            {history?.status === 'ready' && (
+                <Composer
+                    key={thread.key}
+                    history={history}
+                    threadId={thread.key}
+                    onDraftChange={store.setDraft}
+                    onCancelReply={() => store.setReplyTarget(thread.key)}
+                    onSubmit={submitDraft}
+                />
+            )}
         </>
     );
 }
 
 const MessageRow = memo(function MessageRow({
+    store,
+    threadId,
     message,
+    viewerId,
+    pending,
+    failed,
+    reactionMutation,
     outgoing,
     grouped,
     showDate,
 }: {
+    store: FrontendStore;
+    threadId: string;
     message: Message;
+    viewerId?: string;
+    pending?: HistoryState['pendingSends'][string];
+    failed?: HistoryState['failedSends'][string];
+    reactionMutation?: HistoryState['reactionMutations'][string];
     outgoing: boolean;
     grouped: boolean;
     showDate: boolean;
 }) {
+    const [pickerOpen, setPickerOpen] = useState(false);
+    const isServerMessage = !message.id.startsWith('local:');
+    const eligibleForActions = isServerMessage && 'senderId' in message;
+    const groupedReactions = groupReactions(message, viewerId);
+
+    const chooseReaction = (emoji: string) => {
+        setPickerOpen(false);
+        void store.setReaction(threadId, message.id, emoji);
+    };
+
     return (
         <div data-message-id={message.id}>
             {showDate && (
@@ -568,11 +651,139 @@ const MessageRow = memo(function MessageRow({
                             {formatMessageTime(message.ts)}
                         </time>
                     </div>
+                    {groupedReactions.length > 0 && (
+                        <div className="message__reactions" aria-label="Message reactions">
+                            {groupedReactions.map(reaction => (
+                                <span
+                                    key={reaction.emoji}
+                                    className={`reaction-chip${reaction.byViewer ? ' reaction-chip--viewer' : ''}`}
+                                    aria-label={`${reaction.emoji}, ${reaction.count} ${reaction.count === 1 ? 'reaction' : 'reactions'}${reaction.byViewer ? ', including yours' : ''}`}
+                                >
+                                    <span aria-hidden="true">{reaction.emoji}</span>
+                                    <span>{reaction.count}</span>
+                                </span>
+                            ))}
+                        </div>
+                    )}
+                    {pending && <span className="message__delivery" role="status">Sending…</span>}
+                    {failed && (
+                        <div className="message__failure" role="alert">
+                            <span>Not sent: {failed.error}</span>
+                            <button type="button" onClick={() => store.retrySend(threadId, message.id)}>Retry</button>
+                            <button type="button" onClick={() => store.removeFailedSend(threadId, message.id)}>Remove</button>
+                        </div>
+                    )}
+                    {eligibleForActions && (
+                        <div className="message__actions" aria-busy={reactionMutation?.status === 'pending'}>
+                            <button
+                                type="button"
+                                onClick={() => store.setReplyTarget(threadId, message.id)}
+                            >
+                                Reply
+                            </button>
+                            <button
+                                type="button"
+                                aria-expanded={pickerOpen}
+                                aria-controls={`reaction-picker-${message.id}`}
+                                disabled={reactionMutation?.status === 'pending'}
+                                onClick={() => setPickerOpen(open => !open)}
+                            >
+                                React
+                            </button>
+                            {pickerOpen && (
+                                <div
+                                    id={`reaction-picker-${message.id}`}
+                                    className="reaction-picker"
+                                    role="group"
+                                    aria-label="Choose a reaction"
+                                >
+                                    {REACTION_EMOJIS.map(emoji => (
+                                        <button
+                                            key={emoji}
+                                            type="button"
+                                            aria-label={`React with ${emoji}`}
+                                            onClick={() => chooseReaction(emoji)}
+                                        >
+                                            {emoji}
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    )}
+                    {reactionMutation?.status === 'error' && (
+                        <span className="message__reaction-error" role="alert">
+                            Reaction failed: {reactionMutation.error}
+                        </span>
+                    )}
                 </div>
             </div>
         </div>
     );
 });
+
+function Composer({
+    history,
+    threadId,
+    onDraftChange,
+    onCancelReply,
+    onSubmit,
+}: {
+    history: HistoryState;
+    threadId: string;
+    onDraftChange: (threadId: string, draft: string) => void;
+    onCancelReply: () => void;
+    onSubmit: () => void;
+}) {
+    const replyTarget = history.replyTargetId
+        ? history.byId[history.replyTargetId]
+        : undefined;
+    const submit = (event?: FormEvent<HTMLFormElement>) => {
+        event?.preventDefault();
+        onSubmit();
+    };
+    const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+        if (event.key !== 'Enter' || event.shiftKey) return;
+        event.preventDefault();
+        onSubmit();
+    };
+    const changeDraft = (event: ChangeEvent<HTMLTextAreaElement>) => {
+        const textarea = event.currentTarget;
+        const value = textarea.value;
+        onDraftChange(threadId, value);
+        // Local Teact restores the previous controlled prop after an input
+        // handler, before the external-store render reaches the next frame.
+        // Restore the store value in a microtask without creating a second
+        // draft owner so normal multi-character browser input remains intact.
+        queueMicrotask(() => {
+            if (textarea.isConnected && textarea.value !== value) textarea.value = value;
+        });
+    };
+
+    return (
+        <form className="composer" onSubmit={submit}>
+            {replyTarget && (
+                <div className="composer__reply">
+                    <span className="composer__reply-label">Replying to</span>
+                    <ReplyPreview preview={replyPreviewFor(replyTarget)} />
+                    <button type="button" onClick={onCancelReply} aria-label="Cancel reply">×</button>
+                </div>
+            )}
+            <div className="composer__controls">
+                <label className="visually-hidden" htmlFor={`message-draft-${threadId}`}>Message</label>
+                <textarea
+                    id={`message-draft-${threadId}`}
+                    rows={1}
+                    value={history.draft}
+                    placeholder="Message"
+                    onChange={changeDraft}
+                    onKeyDown={onKeyDown}
+                />
+                <button type="submit" disabled={!history.draft.trim()}>Send</button>
+            </div>
+        </form>
+    );
+}
 
 function MessageContent({ message }: { message: Message }) {
     switch (message.kind) {
@@ -678,6 +889,45 @@ function messageSummary(message: Message) {
     }
 }
 
+function replyPreviewFor(message: Message): Parameters<typeof ReplyPreview>[0]['preview'] {
+    switch (message.kind) {
+        case 'text': return { kind: 'text', text: message.text };
+        case 'reel_share': return {
+            kind: 'media',
+            title: message.caption || `Reel from ${message.author}`,
+            thumbUrl: message.thumbUrl,
+        };
+        case 'inline_share': return {
+            kind: 'media',
+            title: message.title,
+            thumbUrl: message.thumbUrl,
+            subtitle: message.subtitle,
+        };
+        case 'image': return {
+            kind: 'media',
+            title: message.images.length === 1 ? 'Photo' : `${message.images.length} photos`,
+            thumbUrl: message.images[0]?.previewUrl ?? message.images[0]?.url,
+        };
+        case 'reaction_log': return { kind: 'unavailable', label: message.fragment };
+        case 'unsupported': return { kind: 'unavailable', label: message.fallback.label };
+    }
+}
+
+function groupReactions(message: Message, viewerId?: string) {
+    const groups = new Map<string, { emoji: string; count: number; byViewer: boolean }>();
+    for (const reaction of message.reactions ?? []) {
+        const group = groups.get(reaction.reaction) ?? {
+            emoji: reaction.reaction,
+            count: 0,
+            byViewer: false,
+        };
+        group.count++;
+        if (reaction.senderId === viewerId) group.byViewer = true;
+        groups.set(reaction.reaction, group);
+    }
+    return [...groups.values()];
+}
+
 function initials(title: string) {
     return title.split(/\s+/).slice(0, 2).map(part => part[0]).join('').toUpperCase();
 }
@@ -712,6 +962,10 @@ function senderId(message: Message) {
 
 function cssEscape(value: string) {
     return globalThis.CSS?.escape ? globalThis.CSS.escape(value) : value.replace(/[^a-zA-Z0-9_-]/g, '\\$&');
+}
+
+function isAtBottom(scroller: HTMLDivElement) {
+    return scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= 2;
 }
 
 function updateResizeAnchor(

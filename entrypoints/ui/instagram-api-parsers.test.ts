@@ -219,6 +219,40 @@ test('old aliases and admin XMA text remain supported', () => {
         assert.equal(message.fallback.label, 'Alice removed Bob');
 });
 
+test('reactions are normalized on every renderable message variant', () => {
+    const reaction = {
+        reaction: '😂',
+        reaction_timestamp_ms: '1783181919592',
+        sender_fbid: 'viewer-1',
+    };
+    const messages = [
+        { content_type: 'TEXT', text_body: 'hello' },
+        { content_type: 'ACTION_LOG', text_body: 'activity' },
+        {
+            content_type: 'IMAGES',
+            content: { attachments: [{ attachment_cdn_url: 'https://cdn.example/image.jpg' }] },
+        },
+        {
+            content_type: 'MESSAGE_INLINE_SHARE',
+            content: { xma: { header_title_text: 'Post', preview_image: { url: 'https://cdn.example/post.jpg' } } },
+        },
+        { content_type: 'UNKNOWN_RENDERABLE' },
+    ].map((fields, index) => parseMessage({
+        message_id: `message-${index}`,
+        sender_fbid: 'sender-1',
+        timestamp_ms: '1783181919592',
+        reactions: [reaction],
+        ...fields,
+    }));
+
+    for (const message of messages)
+        assert.deepEqual(message?.reactions, [{
+            senderId: 'viewer-1',
+            reaction: '😂',
+            timestampMs: 1_783_181_919_592,
+        }]);
+});
+
 test('thread info independently preserves divergent UI, operation, and read-receipt identifiers', () => {
     const response = (thread: Record<string, unknown>) => ({
         data: {
@@ -425,11 +459,25 @@ test('request pages, actions, counts, and mutation receipts parse captured shape
         parseReactionMutationResponse({
             data: {
                 xig_direct_reaction_send_with_slide_messaging_response: {
-                    slide_message: { id: 'message-1' },
+                    slide_message: {
+                        id: 'message-1',
+                        reactions: [{
+                            reaction: '❤',
+                            reaction_timestamp_ms: '1783181919592',
+                            sender_fbid: 'viewer-1',
+                        }],
+                    },
                 },
             },
         }),
-        { success: true },
+        {
+            messageId: 'message-1',
+            reactions: [{
+                senderId: 'viewer-1',
+                reaction: '❤',
+                timestampMs: 1_783_181_919_592,
+            }],
+        },
     );
     assert.deepEqual(
         parseMarkThreadReadResponse({
@@ -446,5 +494,39 @@ test('request pages, actions, counts, and mutation receipts parse captured shape
             data: { xig_direct_mark_read_id_validation: false },
         }),
         { success: true },
+    );
+});
+
+test('mutation parsers reject malformed successful GraphQL envelopes', () => {
+    assert.throws(
+        () => parseSentTextResponse({ data: {
+            xig_direct_text_send_with_slide_messaging_response: {
+                message_id: 'sent-without-timestamp',
+            },
+        } }, '7001'),
+        /timestamp was not returned/,
+    );
+    assert.throws(
+        () => parseSentTextResponse({ data: {} }, '7001'),
+        /message ID was not returned/,
+    );
+    assert.throws(
+        () => parseReactionMutationResponse({ data: {
+            xig_direct_reaction_send_with_slide_messaging_response: {
+                slide_message: { id: 'message-1' },
+            },
+        } }),
+        /malformed/,
+    );
+    assert.throws(
+        () => parseReactionMutationResponse({ data: {
+            xig_direct_reaction_send_with_slide_messaging_response: {
+                slide_message: {
+                    id: 'message-1',
+                    reactions: [{ reaction: '❤', sender_fbid: 'viewer-1' }],
+                },
+            },
+        } }),
+        /malformed/,
     );
 });

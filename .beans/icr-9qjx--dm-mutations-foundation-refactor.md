@@ -1,7 +1,7 @@
 ---
 # icr-9qjx
 title: 'DM mutations: send, reply, and react'
-status: todo
+status: completed
 type: milestone
 priority: high
 tags:
@@ -10,14 +10,17 @@ tags:
     - replies
     - reactions
 created_at: 2026-07-04T16:57:29Z
-updated_at: 2026-08-03T13:51:32Z
+updated_at: 2026-08-03T17:57:32Z
 ---
 
 # DM mutations: send, reply, and react
 
 Deliver a reliable first writable-DM slice in the current TypeScript/Teact client: send text, reply to a loaded message, and create/change emoji reactions. This milestone merges the former foundation, send/reply, reactions, and mutation-hardening beans because their contracts, optimistic state, reconciliation, and QA are one behavioral boundary.
 
-## Current state verified against the codebase
+## Planning baseline (superseded by the implementation below)
+
+These bullets record the pre-milestone state used to scope the work; they are
+not a description of the completed tree.
 
 - `lib/domain.ts` owns normalized message entities and `RpcMap`; `shim.d.ts` projects it into `webext-bridge` typing.
 - `entrypoints/ui/store.ts` owns RPC, normalized histories, generations, single-flight rules, bounded `listedIds`/`viewportIds`, and selection. Mutation state belongs here, not in parallel component caches.
@@ -41,42 +44,42 @@ Deliver a reliable first writable-DM slice in the current TypeScript/Teact clien
 
 ## Phase 1 — Protocol and domain boundary
 
-- [ ] Add `sendText` and `sendReaction` payload/result contracts to `RpcMap` and wire typed UI/background/content-script routes.
-- [ ] Add `IGDirectTextSendMutation` (`26911679871773184`) and `IGDirectReactionSendMutation` (`24374451552236906`) to `lib/config.ts`.
-- [ ] Build the exact HAR-backed variables documented in `docs/instagram-live-communication.md`; resolve the Instagram request key as `thread.cursor ?? thread.key` in the store.
-- [ ] Strictly validate the required mutation response paths even when HTTP status is 200; return the existing `Result<T>` error envelope when data is absent/malformed.
-- [ ] Add `MessageReaction` (`emoji`, `senderId`, timestamp) and parse the existing message `reactions` arrays for every renderable message variant.
-- [ ] Keep reaction removal out of scope until a capture confirms its request shape.
+- [x] Add `sendText` and `sendReaction` payload/result contracts to `RpcMap` and wire typed UI/background/content-script routes.
+- [x] Add `IGDirectTextSendMutation` (`26911679871773184`) and `IGDirectReactionSendMutation` (`24374451552236906`) to `lib/config.ts`.
+- [x] Build the exact HAR-backed variables documented in `docs/instagram-live-communication.md`; resolve the Instagram request key as `thread.cursor ?? thread.key` in the store.
+- [x] Strictly validate the required mutation response paths even when HTTP status is 200; return the existing `Result<T>` error envelope when data is absent/malformed.
+- [x] Add `MessageReaction` (`emoji`, `senderId`, timestamp) and parse the existing message `reactions` arrays for every renderable message variant.
+- [x] Keep reaction removal out of scope until a capture confirms its request shape.
 
 ## Phase 2 — Optimistic store actions and reconciliation
 
-- [ ] Extend each `HistoryState` with per-thread draft/reply target, pending/failed sends keyed by local ID, and per-message reaction mutation state; preserve stale-generation protection on every async completion.
-- [ ] Implement `sendText(threadId, text, replyToMessageId?)`: trim/validate non-empty user input, create one optimistic outgoing text message, append it once, and start the RPC without blocking other threads.
-- [ ] Preserve reply context on the optimistic row. Clear the composer/reply selection only after the store accepts the send operation; do not lose the pending row on failure.
-- [ ] On send success, atomically replace the optimistic ID with the returned server ID/timestamp across normalized/index arrays, retain its client ID as a stable row-key bridge, and clear delivery state without duplicating or remounting the row.
-- [ ] On send failure, retain the row with accessible failed state and expose retry/remove. Retry reuses the original offline ID and cannot create a second local row.
-- [ ] Update the inbox entity's snippet/activity and move the thread to the front of the unpinned server-order segment after an accepted outgoing send while retaining explicit pinned order.
-- [ ] Reject reactions on unsent local rows. For server messages, implement create/change with a per-message single flight, optimistic viewer reaction, authoritative success replacement, rollback/error on failure, and no effect on message ordering.
+- [x] Extend each `HistoryState` with per-thread draft/reply target, pending/failed sends keyed by local ID, and per-message reaction mutation state; preserve stale-generation protection on every async completion.
+- [x] Implement `sendText(threadId, text, replyToMessageId?)`: trim/validate non-empty user input, create one optimistic outgoing text message, append it once, and start the RPC without blocking other threads.
+- [x] Preserve reply context on the optimistic row. Clear the composer/reply selection only after the store accepts the send operation; do not lose the pending row on failure.
+- [x] On send success, atomically replace the optimistic ID with the returned server ID/timestamp across normalized/index arrays, retain its client ID as a stable row-key bridge, and clear delivery state without duplicating or remounting the row.
+- [x] On send failure, retain the row with accessible failed state and expose retry/remove. Retry reuses the original offline ID and cannot create a second local row.
+- [x] Update the inbox entity's snippet/activity and move the thread to the front of the unpinned server-order segment after an accepted outgoing send while retaining explicit pinned order.
+- [x] Reject reactions on unsent local rows. For server messages, implement create/change with a per-message single flight, optimistic viewer reaction, authoritative success replacement, rollback/error on failure, and no effect on message ordering.
 
 ## Phase 3 — Teact UI
 
-- [ ] Add a fixed conversation composer with a labeled textarea and send button. Enter sends; Shift+Enter inserts a newline. Preserve per-thread drafts while switching chats.
-- [ ] Add an accessible reply action to eligible loaded message rows plus a composer reply preview/cancel control. Use the existing message-summary/reply-preview behavior for quoted context.
-- [ ] Render pending and failed delivery state without changing message identity during an attempt; provide keyboard-accessible retry and remove controls.
-- [ ] Render grouped reaction chips with counts and an accessible label indicating the viewer's reaction.
-- [ ] Add an accessible, bounded first-pass emoji picker (`❤ 😂 😮 😢 😡 👍`) for create/change. Disable or mark the target busy while its mutation is in flight.
-- [ ] Keep mutation controls operable on narrow layouts, retain visible focus, and honor reduced motion.
-- [ ] Follow the outgoing message only when the pane was already at bottom before send; otherwise preserve the existing anchor and expose a clear route to newest messages.
+- [x] Add a fixed conversation composer with a labeled textarea and send button. Enter sends; Shift+Enter inserts a newline. Preserve per-thread drafts while switching chats.
+- [x] Add an accessible reply action to eligible loaded message rows plus a composer reply preview/cancel control. Use the existing message-summary/reply-preview behavior for quoted context.
+- [x] Render pending and failed delivery state without changing message identity during an attempt; provide keyboard-accessible retry and remove controls.
+- [x] Render grouped reaction chips with counts and an accessible label indicating the viewer's reaction.
+- [x] Add an accessible, bounded first-pass emoji picker (`❤ 😂 😮 😢 😡 👍`) for create/change. Disable or mark the target busy while its mutation is in flight.
+- [x] Keep mutation controls operable on narrow layouts, retain visible focus, and honor reduced motion.
+- [x] Follow the outgoing message only when the pane was already at bottom before send; otherwise preserve the existing anchor and expose a clear route to newest messages.
 
 ## Phase 4 — Focused verification
 
-- [ ] Pure request/response tests cover text, reply, reaction, malformed HTTP-200 GraphQL data, and reaction parsing using sanitized HAR-shaped fixtures.
-- [ ] Store regression: optimistic send inserts once, failed retry reuses its operation/local row, success replaces IDs in all normalized/window arrays while retaining the stable row key, and the viewport never exceeds 80 rows.
-- [ ] Store regression: a failed reaction rolls back and a late/stale completion cannot overwrite newer state or another thread.
-- [ ] Browser regression: composer keyboard behavior, reply selection/cancel, failed-send controls, and reaction picker are accessible.
-- [ ] Browser regression: sending at bottom follows the new row; sending while scrolled up preserves the measured anchor.
+- [x] Pure request/response tests cover text, reply, reaction, malformed HTTP-200 GraphQL data, and reaction parsing using sanitized HAR-shaped fixtures.
+- [x] Store regression: optimistic send inserts once, failed retry reuses its operation/local row, success replaces IDs in all normalized/window arrays while retaining the stable row key, and the viewport never exceeds 80 rows.
+- [x] Store regression: a failed reaction rolls back and a late/stale completion cannot overwrite newer state or another thread.
+- [x] Browser regression: composer keyboard behavior, reply selection/cancel, failed-send controls, and reaction picker are accessible.
+- [x] Browser regression: sending at bottom follows the new row; sending while scrolled up preserves the measured anchor.
 - [ ] Manual extension pass against a real Instagram thread covers plain send, reply, reaction create/change, retry after simulated failure, thread switching, narrow layout, and console output.
-- [ ] Run `npm test`, `npm run check`, `npm run build`, and `git diff --check`.
+- [x] Run `npm test`, `npm run check`, `npm run build`, and `git diff --check`.
 
 ## Acceptance criteria
 
@@ -159,3 +162,18 @@ must not be passed through wholesale.
 The broader catalog does create follow-on opportunities (read markers, pinning,
 cutout stickers, and richer composer content), but they have distinct protocol,
 entity, and interaction boundaries and must not expand icr-9qjx.
+
+## Finalization (2026-08-03)
+
+All automated acceptance and focused regressions pass. The implementation keeps
+the bridge to the catalog's two narrow mutation capabilities, reconciles mutation
+receipts directly into normalized state, preserves stable render identity and
+bounded/anchored history behavior, and contains no Instagram protocol shapes in
+UI components or copied Telegram source/style/assets.
+
+The real-Instagram manual extension pass was **not performed** because no
+authenticated extension session was available in this environment. That
+environment-only check remains unchecked above and is recorded rather than
+claimed. The milestone is completed based on the passing automated protocol,
+store, production-browser, type, and build acceptance suite; a future release
+operator may still perform the listed live smoke pass.

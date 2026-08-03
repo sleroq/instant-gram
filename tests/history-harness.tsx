@@ -2,18 +2,23 @@ import { createElement } from '../vendor/teact/src/teact/teact';
 import TeactDOM from '../vendor/teact/src/teact/teact-dom';
 import type { Message, Result, ThreadMessages } from '../lib/domain';
 import App from '../entrypoints/ui/App';
-import type { UiRpc } from '../entrypoints/ui/rpc';
+import type { CompleteUiRpc } from '../entrypoints/ui/rpc';
 import { createFrontendStore } from '../entrypoints/ui/store';
 import '../entrypoints/ui/styles.scss';
 
-type Scenario = 'continuous' | 'delayed' | 'resize' | 'selection' | 'image';
+type Scenario = 'continuous' | 'delayed' | 'resize' | 'selection' | 'image' | 'mutations' |
+    'older-send' | 'thread-state';
 
 let activeStore: ReturnType<typeof createFrontendStore> | undefined;
 let resolveVisible: ((result: Result<ThreadMessages>) => void) | undefined;
 let calls: Array<string | undefined> = [];
+let resolveSend: (() => void) | undefined;
+let failedOnce = false;
+let sentCount = 0;
 
 const thread = {
     key: 'thread',
+    threadFbid: 'thread-fbid',
     title: 'History harness',
     isGroup: false,
     isMuted: false,
@@ -68,6 +73,9 @@ async function mount(scenario: Scenario) {
     }
     calls = [];
     resolveVisible = undefined;
+    resolveSend = undefined;
+    failedOnce = false;
+    sentCount = 0;
     document.querySelector('#history-harness-style')?.remove();
     if (scenario === 'continuous') {
         const style = document.createElement('style');
@@ -87,12 +95,14 @@ async function mount(scenario: Scenario) {
             ? page(40, 80, 'c1', true, true)
             : scenario === 'image'
                 ? { ok: true as const, value: { items: [imageMessage], hasNextPage: false, viewerId: 'viewer' } }
-                : page(0, 40, undefined, false, true);
-    const rpc: UiRpc = {
+                : scenario === 'older-send' || scenario === 'thread-state'
+                    ? page(0, 120, undefined, false, true)
+                    : page(0, 40, undefined, false, true);
+    const rpc: CompleteUiRpc = {
         getInbox: async () => ({
             ok: true,
             value: {
-                items: scenario === 'selection'
+                items: scenario === 'selection' || scenario === 'thread-state'
                     ? [thread, secondThread]
                     : scenario === 'image'
                         ? [{ ...thread, lastMessage: imageMessage }]
@@ -102,11 +112,53 @@ async function mount(scenario: Scenario) {
         }),
         getPins: async () => ({ pinned: [] }),
         togglePin: async () => ({ pinned: [] }),
+        sendText: payload => {
+            if (scenario !== 'mutations' && scenario !== 'older-send' && scenario !== 'thread-state') {
+                return Promise.resolve({ ok: false, error: { message: 'not used' } });
+            }
+            if (payload.text === 'deferred') {
+                return new Promise(resolve => {
+                    resolveSend = () => resolve({
+                        ok: true,
+                        value: {
+                            messageId: 'server-deferred',
+                            timestampMs: Date.now(),
+                            clientRequestId: payload.offlineThreadingId,
+                        },
+                    });
+                });
+            }
+            if (payload.text === 'fail once' && !failedOnce) {
+                failedOnce = true;
+                return new Promise(resolve => window.setTimeout(() => resolve({
+                    ok: false,
+                    error: { message: 'Harness send failure' },
+                }), 50));
+            }
+            sentCount++;
+            return Promise.resolve({
+                ok: true,
+                value: {
+                    messageId: `server-${sentCount}`,
+                    timestampMs: Date.now(),
+                    clientRequestId: payload.offlineThreadingId,
+                },
+            });
+        },
+        setReaction: async payload => ({
+            ok: true,
+            value: {
+                messageId: payload.messageId,
+                reactions: [{ senderId: 'viewer', reaction: payload.emoji, timestampMs: Date.now() }],
+            },
+        }),
         getReelMedia: async () => ({ ok: false, error: { message: 'not used' } }),
         getThread: payload => {
             calls.push(payload.cursor);
             if (payload.threadKey === secondThread.key) {
-                return Promise.resolve(page(0, 40));
+                return Promise.resolve(scenario === 'thread-state'
+                    ? page(0, 120, undefined, false, true)
+                    : page(0, 40));
             }
             if (!payload.cursor) return Promise.resolve(initial);
             if (payload.cursor === 'c1' && (scenario === 'delayed' || scenario === 'selection')) {
@@ -139,15 +191,24 @@ window.historyHarness = {
         resolveVisible(page(20, 40, 'c2', true, true));
         resolveVisible = undefined;
     },
+    resolveSend: () => {
+        if (!resolveSend) throw new Error('No delayed send');
+        resolveSend();
+        resolveSend = undefined;
+    },
     select: (threadId: string) => activeStore?.selectThread(threadId),
+    revealOlder: (threadId: string) => activeStore?.revealOlderHistory(threadId),
     showInbox: () => activeStore?.showInbox(),
     historyState: (threadId: string) => {
         const history = activeStore?.state.histories[threadId];
         return {
             selected: activeStore?.state.selectedThreadId,
             viewportIds: history?.viewportIds,
+            listedIds: history?.listedIds,
             isReplacingViewport: history?.isReplacingViewport,
             scrollAnchor: history?.scrollAnchor,
+            draft: history?.draft,
+            replyTargetId: history?.replyTargetId,
         };
     },
 };
@@ -158,13 +219,18 @@ declare global {
             mount: (scenario: Scenario) => Promise<void>;
             calls: () => Array<string | undefined>;
             resolveVisible: () => void;
+            resolveSend: () => void;
             select: (threadId: string) => void;
+            revealOlder: (threadId: string) => void;
             showInbox: () => void;
             historyState: (threadId: string) => {
                 selected?: string;
                 viewportIds?: string[];
+                listedIds?: string[];
                 isReplacingViewport?: boolean;
                 scrollAnchor?: { id: string; offset: number };
+                draft?: string;
+                replyTargetId?: string;
             };
         };
     }

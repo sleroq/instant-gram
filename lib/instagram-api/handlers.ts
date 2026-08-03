@@ -29,12 +29,23 @@ export type InstagramOperationExecutor = (
     input: Record<string, unknown>,
 ) => Promise<unknown>;
 
-type RemoteRpcName = Exclude<keyof RpcMap, 'getPins' | 'togglePin' | 'getReelMedia'>;
 type ResultValue<T> = T extends Result<infer Value> ? Value : T;
-type RemoteHandlers = {
-    [K in RemoteRpcName]: (
-        payload: Parameters<RpcMap[K]>[0],
-    ) => Promise<ResultValue<Awaited<ReturnType<RpcMap[K]>>>>;
+type AsyncHandlers<Map extends Record<keyof Map, (...args: never[]) => unknown>> = {
+    [K in keyof Map]: (
+        ...args: Parameters<Map[K]>
+    ) => Promise<ResultValue<Awaited<ReturnType<Map[K]>>>>;
+};
+type CanonicalHandlerRpcMap = Pick<
+    RpcMap,
+    'getInbox' | 'getThread' | 'sendText' | 'setReaction'
+>;
+export type InstagramRpcHandlers = AsyncHandlers<CanonicalHandlerRpcMap>;
+type CatalogHandlerRpcMap = Pick<RpcMap, 'getInbox' | 'getThread'> & InstagramRpcMap;
+export type InstagramCatalogHandlers = AsyncHandlers<CatalogHandlerRpcMap>;
+
+type InstagramHandlerOptions = {
+    now?: () => number;
+    viewerId?: () => Promise<string>;
 };
 
 const MAX_ID_LENGTH = 512;
@@ -81,9 +92,9 @@ function stringAllowEmpty(value: unknown, label: string, maxLength: number): str
     return value;
 }
 
-function clientRequestId(value: unknown): string {
+function numericStringId(value: unknown, label: string): string {
     if (typeof value !== 'string' || !/^\d+$/.test(value) || value.length > MAX_ID_LENGTH)
-        throw new Error('Invalid Instagram client request ID');
+        throw new Error(`Invalid Instagram ${label}`);
     return value;
 }
 
@@ -218,13 +229,10 @@ function secondaryInput(
     return input;
 }
 
-export function createInstagramRpcHandlers(
+function createInstagramHandlers(
     execute: InstagramOperationExecutor,
-    options: {
-        now?: () => number;
-        viewerId?: () => Promise<string>;
-    } = {},
-): RemoteHandlers {
+    options: InstagramHandlerOptions,
+) {
     const now = options.now ?? Date.now;
     let mailboxId: string | undefined;
 
@@ -313,7 +321,7 @@ export function createInstagramRpcHandlers(
                 await execute('IGDUserMessageRowMoreActionsMenuOffMsysQuery', input),
             );
         },
-        async getUnreadCount(value: unknown) {
+        async getUnreadCount(value?: unknown) {
             if (value !== undefined) {
                 const payload = record(value);
                 exactKeys(payload, []);
@@ -329,7 +337,7 @@ export function createInstagramRpcHandlers(
         },
         async sendText(value: unknown) {
             const payload = record(value);
-            exactKeys(payload, ['threadFbid', 'text', 'replyToMessageId', 'clientRequestId']);
+            exactKeys(payload, ['threadFbid', 'text', 'replyToMessageId', 'offlineThreadingId']);
             const input = {
                 threadFbid: requiredString(payload.threadFbid, 'thread FBID'),
                 text: requiredString(payload.text, 'message text', MAX_TEXT_LENGTH),
@@ -337,7 +345,10 @@ export function createInstagramRpcHandlers(
                     payload.replyToMessageId,
                     'reply message ID',
                 ),
-                offlineThreadingId: clientRequestId(payload.clientRequestId),
+                offlineThreadingId: numericStringId(
+                    payload.offlineThreadingId,
+                    'offline threading ID',
+                ),
             };
             return parseSentTextResponse(
                 await execute('IGDirectTextSendMutation', input),
@@ -391,7 +402,10 @@ export function createInstagramRpcHandlers(
                     payload.replyToMessageId,
                     'reply message ID',
                 ),
-                offlineThreadingId: clientRequestId(payload.clientRequestId),
+                offlineThreadingId: numericStringId(
+                    payload.clientRequestId,
+                    'client request ID',
+                ),
             };
             return parseSentCutoutStickerResponse(
                 await execute('IGDirectCutoutStickerShareMutation', input),
@@ -413,7 +427,29 @@ export function createInstagramRpcHandlers(
                 ? { operation: request.operation, payload: sanitized }
                 : parseSecondaryGraphqlResponse(request.operation, json);
         },
-    } as unknown as RemoteHandlers;
+    } satisfies InstagramRpcHandlers & InstagramCatalogHandlers;
+}
+
+/** Handlers exposed by the canonical extension bridge. */
+export function createInstagramRpcHandlers(
+    execute: InstagramOperationExecutor,
+    options: InstagramHandlerOptions = {},
+): InstagramRpcHandlers {
+    const handlers = createInstagramHandlers(execute, options);
+    return {
+        getInbox: handlers.getInbox,
+        getThread: handlers.getThread,
+        sendText: handlers.sendText,
+        setReaction: handlers.setReaction,
+    };
+}
+
+/** Prospective API catalog handlers that are deliberately not bridge routes. */
+export function createInstagramCatalogHandlers(
+    execute: InstagramOperationExecutor,
+    options: InstagramHandlerOptions = {},
+): InstagramCatalogHandlers {
+    return createInstagramHandlers(execute, options);
 }
 
 export const INSTAGRAM_RPC_OPERATION_REACHABILITY = {

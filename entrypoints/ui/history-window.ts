@@ -16,3 +16,8 @@ export function moveHistoryWindowOlder(listedIds: string[], viewportIds: string[
 export function hasLocalOlderIds(listedIds: string[], viewportIds: string[]) {
     return Boolean(viewportIds.length && listedIds.indexOf(viewportIds[0]) > 0);
 }
+
+export function appendToHistoryWindow(viewportIds: string[], id: string) {
+    if (viewportIds.includes(id)) return viewportIds;
+    return [...viewportIds, id].slice(-MAX_HISTORY_ROWS);
+}

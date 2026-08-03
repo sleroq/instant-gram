@@ -334,6 +334,302 @@ test('real pane ResizeObserver corrects growth above the active anchor', async (
     await page.close();
 });
 
+test('composer keyboard behavior sends without remounting the reconciled production row', async () => {
+    const page = await openHarness({ width: 900, height: 700 });
+    await page.evaluate(() => window.historyHarness.mount('mutations'));
+    const composer = page.getByRole('textbox', { name: 'Message' });
+    await composer.fill('first line');
+    await composer.press('Shift+Enter');
+    assert.equal(await composer.inputValue(), 'first line\n');
+    assert.equal(await page.locator('[data-message-id^="local:"]').count(), 0);
+
+    await composer.fill('deferred');
+    await composer.press('Enter');
+    const pending = page.locator('[data-message-id^="local:"]');
+    await pending.waitFor();
+    await page.locator('.message__delivery').filter({ hasText: 'Sending…' }).waitFor();
+    const pendingNode = await pending.elementHandle();
+    assert.ok(pendingNode);
+
+    await page.evaluate(() => window.historyHarness.resolveSend());
+    await page.locator('[data-message-id="server-deferred"]').waitFor();
+    assert.equal(await pendingNode.evaluate(node =>
+        node === document.querySelector('[data-message-id="server-deferred"]'),
+    ), true, 'optimistic-to-server reconciliation remounted the message row');
+    assert.equal(await composer.inputValue(), '');
+    await page.close();
+});
+
+test('reply selection, failed-send recovery, and bounded reaction picker are accessible', async () => {
+    const page = await openHarness({ width: 900, height: 700 });
+    await page.evaluate(() => window.historyHarness.mount('mutations'));
+
+    await page.getByRole('button', { name: 'Reply' }).first().click();
+    await page.getByText('Replying to').waitFor();
+    assert.ok(await page.locator('.composer__reply .message__reply').textContent());
+    assert.equal((await page.evaluate(() => window.historyHarness.historyState('thread'))).replyTargetId, 'm0');
+    await page.getByRole('button', { name: 'Cancel reply' }).click();
+    assert.equal((await page.evaluate(() => window.historyHarness.historyState('thread'))).replyTargetId, undefined);
+
+    await page.getByRole('button', { name: 'React' }).first().click();
+    const picker = page.getByRole('group', { name: 'Choose a reaction' });
+    await picker.waitFor();
+    assert.equal(await picker.getByRole('button').count(), 6);
+    await picker.getByRole('button', { name: 'React with 😂' }).click();
+    await page.locator('.reaction-chip--viewer').first().waitFor();
+    assert.match(
+        await page.locator('.reaction-chip--viewer').first().getAttribute('aria-label') ?? '',
+        /including yours/,
+    );
+
+    await page.evaluate(() => {
+        const scroller = document.querySelector<HTMLElement>('.messages')!;
+        scroller.scrollTop = scroller.scrollHeight;
+    });
+    const composer = page.getByRole('textbox', { name: 'Message' });
+    await composer.fill('fail once');
+    assert.equal(await composer.inputValue(), 'fail once');
+    await composer.press('Enter');
+    await page.locator('.message__delivery').filter({ hasText: 'Sending…' }).waitFor();
+    const failure = page.locator('.message__failure').filter({ hasText: 'Not sent' });
+    await failure.waitFor();
+    assert.equal(await failure.getByRole('button', { name: 'Retry' }).count(), 1);
+    assert.equal(await failure.getByRole('button', { name: 'Remove' }).count(), 1);
+    await failure.getByRole('button', { name: 'Retry' }).click();
+    await page.locator('[data-message-id="server-1"]').waitFor();
+    assert.equal(await failure.count(), 0);
+    await page.close();
+});
+
+test('sending at bottom follows the outgoing message', async () => {
+    const page = await openHarness({ width: 900, height: 520 });
+    await page.evaluate(() => window.historyHarness.mount('mutations'));
+    await page.locator('[data-message-id]').first().waitFor();
+    await page.evaluate(() => {
+        const scroller = document.querySelector<HTMLElement>('.messages')!;
+        scroller.scrollTop = scroller.scrollHeight;
+    });
+    const composer = page.getByRole('textbox', { name: 'Message' });
+    await composer.fill('follow me');
+    await composer.press('Enter');
+    await page.locator('[data-message-id="server-1"]').waitFor();
+    const distance = await page.evaluate(() => {
+        const scroller = document.querySelector<HTMLElement>('.messages')!;
+        return scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+    });
+    assert.ok(distance <= 2, `bottom send ended ${distance}px from newest`);
+    await page.close();
+});
+
+test('sending while scrolled up preserves the logical viewport and offers newest navigation', async () => {
+    const page = await openHarness({ width: 900, height: 520 });
+    await page.evaluate(() => window.historyHarness.mount('mutations'));
+    await page.locator('[data-message-id]').first().waitFor();
+    const before = await page.evaluate(() => {
+        const scroller = document.querySelector<HTMLElement>('.messages')!;
+        scroller.scrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight - 300);
+        scroller.dispatchEvent(new Event('scroll'));
+        const top = scroller.getBoundingClientRect().top;
+        const row = [...scroller.querySelectorAll<HTMLElement>('[data-message-id]')]
+            .find(item => item.getBoundingClientRect().bottom > top)!;
+        return {
+            id: row.dataset.messageId!,
+            top: row.getBoundingClientRect().top,
+            viewportIds: window.historyHarness.historyState('thread').viewportIds,
+        };
+    });
+    const composer = page.getByRole('textbox', { name: 'Message' });
+    await composer.fill('do not jump');
+    await composer.press('Enter');
+    await page.getByRole('button', { name: 'Go to newest message' }).waitFor();
+    assert.equal(await page.locator('[data-message-id="server-1"]').count(), 0);
+    const after = await page.locator(`[data-message-id="${before.id}"]`).evaluate(row =>
+        row.getBoundingClientRect().top,
+    );
+    assert.ok(Math.abs(after - before.top) < 1, `scrolled-up send drifted ${Math.abs(after - before.top)}px`);
+    assert.deepEqual(
+        (await page.evaluate(() => window.historyHarness.historyState('thread'))).viewportIds,
+        before.viewportIds,
+    );
+
+    await page.getByRole('button', { name: 'Go to newest message' }).click();
+    await page.locator('[data-message-id="server-1"]').waitFor();
+    const distance = await page.evaluate(() => {
+        const scroller = document.querySelector<HTMLElement>('.messages')!;
+        return scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+    });
+    assert.ok(distance <= 2, `newest navigation ended ${distance}px from bottom`);
+    await page.close();
+});
+
+test('sending at the DOM bottom of an older local window preserves its anchor and reveals newest on demand', async () => {
+    const page = await openHarness({ width: 900, height: 520 });
+    await page.evaluate(() => window.historyHarness.mount('older-send'));
+    await page.locator('[data-message-id]').first().waitFor();
+    await page.evaluate(() => window.historyHarness.revealOlder('thread'));
+    await page.waitForFunction(() =>
+        window.historyHarness.historyState('thread').viewportIds?.[0] === 'm40' &&
+        !window.historyHarness.historyState('thread').isReplacingViewport,
+    );
+    await page.evaluate(() => window.historyHarness.revealOlder('thread'));
+    await page.waitForFunction(() =>
+        window.historyHarness.historyState('thread').viewportIds?.at(-1) === 'm79' &&
+        !window.historyHarness.historyState('thread').isReplacingViewport,
+    );
+
+    const before = await page.evaluate(() => {
+        const scroller = document.querySelector<HTMLElement>('.messages')!;
+        scroller.scrollTop = scroller.scrollHeight;
+        scroller.dispatchEvent(new Event('scroll'));
+        const row = [...scroller.querySelectorAll<HTMLElement>('[data-message-id]')]
+            .find(item => item.getBoundingClientRect().bottom > scroller.getBoundingClientRect().top)!;
+        return {
+            id: row.dataset.messageId!,
+            top: row.getBoundingClientRect().top,
+            viewportIds: window.historyHarness.historyState('thread').viewportIds,
+        };
+    });
+    const composer = page.getByRole('textbox', { name: 'Message' });
+    await composer.fill('deferred');
+    await composer.press('Enter');
+    const localId = (await page.evaluate(() =>
+        window.historyHarness.historyState('thread').listedIds?.at(-1)))!;
+    assert.match(localId, /^local:/);
+    assert.equal(await page.locator(`[data-message-id="${localId}"]`).count(), 0);
+    await page.getByRole('button', { name: 'Go to newest message' }).waitFor();
+
+    await page.evaluate(() => window.historyHarness.resolveSend());
+    await page.waitForFunction(() =>
+        window.historyHarness.historyState('thread').listedIds?.at(-1) === 'server-deferred',
+    );
+    assert.equal(await page.locator('[data-message-id="server-deferred"]').count(), 0);
+    const after = await page.locator(`[data-message-id="${before.id}"]`).evaluate(row =>
+        row.getBoundingClientRect().top,
+    );
+    assert.ok(Math.abs(after - before.top) < 1, `older-window send drifted ${Math.abs(after - before.top)}px`);
+    assert.deepEqual(
+        (await page.evaluate(() => window.historyHarness.historyState('thread'))).viewportIds,
+        before.viewportIds,
+    );
+
+    await page.getByRole('button', { name: 'Go to newest message' }).click();
+    await page.locator('[data-message-id="server-deferred"]').waitFor();
+    const revealed = await page.evaluate(() => {
+        const state = window.historyHarness.historyState('thread');
+        const domIds = [...document.querySelectorAll<HTMLElement>('[data-message-id]')]
+            .map(row => row.dataset.messageId!);
+        const listed = state.listedIds!;
+        return {
+            viewportIds: state.viewportIds,
+            domIds,
+            expected: listed.slice(-40),
+            distance: (() => {
+                const scroller = document.querySelector<HTMLElement>('.messages')!;
+                return scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+            })(),
+        };
+    });
+    assert.deepEqual(revealed.viewportIds, revealed.expected);
+    assert.deepEqual(revealed.domIds, revealed.expected);
+    assert.ok(revealed.domIds.length <= 80);
+    assert.ok(revealed.distance <= 2);
+    await page.close();
+});
+
+test('programmatic follow is thread-scoped during a rapid switch', async () => {
+    const page = await openHarness({ width: 900, height: 520 });
+    await page.evaluate(() => window.historyHarness.mount('thread-state'));
+    await page.evaluate(() => window.historyHarness.select('second-thread'));
+    await page.waitForFunction(() =>
+        document.querySelector('.conversation__header h2')?.textContent === 'Second history' &&
+        document.querySelectorAll('[data-message-id]').length > 0,
+    );
+    const saved = await page.evaluate(() => {
+        const scroller = document.querySelector<HTMLElement>('.messages')!;
+        scroller.scrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight - 320);
+        scroller.dispatchEvent(new Event('scroll'));
+        const row = [...scroller.querySelectorAll<HTMLElement>('[data-message-id]')]
+            .find(item => item.getBoundingClientRect().bottom > scroller.getBoundingClientRect().top)!;
+        return { id: row.dataset.messageId!, top: row.getBoundingClientRect().top };
+    });
+    await page.evaluate(() => window.historyHarness.select('thread'));
+    await page.waitForFunction(() =>
+        document.querySelector('.conversation__header h2')?.textContent === 'History harness',
+    );
+    const composer = page.getByRole('textbox', { name: 'Message' });
+    await composer.fill('rapid switch');
+    await page.evaluate(() => {
+        const scroller = document.querySelector<HTMLElement>('.messages')!;
+        scroller.scrollTop = scroller.scrollHeight;
+        document.querySelector<HTMLTextAreaElement>('.composer textarea')!.dispatchEvent(
+            new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }),
+        );
+        window.historyHarness.select('second-thread');
+    });
+    await page.waitForFunction(() =>
+        document.querySelector('.conversation__header h2')?.textContent === 'Second history',
+    );
+    const restored = await page.evaluate(id => {
+        const scroller = document.querySelector<HTMLElement>('.messages')!;
+        const row = document.querySelector<HTMLElement>(`[data-message-id="${id}"]`)!;
+        return {
+            top: row.getBoundingClientRect().top,
+            distance: scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight,
+        };
+    }, saved.id);
+    assert.ok(Math.abs(restored.top - saved.top) < 1, `rapid switch drifted ${Math.abs(restored.top - saved.top)}px`);
+    assert.ok(restored.distance > 100, 'follow state leaked into the restored thread');
+    await page.close();
+});
+
+test('controlled drafts and composer actions remain per-thread and operable at narrow width', async () => {
+    const page = await openHarness({ width: 320, height: 640 });
+    await page.evaluate(() => window.historyHarness.mount('thread-state'));
+    const composer = page.getByRole('textbox', { name: 'Message' });
+    await composer.fill('draft one');
+    await page.evaluate(() => window.historyHarness.select('second-thread'));
+    await page.waitForFunction(() =>
+        document.querySelector('.conversation__header h2')?.textContent === 'Second history',
+    );
+    assert.equal(await composer.inputValue(), '');
+    await composer.fill('draft two');
+    await page.evaluate(() => window.historyHarness.select('thread'));
+    await page.waitForFunction(() =>
+        document.querySelector('.conversation__header h2')?.textContent === 'History harness',
+    );
+    assert.equal(await composer.inputValue(), 'draft one');
+    await page.evaluate(() => window.historyHarness.select('second-thread'));
+    await page.waitForFunction(() =>
+        document.querySelector('.conversation__header h2')?.textContent === 'Second history',
+    );
+    assert.equal(await composer.inputValue(), 'draft two');
+
+    const send = page.getByRole('button', { name: 'Send' });
+    const controlsFit = await page.evaluate(() => {
+        const textarea = document.querySelector<HTMLElement>('.composer textarea')!.getBoundingClientRect();
+        const sendButton = document.querySelector<HTMLElement>('.composer button[type="submit"]')!.getBoundingClientRect();
+        return textarea.left >= 0 && sendButton.right <= innerWidth && textarea.width > 80 && sendButton.width > 0;
+    });
+    assert.equal(controlsFit, true);
+    await send.click();
+    await page.locator('[data-message-id="server-1"]').waitFor();
+
+    await page.getByRole('button', { name: 'React' }).last().click();
+    const picker = page.getByRole('group', { name: 'Choose a reaction' });
+    await picker.waitFor();
+    const pickerFits = await picker.evaluate(element => {
+        const buttons = [...element.querySelectorAll('button')];
+        return buttons.length === 6 && buttons.every(button => {
+            const rect = button.getBoundingClientRect();
+            return rect.left >= 0 && rect.right <= innerWidth && rect.width > 0 && rect.height > 0;
+        });
+    });
+    assert.equal(pickerFits, true);
+    await picker.getByRole('button', { name: 'React with 👍' }).click();
+    await page.locator('.reaction-chip--viewer').last().waitFor();
+    await page.close();
+});
+
 async function openHarness(viewport = { width: 900, height: 500 }): Promise<Page> {
     const page = await browser.newPage({ viewport });
     await page.goto(`${baseUrl}tests/history-harness.html`);
