@@ -1,107 +1,87 @@
 import '../lib/bridge';
 import { defineContentScript } from 'wxt/utils/define-content-script';
-import { DOC_IDS, FRIENDLY_NAMES } from '../lib/config';
+import { DOC_IDS, FRIENDLY_NAMES, INSTAGRAM_GRAPHQL_FLAGS } from '../lib/config';
 import { getErrorMessage } from '../lib/errors';
-import {
-    parseThreadActivityMs,
-    parseTimestampMs,
-} from '../lib/instagram-timestamps';
 import {
     clearTokenCache,
     harvestTokens,
     startAuthProbeListener,
     type Tokens,
 } from '../lib/ig-auth';
-import type {
-    Folder,
-    Message,
-    Page,
-    ReelMedia,
-    ReplyPreview,
-    Result,
-    RpcMap,
-    Thread,
-    ThreadMessages,
-    User,
-} from '../lib/domain';
+import {
+    INSTAGRAM_GRAPHQL_OPERATIONS,
+    type InstagramGraphqlDescriptor,
+    type InstagramGraphqlOperationName,
+} from '../lib/instagram-api/catalog';
+import { createInstagramRpcHandlers } from '../lib/instagram-api/handlers';
+import {
+    parseReelInfoResponse,
+    parseReelMediaResponse,
+} from '../lib/instagram-api/parsers';
+import type { Result, RpcMap } from '../lib/domain';
 
-type InboxPayload = Parameters<RpcMap['getInbox']>[0];
-type ThreadPayload = Parameters<RpcMap['getThread']>[0];
 type ReelPayload = Parameters<RpcMap['getReelMedia']>[0];
+type RemoteRpcName = Exclude<keyof RpcMap, 'getPins' | 'togglePin'>;
 
 type GraphqlRequest = {
     friendlyName: string;
     docId: string;
     variables: Record<string, unknown>;
-    endpoint?: string;
+    endpoint: '/api/graphql' | '/graphql/query';
+    kind: 'query' | 'mutation';
 };
 
-type InboxResponse = {
-    data?: {
-        get_slide_mailbox_for_iris_subscription?: {
-            threads_by_folder?: unknown;
-        };
-        fetch__SlideMailbox?: {
-            threads_by_folder?: unknown;
-        };
-    };
-};
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
 
-type ThreadResponse = {
-    data?: {
-        get_slide_thread_nullable?: {
-            as_ig_direct_thread?: {
-                slide_messages?: unknown;
-                viewer_id?: unknown;
-                viewer?: unknown;
-            };
-        };
-        fetch__SlideThread?: {
-            as_ig_direct_thread?: {
-                slide_messages?: unknown;
-                viewer_id?: unknown;
-                viewer?: unknown;
-            };
-        };
-    };
-};
+function graphqlErrorDetails(
+    operation: string,
+    errors: unknown[],
+): string {
+    const first = errors.find(isRecord);
+    const code =
+        typeof first?.code === 'number' || typeof first?.code === 'string'
+            ? String(first.code)
+            : undefined;
+    const summary =
+        typeof first?.summary === 'string' ? first.summary.slice(0, 80) : undefined;
+    const path = Array.isArray(first?.path)
+        ? first.path.filter(part => typeof part === 'string').join('.')
+        : undefined;
+    const requestId =
+        typeof first?.www_request_id === 'string'
+            ? first.www_request_id.slice(0, 80)
+            : undefined;
+    return [
+        `Instagram GraphQL ${operation} failed`,
+        code && `code ${code}`,
+        summary,
+        path && `path ${path}`,
+        requestId && `request ${requestId}`,
+    ]
+        .filter(Boolean)
+        .join(' · ');
+}
 
-type ReelMediaResponse = {
-    data?: {
-        xdt_shortcode_media?: {
-            id?: unknown;
-            pk?: unknown;
-            video_url?: unknown;
-            video_duration?: unknown;
-            owner?: {
-                username?: unknown;
-            };
-        };
-    };
-};
+function safeErrorMessage(error: unknown): string {
+    const message = getErrorMessage(error)
+        .replaceAll(/https?:\/\/\S+/g, '[URL]')
+        .replaceAll(/(fb_dtsg|lsd|jazoest|csrftoken)=[^\s&]+/gi, '$1=[redacted]');
+    return message.slice(0, 300) || 'Instagram request failed';
+}
 
-type ReelInfoResponse = {
-    items?: {
-        pk?: unknown;
-        code?: unknown;
-        video_duration?: unknown;
-        video_versions?: {
-            url?: unknown;
-            height?: unknown;
-            bandwidth?: unknown;
-        }[];
-        user?: {
-            username?: unknown;
-        };
-    }[];
-};
+function ok<T>(value: T): Result<T> {
+    return { ok: true, value };
+}
+
+function fail(error: unknown): Result<never> {
+    return { ok: false, error: { message: safeErrorMessage(error) } };
+}
 
 async function graphql(
-    friendlyName: string,
-    docId: string,
-    variables: Record<string, unknown>,
-    endpoint = '/api/graphql',
-    tokens?: Tokens,
+    request: GraphqlRequest,
+    suppliedTokens?: Tokens,
 ): Promise<unknown> {
     const post = (auth: Tokens) => {
         const body = new URLSearchParams({
@@ -110,15 +90,15 @@ async function graphql(
             __comet_req: '7',
             dpr: '2',
             fb_api_caller_class: 'RelayModern',
-            fb_api_req_friendly_name: friendlyName,
+            fb_api_req_friendly_name: request.friendlyName,
             server_timestamps: 'true',
             fb_dtsg: auth.fbDtsg,
             lsd: auth.lsd,
             jazoest: auth.jazoest,
-            variables: JSON.stringify(variables),
-            doc_id: docId,
+            variables: JSON.stringify(request.variables),
+            doc_id: request.docId,
         });
-        return fetch(`https://www.instagram.com${endpoint}`, {
+        return fetch(`https://www.instagram.com${request.endpoint}`, {
             method: 'POST',
             credentials: 'include',
             headers: {
@@ -126,508 +106,110 @@ async function graphql(
                 'x-ig-app-id': '936619743392459',
                 'x-asbd-id': '359341',
                 'x-fb-lsd': auth.lsd,
-                'x-fb-friendly-name': friendlyName,
+                'x-fb-friendly-name': request.friendlyName,
                 'x-csrftoken': auth.csrfToken,
             },
             body,
         });
     };
-    tokens ??= await harvestTokens();
+
+    let tokens = suppliedTokens ?? (await harvestTokens());
     let response = await post(tokens);
     if (response.status === 401 || response.status === 403) {
         clearTokenCache();
+        if (request.kind === 'mutation')
+            throw new Error('Instagram authentication expired before mutation completed');
         tokens = await harvestTokens(true);
         response = await post(tokens);
     }
     if (!response.ok)
-        throw new Error(
-            `Instagram GraphQL ${friendlyName} failed with ${response.status}`,
-        );
-    return response.json() as Promise<unknown>;
-}
+        throw new Error(`Instagram GraphQL request failed with ${response.status}`);
 
-function messageId(node: Record<string, unknown>): string {
-    for (const value of [node.message_id, node.item_id, node.id]) {
-        if (typeof value === 'string' && value.length > 0) return value;
-    }
-    return crypto.randomUUID();
-}
-function messageTs(node: Record<string, unknown>): number {
-    for (const value of [node.timestamp_ms, node.timestamp]) {
-        const timestamp = parseTimestampMs(value);
-        if (timestamp !== undefined) return timestamp;
-    }
-    return 0;
-}
-function senderId(node: Record<string, unknown>): string {
-    return typeof node.sender_fbid === 'string' && node.sender_fbid.length > 0
-        ? node.sender_fbid
-        : typeof node.sender_id === 'string' && node.sender_id.length > 0
-          ? node.sender_id
-          : typeof node.user_id === 'string' && node.user_id.length > 0
-            ? node.user_id
-            : '';
-}
-function reelShortcode(url: string): string | undefined {
-    return /\/reel\/([^/?#]+)/.exec(url)?.[1];
-}
-
-function reelMediaId(
-    xma: Record<string, unknown>,
-    targetUrl: string,
-): string | undefined {
-    if (typeof xma.target_id === 'string' && xma.target_id.length > 0)
-        return xma.target_id;
+    let json: unknown;
     try {
-        const id = new URL(targetUrl).searchParams.get('id')?.split('_')[0];
-        return id && /^\d+$/.test(id) ? id : undefined;
+        json = await response.json();
     } catch {
-        return undefined;
+        throw new Error('Instagram GraphQL returned an invalid response');
     }
-}
-
-function stringProp(value: unknown): string | undefined {
-    return typeof value === 'string' && value.length > 0 ? value : undefined;
-}
-
-function imageUrl(value: unknown): string {
-    if (typeof value !== 'object' || value === null || Array.isArray(value))
-        return '';
-    const url = (value as Record<string, unknown>).url;
-    return typeof url === 'string' && url.length > 0 ? url : '';
-}
-
-function textFragments(value: unknown): string | undefined {
-    if (!Array.isArray(value)) return undefined;
-    const text = value
-        .map(fragment =>
-            typeof fragment === 'object' &&
-            fragment !== null &&
-            !Array.isArray(fragment) &&
-            typeof (fragment as Record<string, unknown>).plaintext === 'string'
-                ? ((fragment as Record<string, unknown>).plaintext as string)
-                : '',
-        )
-        .join('')
-        .trim();
-    return text.length > 0 ? text : undefined;
-}
-
-function objectProp(value: unknown): Record<string, unknown> | undefined {
-    return typeof value === 'object' && value !== null && !Array.isArray(value)
-        ? (value as Record<string, unknown>)
-        : undefined;
-}
-
-function replyPreview(
-    value: Record<string, unknown> | undefined,
-): ReplyPreview | undefined {
-    if (!value) return undefined;
-    const content = objectProp(value.content);
-    const text =
-        stringProp(value.text_body) ??
-        stringProp(content?.text) ??
-        textFragments(content?.text_fragments);
-    if (text) return { kind: 'text', text };
-
-    const xma = objectProp(content?.xma);
-    if (xma) {
-        const title =
-            stringProp(xma.header_title_text) ??
-            stringProp(xma.title_text) ??
-            stringProp(content?.xma_text_body);
-        if (title)
-            return {
-                kind: 'media',
-                title,
-                subtitle: stringProp(xma.caption_body_text),
-                thumbUrl: imageUrl(xma.preview_image) || undefined,
-            };
+    if (isRecord(json) && json.errors !== undefined) {
+        if (!Array.isArray(json.errors))
+            throw new Error('Instagram GraphQL returned an invalid response');
+        if (json.errors.length > 0)
+            throw new Error(
+                graphqlErrorDetails(request.friendlyName, json.errors),
+            );
     }
-
-    return { kind: 'unavailable', label: 'Original message unavailable' };
+    return json;
 }
 
-function parseMessage(value: unknown): Message | undefined {
-    if (typeof value !== 'object' || value === null || Array.isArray(value))
-        return undefined;
-    const node = value as Record<string, unknown>;
-    const id = messageId(node);
-    const ts = messageTs(node);
-    const sender = senderId(node);
-    const contentType =
-        typeof node.content_type === 'string' && node.content_type.length > 0
-            ? node.content_type
-            : 'UNKNOWN';
-    const content = objectProp(node.content);
-    const contentText = content?.text;
-    const textBody = node.text_body;
-    const repliedToMessage = objectProp(node.replied_to_message);
-    const repliedToMessageId = repliedToMessage?.message_id;
-    const reply = replyPreview(repliedToMessage);
-    if (contentType === 'REACTION_LOG_XMAT')
-        // Instagram emits this as a separate "Liked a message" history row; actual
-        // reaction state lives on the target message's `reactions` field.
-        return undefined;
-    if (contentType === 'TEXT')
-        return {
-            kind: 'text',
-            id,
-            senderId: sender,
-            ts,
-            text:
-                typeof textBody === 'string' && textBody.length > 0
-                    ? textBody
-                    : typeof contentText === 'string' && contentText.length > 0
-                      ? contentText
-                      : '',
-            repliedTo:
-                typeof repliedToMessageId === 'string' &&
-                repliedToMessageId.length > 0
-                    ? repliedToMessageId
-                    : undefined,
-            replyPreview: reply,
-        };
-    if (contentType === 'ACTION_LOG' || contentType === 'REACTION_LOG')
-        return {
-            kind: 'reaction_log',
-            id,
-            ts,
-            fragment:
-                typeof textBody === 'string' && textBody.length > 0
-                    ? textBody
-                    : typeof contentText === 'string' && contentText.length > 0
-                      ? contentText
-                      : (textFragments(content?.text_fragments) ?? 'Activity'),
-        };
-    const xma =
-        typeof content?.xma === 'object' &&
-        content.xma !== null &&
-        !Array.isArray(content.xma)
-            ? (content.xma as Record<string, unknown>)
-            : undefined;
-    const targetUrl =
-        typeof xma?.target_url === 'string' && xma.target_url.length > 0
-            ? xma.target_url
-            : undefined;
-    const shortcode = targetUrl ? reelShortcode(targetUrl) : undefined;
-    if (contentType === 'MESSAGE_INLINE_SHARE' && xma) {
-        const thumbUrl = imageUrl(xma.preview_image);
-        const title = stringProp(xma.header_title_text) ?? 'Instagram share';
-        const subtitle =
-            stringProp(xma.title_text) ??
-            stringProp(xma.caption_body_text) ??
-            stringProp(content?.xma_text_body);
-        if (targetUrl && shortcode)
-            return {
-                kind: 'reel_share',
-                id,
-                senderId: sender,
-                ts,
-                shortcode,
-                mediaId: reelMediaId(xma, targetUrl),
-                targetUrl,
-                thumbUrl,
-                author: title,
-                caption: subtitle,
-                repliedTo:
-                    typeof repliedToMessageId === 'string' &&
-                    repliedToMessageId.length > 0
-                        ? repliedToMessageId
-                        : undefined,
-                replyPreview: reply,
-            };
-        return {
-            kind: 'inline_share',
-            id,
-            senderId: sender,
-            ts,
-            targetUrl,
-            thumbUrl,
-            title,
-            subtitle:
-                subtitle ??
-                (stringProp(xma.__typename) === 'SlideMessagePlaceholderXMA'
-                    ? 'Unavailable attachment'
-                    : undefined),
-            repliedTo:
-                typeof repliedToMessageId === 'string' &&
-                repliedToMessageId.length > 0
-                    ? repliedToMessageId
-                    : undefined,
-            replyPreview: reply,
-        };
-    }
+function operationRequest(
+    operation: InstagramGraphqlOperationName,
+    input: Record<string, unknown>,
+    tokens: Tokens,
+): GraphqlRequest {
+    const descriptor = INSTAGRAM_GRAPHQL_OPERATIONS[operation] as InstagramGraphqlDescriptor<Record<string, unknown>>;
     return {
-        kind: 'unsupported',
-        id,
-        senderId: sender,
-        ts,
-        contentType,
-        repliedTo:
-            typeof repliedToMessageId === 'string' &&
-            repliedToMessageId.length > 0
-                ? repliedToMessageId
-                : undefined,
-        replyPreview: reply,
+        friendlyName: descriptor.friendlyName,
+        docId: descriptor.docId,
+        endpoint: descriptor.endpoint,
+        kind: descriptor.kind,
+        variables: descriptor.buildVariables(input, {
+            viewerId: tokens.viewerId,
+            deviceId: tokens.deviceId,
+        }),
     };
 }
 
-function parseUser(value: unknown): User | undefined {
-    if (typeof value !== 'object' || value === null || Array.isArray(value))
-        return undefined;
-    const user = value as Record<string, unknown>;
-    const id =
-        typeof user.interop_messaging_user_fbid === 'string' &&
-        user.interop_messaging_user_fbid.length > 0
-            ? user.interop_messaging_user_fbid
-            : typeof user.fbid === 'string' && user.fbid.length > 0
-              ? user.fbid
-              : typeof user.fbid_v2 === 'string' && user.fbid_v2.length > 0
-                ? user.fbid_v2
-                : typeof user.id === 'string' && user.id.length > 0
-                  ? user.id
-                  : typeof user.pk === 'string' && user.pk.length > 0
-                    ? user.pk
-                    : undefined;
-    if (!id) return undefined;
+function olderMessagesRequest(input: Record<string, unknown>): GraphqlRequest {
     return {
-        id,
-        username:
-            typeof user.username === 'string' && user.username.length > 0
-                ? user.username
-                : '',
-        fullName:
-            typeof user.full_name === 'string' && user.full_name.length > 0
-                ? user.full_name
-                : typeof user.name === 'string' && user.name.length > 0
-                  ? user.name
-                  : '',
-        picUrl:
-            typeof user.profile_pic_url === 'string' &&
-            user.profile_pic_url.length > 0
-                ? user.profile_pic_url
-                : typeof user.profile_pic_url_hd === 'string' &&
-                    user.profile_pic_url_hd.length > 0
-                  ? user.profile_pic_url_hd
-                  : null,
+        friendlyName: FRIENDLY_NAMES.olderMessages,
+        docId: DOC_IDS.olderMessages,
+        endpoint: '/api/graphql',
+        kind: 'query',
+        variables: {
+            after: input.cursor,
+            before: null,
+            first: INSTAGRAM_GRAPHQL_FLAGS.initialMessagePageCount,
+            last: null,
+            newer_than_message_id: null,
+            older_than_message_id: null,
+            id: input.threadKey,
+            __relay_internal__pv__IGDInitialMessagePageCountrelayprovider:
+                INSTAGRAM_GRAPHQL_FLAGS.initialMessagePageCount,
+        },
     };
 }
 
-function parseThread(value: unknown): Thread | undefined {
-    if (typeof value !== 'object' || value === null || Array.isArray(value))
-        return undefined;
-    const thread = value as Record<string, unknown>;
-    const key =
-        typeof thread.thread_key === 'string' && thread.thread_key.length > 0
-            ? thread.thread_key
-            : typeof thread.thread_fbid === 'string' &&
-                thread.thread_fbid.length > 0
-              ? thread.thread_fbid
-              : typeof thread.id === 'string' && thread.id.length > 0
-                ? thread.id
-                : undefined;
-    if (!key) return undefined;
-    const users = (Array.isArray(thread.users) ? thread.users : [])
-        .map(parseUser)
-        .filter((user): user is User => Boolean(user));
-    const slideMessages =
-        typeof thread.slide_messages === 'object' &&
-        thread.slide_messages !== null &&
-        !Array.isArray(thread.slide_messages)
-            ? (thread.slide_messages as Record<string, unknown>)
-            : undefined;
-    const lastMessage = (
-        Array.isArray(slideMessages?.edges) ? slideMessages.edges : []
+async function executeOperation(
+    operation: InstagramGraphqlOperationName | 'IGDMessageListOffMsysQuery',
+    input: Record<string, unknown>,
+): Promise<unknown> {
+    const tokens = await harvestTokens();
+    return graphql(
+        operation === 'IGDMessageListOffMsysQuery'
+            ? olderMessagesRequest(input)
+            : operationRequest(operation, input, tokens),
+        tokens,
+    );
+}
+
+function validateReelPayload(value: unknown): ReelPayload {
+    if (!isRecord(value)) throw new Error('Invalid Instagram reel payload');
+    if (Object.keys(value).some(key => key !== 'shortcode' && key !== 'mediaId'))
+        throw new Error('Invalid Instagram reel payload fields');
+    if (
+        typeof value.shortcode !== 'string' ||
+        value.shortcode.trim().length === 0 ||
+        value.shortcode.length > 128
     )
-        .map(edge =>
-            parseMessage(
-                typeof edge === 'object' &&
-                    edge !== null &&
-                    !Array.isArray(edge)
-                    ? (edge as Record<string, unknown>).node
-                    : undefined,
-            ),
-        )
-        .find(Boolean);
-    const generatedTitle = users
-        .map(u => u.username || u.fullName)
-        .filter(Boolean)
-        .join(', ');
-    return {
-        key,
-        title:
-            typeof thread.thread_title === 'string' &&
-            thread.thread_title.length > 0
-                ? thread.thread_title
-                : generatedTitle || 'Untitled',
-        isGroup: Boolean(thread.is_group_thread),
-        isMuted: Boolean(thread.muted),
-        folder:
-            typeof thread.folder === 'string' && thread.folder.length > 0
-                ? (thread.folder as Folder)
-                : 'PRIMARY',
-        lastActivityMs: parseThreadActivityMs(thread),
-        serverIsPin: Boolean(thread.is_pin),
-        users,
-        lastMessage,
-        cursor:
-            typeof thread.thread_fbid === 'string' &&
-            thread.thread_fbid.length > 0
-                ? thread.thread_fbid
-                : key,
-    };
-}
-
-function parseThreads(container: unknown): Page<Thread> {
-    const containerObj =
-        typeof container === 'object' &&
-        container !== null &&
-        !Array.isArray(container)
-            ? (container as Record<string, unknown>)
-            : undefined;
-    const pageInfo =
-        typeof containerObj?.page_info === 'object' &&
-        containerObj.page_info !== null &&
-        !Array.isArray(containerObj.page_info)
-            ? (containerObj.page_info as Record<string, unknown>)
-            : {};
-    const items = (Array.isArray(containerObj?.edges) ? containerObj.edges : [])
-        .map(edge =>
-            parseThread(
-                typeof edge === 'object' &&
-                    edge !== null &&
-                    !Array.isArray(edge) &&
-                    typeof (edge as Record<string, unknown>).node ===
-                        'object' &&
-                    (edge as Record<string, unknown>).node !== null &&
-                    !Array.isArray((edge as Record<string, unknown>).node)
-                    ? (
-                          (edge as Record<string, unknown>).node as Record<
-                              string,
-                              unknown
-                          >
-                      ).as_ig_direct_thread
-                    : undefined,
-            ),
-        )
-        .filter((thread): thread is Thread => Boolean(thread));
-    return {
-        items,
-        cursor:
-            typeof pageInfo.end_cursor === 'string' &&
-            pageInfo.end_cursor.length > 0
-                ? pageInfo.end_cursor
-                : undefined,
-        hasNextPage: Boolean(pageInfo.has_next_page),
-    };
-}
-
-function parseMessagePage(container: unknown): Page<Message> {
-    const containerObj =
-        typeof container === 'object' &&
-        container !== null &&
-        !Array.isArray(container)
-            ? (container as Record<string, unknown>)
-            : undefined;
-    const pageInfo =
-        typeof containerObj?.page_info === 'object' &&
-        containerObj.page_info !== null &&
-        !Array.isArray(containerObj.page_info)
-            ? (containerObj.page_info as Record<string, unknown>)
-            : {};
-    const items = (Array.isArray(containerObj?.edges) ? containerObj.edges : [])
-        .map(edge =>
-            parseMessage(
-                typeof edge === 'object' &&
-                    edge !== null &&
-                    !Array.isArray(edge)
-                    ? (edge as Record<string, unknown>).node
-                    : undefined,
-            ),
-        )
-        .filter((message): message is Message => Boolean(message))
-        .reverse();
-    return {
-        items,
-        cursor:
-            typeof pageInfo.end_cursor === 'string' &&
-            pageInfo.end_cursor.length > 0
-                ? pageInfo.end_cursor
-                : undefined,
-        hasNextPage: Boolean(pageInfo.has_next_page),
-    };
-}
-
-function ok<T>(value: T): Result<T> {
-    return { ok: true, value };
-}
-function fail(error: unknown): Result<never> {
-    return {
-        ok: false,
-        error: {
-            message: getErrorMessage(error),
-        },
-    };
-}
-
-function inboxRequest(payload: InboxPayload, tokens: Tokens): GraphqlRequest {
-    if (payload.cursor)
-        return {
-            friendlyName: FRIENDLY_NAMES.inboxPage,
-            docId: DOC_IDS.inboxPage,
-            variables: {
-                count: 5,
-                cursor: payload.cursor,
-                folder: 'INBOX',
-                newer_than_timestamp_ms: null,
-                id: tokens.viewerId,
-                __relay_internal__pv__IGDPinnedThreadsRenderEnabledGKrelayprovider: true,
-                __relay_internal__pv__IGDMaxUnreadMessagesCountrelayprovider: 5,
-                __relay_internal__pv__PolarisAIGMAccountLabelEnabledrelayprovider: false,
-                __relay_internal__pv__IGDThreadListActionsEnabledGKrelayprovider: false,
-            },
-        };
-    return {
-        friendlyName: FRIENDLY_NAMES.inbox,
-        docId: DOC_IDS.inbox,
-        variables: {
-            device_id_for_iris_subscription: tokens.deviceId,
-            __relay_internal__pv__IGDIsProfessionalAccountGKrelayprovider: false,
-            __relay_internal__pv__IGDPinnedThreadsRenderEnabledGKrelayprovider: true,
-            __relay_internal__pv__IGDMaxUnreadMessagesCountrelayprovider: 5,
-            __relay_internal__pv__PolarisAIGMAccountLabelEnabledrelayprovider: false,
-            __relay_internal__pv__IGDThreadListActionsEnabledGKrelayprovider: false,
-        },
-    };
-}
-
-function threadRequest(payload: ThreadPayload): GraphqlRequest {
-    if (payload.cursor)
-        return {
-            friendlyName: FRIENDLY_NAMES.olderMessages,
-            docId: DOC_IDS.olderMessages,
-            variables: {
-                after: payload.cursor,
-                before: null,
-                first: 20,
-                last: null,
-                newer_than_message_id: null,
-                older_than_message_id: null,
-                id: payload.threadKey,
-                __relay_internal__pv__IGDInitialMessagePageCountrelayprovider: 20,
-            },
-        };
-    return {
-        friendlyName: FRIENDLY_NAMES.thread,
-        docId: DOC_IDS.thread,
-        variables: {
-            thread_fbid: payload.threadKey,
-            __relay_internal__pv__IGDEnableOffMsysChatThemesQErelayprovider: false,
-            __relay_internal__pv__IGDInitialMessagePageCountrelayprovider: 20,
-            __relay_internal__pv__PolarisAIGMAccountLabelEnabledrelayprovider: false,
-        },
-    };
+        throw new Error('Invalid Instagram reel shortcode');
+    if (
+        value.mediaId !== undefined &&
+        (typeof value.mediaId !== 'string' ||
+            !/^\d{1,64}$/.test(value.mediaId))
+    )
+        throw new Error('Invalid Instagram reel media ID');
+    return value as ReelPayload;
 }
 
 function reelMediaRequest(payload: ReelPayload): GraphqlRequest {
@@ -635,6 +217,7 @@ function reelMediaRequest(payload: ReelPayload): GraphqlRequest {
         friendlyName: FRIENDLY_NAMES.reelMedia,
         docId: DOC_IDS.reelMedia,
         endpoint: '/graphql/query',
+        kind: 'query',
         variables: {
             shortcode: payload.shortcode,
             fetch_tagged_user_count: null,
@@ -660,109 +243,17 @@ async function fetchReelInfo(mediaId: string): Promise<unknown> {
     return response.json() as Promise<unknown>;
 }
 
-async function sendGraphqlRequest(
-    request: GraphqlRequest,
-    tokens?: Tokens,
-): Promise<unknown> {
-    return graphql(
-        request.friendlyName,
-        request.docId,
-        request.variables,
-        request.endpoint,
-        tokens,
+async function getReelMedia(value: unknown) {
+    const payload = validateReelPayload(value);
+    if (payload.mediaId)
+        return parseReelInfoResponse(await fetchReelInfo(payload.mediaId), payload);
+    const parsed = parseReelMediaResponse(
+        await graphql(reelMediaRequest(payload)),
+        payload,
     );
-}
-
-function parseInboxResponse(json: unknown): Page<Thread> {
-    const root = (json as InboxResponse).data;
-    const box =
-        root?.get_slide_mailbox_for_iris_subscription?.threads_by_folder ??
-        root?.fetch__SlideMailbox?.threads_by_folder;
-    return parseThreads(box);
-}
-
-function parseThreadResponse(json: unknown, viewerId: string): ThreadMessages {
-    const root = (json as ThreadResponse).data;
-    const thread =
-        root?.get_slide_thread_nullable?.as_ig_direct_thread ??
-        root?.fetch__SlideThread?.as_ig_direct_thread;
-    const threadViewerId = thread?.viewer_id;
-    const viewer =
-        typeof thread?.viewer === 'object' &&
-        thread.viewer !== null &&
-        !Array.isArray(thread.viewer)
-            ? (thread.viewer as Record<string, unknown>)
-            : undefined;
-    const viewerSenderId = viewer?.interop_messaging_user_fbid;
-    return {
-        ...parseMessagePage(thread?.slide_messages),
-        thread: parseThread(thread),
-        viewerId:
-            typeof viewerSenderId === 'string' && viewerSenderId.length > 0
-                ? viewerSenderId
-                : typeof threadViewerId === 'string' &&
-                    threadViewerId.length > 0
-                  ? threadViewerId
-                  : viewerId,
-    };
-}
-
-function parseReelMediaResponse(
-    json: unknown,
-    payload: ReelPayload,
-): ReelMedia | { mediaId: string } {
-    const media = (json as ReelMediaResponse).data?.xdt_shortcode_media;
-    const videoUrl = media?.video_url;
-    const duration = media?.video_duration;
-    const username = media?.owner?.username;
-    if (typeof videoUrl !== 'string' || videoUrl.length === 0) {
-        const mediaId =
-            typeof media?.pk === 'string' && media.pk.length > 0
-                ? media.pk
-                : typeof media?.id === 'string' && media.id.length > 0
-                  ? media.id.split('_')[0]
-                  : undefined;
-        if (mediaId) return { mediaId };
-        throw new Error('Instagram reel video URL was not returned');
-    }
-    return {
-        shortcode: payload.shortcode,
-        videoUrl,
-        durationSec: typeof duration === 'number' ? duration : 0,
-        owner:
-            typeof username === 'string' && username.length > 0 ? username : '',
-    };
-}
-
-function parseReelInfoResponse(json: unknown, payload: ReelPayload): ReelMedia {
-    const item = (json as ReelInfoResponse).items?.[0];
-    const versions = Array.isArray(item?.video_versions)
-        ? item.video_versions
-        : [];
-    const bestVersion = versions
-        .filter(version => typeof version.url === 'string')
-        .sort((a, b) => {
-            const aHeight = typeof a.height === 'number' ? a.height : 0;
-            const bHeight = typeof b.height === 'number' ? b.height : 0;
-            if (aHeight !== bHeight) return bHeight - aHeight;
-            const aBandwidth =
-                typeof a.bandwidth === 'number' ? a.bandwidth : 0;
-            const bBandwidth =
-                typeof b.bandwidth === 'number' ? b.bandwidth : 0;
-            return bBandwidth - aBandwidth;
-        })[0];
-    const videoUrl = bestVersion?.url;
-    if (typeof videoUrl !== 'string' || videoUrl.length === 0)
-        throw new Error('Instagram reel video URL was not returned');
-    const duration = item?.video_duration;
-    const username = item?.user?.username;
-    return {
-        shortcode: payload.shortcode,
-        videoUrl,
-        durationSec: typeof duration === 'number' ? duration : 0,
-        owner:
-            typeof username === 'string' && username.length > 0 ? username : '',
-    };
+    return 'mediaId' in parsed
+        ? parseReelInfoResponse(await fetchReelInfo(parsed.mediaId), payload)
+        : parsed;
 }
 
 export default defineContentScript({
@@ -773,54 +264,22 @@ export default defineContentScript({
         // during build with a fake browser that does not implement runtime.onConnect.
         const { onMessage } = await import('webext-bridge/content-script');
         startAuthProbeListener();
-        onMessage<InboxPayload, 'getInbox'>('getInbox', async ({ data }) => {
-            try {
-                const tokens = await harvestTokens();
-                const json = await sendGraphqlRequest(
-                    inboxRequest(data, tokens),
-                    tokens,
-                );
-                return ok(parseInboxResponse(json));
-            } catch (error) {
-                return fail(error);
-            }
-        });
-        onMessage<ThreadPayload, 'getThread'>('getThread', async ({ data }) => {
-            try {
-                const tokens = await harvestTokens();
-                const json = await sendGraphqlRequest(threadRequest(data));
-                return ok(parseThreadResponse(json, tokens.viewerId));
-            } catch (error) {
-                return fail(error);
-            }
-        });
-        onMessage<ReelPayload, 'getReelMedia'>(
-            'getReelMedia',
-            async ({ data }) => {
+
+        const handlers = {
+            ...createInstagramRpcHandlers(executeOperation, {
+                viewerId: async () => (await harvestTokens()).viewerId,
+            }),
+            getReelMedia,
+        };
+        for (const name of Object.keys(handlers) as RemoteRpcName[]) {
+            const handler = handlers[name] as (payload: unknown) => Promise<unknown>;
+            onMessage(name, async ({ data }) => {
                 try {
-                    if (data.mediaId)
-                        return ok(
-                            parseReelInfoResponse(
-                                await fetchReelInfo(data.mediaId),
-                                data,
-                            ),
-                        );
-                    const json = await sendGraphqlRequest(
-                        reelMediaRequest(data),
-                    );
-                    const parsed = parseReelMediaResponse(json, data);
-                    if ('mediaId' in parsed)
-                        return ok(
-                            parseReelInfoResponse(
-                                await fetchReelInfo(parsed.mediaId),
-                                data,
-                            ),
-                        );
-                    return ok(parsed);
+                    return ok(await handler(data));
                 } catch (error) {
                     return fail(error);
                 }
-            },
-        );
+            });
+        }
     },
 });

@@ -1,13 +1,7 @@
 import '../lib/bridge';
 import { defineBackground } from 'wxt/utils/define-background';
 import browser from 'webextension-polyfill';
-import type {
-    Page,
-    ReelMedia,
-    Result,
-    Thread,
-    ThreadMessages,
-} from '../lib/domain';
+import type { RpcMap } from '../lib/domain';
 
 type PinStore = { pinned?: string[] };
 
@@ -37,46 +31,39 @@ async function ensureAnchorTab(): Promise<number> {
     return created.id;
 }
 
-async function routeToAnchor(
-    name: 'getInbox',
-    payload: { cursor?: string },
-): Promise<Result<Page<Thread>>>;
-async function routeToAnchor(
-    name: 'getThread',
-    payload: { threadKey: string; cursor?: string },
-): Promise<Result<ThreadMessages>>;
-async function routeToAnchor(
-    name: 'getReelMedia',
-    payload: { shortcode: string; mediaId?: string },
-): Promise<Result<ReelMedia>>;
-async function routeToAnchor(
-    name: 'getInbox' | 'getThread' | 'getReelMedia',
-    payload:
-        | { cursor?: string }
-        | { threadKey: string; cursor?: string }
-        | { shortcode: string; mediaId?: string },
-) {
+type RemoteRpcName = Exclude<keyof RpcMap, 'getPins' | 'togglePin'>;
+type RpcPayload<K extends keyof RpcMap> = Parameters<RpcMap[K]>[0];
+type RpcResult<K extends keyof RpcMap> = Awaited<ReturnType<RpcMap[K]>>;
+
+const REMOTE_RPC_NAMES = [
+    'getInbox',
+    'getThread',
+    'getReelMedia',
+    'getMessageRequests',
+    'getThreadInfo',
+    'getMessageActions',
+    'getUnreadCount',
+    'sendText',
+    'setReaction',
+    'markThreadRead',
+    'pinMessage',
+    'sendCutoutSticker',
+    'executeInstagramGraphql',
+] as const satisfies readonly RemoteRpcName[];
+
+async function routeToAnchor<K extends RemoteRpcName>(
+    name: K,
+    payload: RpcPayload<K>,
+): Promise<RpcResult<K>> {
     // Keep webext-bridge out of top-level imports: WXT evaluates this module
     // during build with a fake browser that does not implement runtime.onConnect.
     const { sendMessage } = await import('webext-bridge/background');
     const tabId = await ensureAnchorTab();
-    if (name === 'getInbox')
-        return sendMessage<Result<Page<Thread>>, 'getInbox'>(
-            name,
-            payload,
-            `content-script@${tabId}`,
-        );
-    if (name === 'getThread')
-        return sendMessage<Result<ThreadMessages>, 'getThread'>(
-            name,
-            payload,
-            `content-script@${tabId}`,
-        );
-    return sendMessage<Result<ReelMedia>, 'getReelMedia'>(
+    return (await sendMessage<RpcResult<K>, K>(
         name,
-        payload,
+        payload as never,
         `content-script@${tabId}`,
-    );
+    )) as RpcResult<K>;
 }
 
 export default defineBackground(() => {
@@ -88,17 +75,8 @@ export default defineBackground(() => {
     // Keep webext-bridge out of top-level imports: WXT evaluates this module
     // during build with a fake browser that does not implement runtime.onConnect.
     import('webext-bridge/background').then(({ onMessage }) => {
-        onMessage<{ cursor?: string }, 'getInbox'>('getInbox', ({ data }) =>
-            routeToAnchor('getInbox', data),
-        );
-        onMessage<{ threadKey: string; cursor?: string }, 'getThread'>(
-            'getThread',
-            ({ data }) => routeToAnchor('getThread', data),
-        );
-        onMessage<{ shortcode: string; mediaId?: string }, 'getReelMedia'>(
-            'getReelMedia',
-            ({ data }) => routeToAnchor('getReelMedia', data),
-        );
+        for (const name of REMOTE_RPC_NAMES)
+            onMessage(name, ({ data }) => routeToAnchor(name, data as never));
         onMessage<null, 'getPins'>('getPins', async () => ({
             pinned: await getPinned(),
         }));

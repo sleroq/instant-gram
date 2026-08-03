@@ -7,52 +7,73 @@ export type User = {
     picUrl: string | null;
 };
 
-export type Message =
-    | {
-          kind: 'text';
-          id: string;
-          senderId: string;
-          ts: number;
-          text: string;
-          repliedTo?: string;
-          replyPreview?: ReplyPreview;
-      }
-    | { kind: 'reaction_log'; id: string; ts: number; fragment: string }
-    | {
-          kind: 'reel_share';
-          id: string;
-          senderId: string;
-          ts: number;
-          shortcode: string;
-          mediaId?: string;
-          targetUrl: string;
-          thumbUrl: string;
-          author: string;
-          caption?: string;
-          repliedTo?: string;
-          replyPreview?: ReplyPreview;
-      }
-    | {
-          kind: 'inline_share';
-          id: string;
-          senderId: string;
-          ts: number;
-          targetUrl?: string;
-          thumbUrl: string;
-          title: string;
-          subtitle?: string;
-          repliedTo?: string;
-          replyPreview?: ReplyPreview;
-      }
-    | {
-          kind: 'unsupported';
-          id: string;
-          senderId: string;
-          ts: number;
-          contentType: string;
-          repliedTo?: string;
-          replyPreview?: ReplyPreview;
-      };
+export type MessageReaction = {
+    senderId: string;
+    reaction: string;
+    timestampMs?: number;
+};
+
+export type MessageImage = {
+    url: string;
+    previewUrl?: string;
+    width?: number;
+    height?: number;
+};
+
+export type MessageFallback = {
+    label: string;
+    preview?: string;
+    targetUrl?: string;
+    thumbUrl?: string;
+};
+
+type MessageMetadata = {
+    id: string;
+    ts: number;
+    /** Authoritative reaction state attached to the target message. */
+    reactions?: MessageReaction[];
+    isPinned?: boolean;
+};
+
+type SentMessageMetadata = {
+    senderId: string;
+    repliedTo?: string;
+    replyPreview?: ReplyPreview;
+};
+
+export type Message = MessageMetadata &
+    (
+        | (SentMessageMetadata & {
+              kind: 'text';
+              text: string;
+          })
+        | { kind: 'reaction_log'; fragment: string }
+        | (SentMessageMetadata & {
+              kind: 'reel_share';
+              shortcode: string;
+              mediaId?: string;
+              targetUrl: string;
+              thumbUrl: string;
+              author: string;
+              caption?: string;
+          })
+        | (SentMessageMetadata & {
+              kind: 'inline_share';
+              targetUrl?: string;
+              thumbUrl: string;
+              title: string;
+              subtitle?: string;
+          })
+        | (SentMessageMetadata & {
+              kind: 'image';
+              images: MessageImage[];
+          })
+        | (SentMessageMetadata & {
+              kind: 'unsupported';
+              contentType: string;
+              fallback: MessageFallback;
+          })
+    );
 
 export type ReplyPreview =
     | { kind: 'text'; text: string }
@@ -61,12 +82,17 @@ export type ReplyPreview =
 
 export type Thread = {
     key: string;
+    /** Small operation ID from `thread_fbid`, or captured `thread_igid`/composer `id`. */
+    threadFbid?: string;
+    /** Large read-receipt identifier sourced exclusively from Instagram's `thread_id`. */
+    threadIgId?: string;
     title: string;
     isGroup: boolean;
     isMuted: boolean;
     folder: Folder;
     lastActivityMs: number;
     serverIsPin: boolean;
+    serverPinnedMessageIds?: string[];
     users: User[];
     lastMessage?: Message;
     cursor?: string;
@@ -86,7 +112,146 @@ export type ThreadMessages = Page<Message> & {
 export type ApiError = { message: string };
 export type Result<T> = { ok: true; value: T } | { ok: false; error: ApiError };
 
-export type RpcMap = {
+export type MessageRequestFolder = 'REQUESTS' | 'SPAM';
+export type ThreadInfo = Pick<
+    Thread,
+    | 'key'
+    | 'threadFbid'
+    | 'threadIgId'
+    | 'title'
+    | 'isGroup'
+    | 'isMuted'
+    | 'serverIsPin'
+    | 'users'
+>;
+export type MessageActions = {
+    canCopy: boolean;
+    canReply: boolean;
+    canReact: boolean;
+    canUnsend: boolean;
+    canPin: boolean;
+    isPinned: boolean;
+};
+export type UnreadCount = {
+    countedTotal: number;
+    inbox: { count: number; hasMore: boolean };
+    requests: { count: number; hasMore: boolean };
+    spam: { count: number; hasMore: boolean };
+};
+export type SentMessage = {
+    messageId: string;
+    timestampMs?: number;
+    clientRequestId: string;
+};
+export type MutationSuccess = { success: true };
+export type PinMessageResult = { pinnedMessageIds: string[] };
+
+export type JsonPrimitive = string | number | boolean | null;
+export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
+export type InstagramGraphqlPayload = {
+    data?: { [key: string]: JsonValue };
+    errors?: { message: string; code?: string }[];
+};
+
+export type InstagramSecondaryGraphqlRequest =
+    | { operation: 'PolarisAutomaticPreviewsDisabledContextProviderQuery' }
+    | { operation: 'useFeatureLimitsOffMsysQuery' }
+    | { operation: 'IGPresenceUnifiedSetupQuery' }
+    | { operation: 'IGDInboxTrayQuery' }
+    | { operation: 'IGDEmojiPickerQuery' }
+    | { operation: 'IGDComposerRichContentTray_AvatarAvailableQuery' }
+    | {
+          operation: 'IGDComposerRichContentStickersV2Query';
+          searchQuery: string;
+      }
+    | { operation: 'IGDComposerRichContentStickersV2_recentStickersQuery' }
+    | { operation: 'IGDComposerRichContentStickersV2_cutoutStickersQuery' }
+    | {
+          operation: 'IGDComposerRichContentStickersV2ThreadIGIDQuery';
+          threadFbid: string;
+      }
+    | { operation: 'IGDComposerRichContentMusicQuery'; playlistId: string }
+    | { operation: 'IGDComposerRichContentMusicSearchQuery'; query: string }
+    | {
+          operation: 'useIGDSystemFolderUnreadThreadCountQuery';
+          folder: 'INBOX' | 'PENDING';
+          newerThanTimestampMs?: string;
+      }
+    | {
+          operation: 'IGDComposerRichContentMusicThreadIGIDQuery';
+          threadFbid: string;
+      }
+    | {
+          operation: 'playlistMusicRefetchQuery';
+          playlistId: string;
+          cursor: string;
+          count?: number;
+      };
+
+export type InstagramSecondaryGraphqlResult =
+    | {
+          operation: 'IGDEmojiPickerQuery';
+          categories: { id: string; name: string; items: string[] }[];
+      }
+    | {
+          operation:
+              | 'IGDComposerRichContentStickersV2Query'
+              | 'IGDComposerRichContentStickersV2_recentStickersQuery'
+              | 'IGDComposerRichContentStickersV2_cutoutStickersQuery';
+          sections: {
+              id: string;
+              title: string;
+              type?: string;
+              items: {
+                  id: string;
+                  altText: string;
+                  sendType?: string;
+                  image?: {
+                      url: string;
+                      width: number;
+                      height: number;
+                      animated: boolean;
+                  };
+              }[];
+          }[];
+      }
+    | {
+          operation:
+              | 'IGDComposerRichContentMusicQuery'
+              | 'IGDComposerRichContentMusicSearchQuery'
+              | 'playlistMusicRefetchQuery';
+          tracks: {
+              id: string;
+              title: string;
+              artist: string;
+              durationMs: number;
+              artworkUrl?: string;
+              previewUrl?: string;
+          }[];
+          cursor?: string;
+          hasNextPage: boolean;
+      }
+    | {
+          operation: 'IGDComposerRichContentTray_AvatarAvailableQuery';
+          available: boolean;
+      }
+    | {
+          operation:
+              | 'IGDComposerRichContentStickersV2ThreadIGIDQuery'
+              | 'IGDComposerRichContentMusicThreadIGIDQuery';
+          threadFbid?: string;
+      }
+    | {
+          operation:
+              | 'PolarisAutomaticPreviewsDisabledContextProviderQuery'
+              | 'useFeatureLimitsOffMsysQuery'
+              | 'IGPresenceUnifiedSetupQuery'
+              | 'IGDInboxTrayQuery'
+              | 'useIGDSystemFolderUnreadThreadCountQuery';
+          payload: InstagramGraphqlPayload;
+      };
+
+export type CoreRpcMap = {
     getInbox: (payload: { cursor?: string }) => Result<Page<Thread>>;
     getThread: (payload: {
         threadKey: string;
@@ -99,3 +264,50 @@ export type RpcMap = {
     getPins: () => { pinned: string[] };
     togglePin: (payload: { threadKey: string }) => { pinned: string[] };
 };
+
+/** Contracts implemented by the Instagram anchor as DM capabilities land. */
+export type InstagramRpcMap = {
+    getMessageRequests: (payload: {
+        folder: MessageRequestFolder;
+        cursor?: string;
+    }) => Result<Page<Thread>>;
+    getThreadInfo: (payload: { threadFbid: string }) => Result<ThreadInfo>;
+    getMessageActions: (payload: {
+        threadFbid: string;
+        messageId: string;
+        senderId: string;
+    }) => Result<MessageActions>;
+    getUnreadCount: () => Result<UnreadCount>;
+    sendText: (payload: {
+        threadFbid: string;
+        text: string;
+        replyToMessageId?: string;
+        clientRequestId: string;
+    }) => Result<SentMessage>;
+    setReaction: (payload: {
+        threadFbid: string;
+        messageId: string;
+        emoji: string;
+    }) => Result<MutationSuccess>;
+    markThreadRead: (payload: {
+        threadIgId: string;
+        messageId: string;
+        messageTimestampMs: number;
+    }) => Result<MutationSuccess>;
+    pinMessage: (payload: {
+        threadFbid: string;
+        messageId: string;
+        replaceOldest?: boolean;
+    }) => Result<PinMessageResult>;
+    sendCutoutSticker: (payload: {
+        threadFbid: string;
+        stickerId: string;
+        replyToMessageId?: string;
+        clientRequestId: string;
+    }) => Result<SentMessage>;
+    executeInstagramGraphql: (
+        payload: InstagramSecondaryGraphqlRequest,
+    ) => Result<InstagramSecondaryGraphqlResult>;
+};
+
+export type RpcMap = CoreRpcMap & InstagramRpcMap;

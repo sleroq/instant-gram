@@ -90,6 +90,28 @@ test('dark desktop shell keeps floating fixed geometry and rounded selection', a
     await page.close();
 });
 
+test('image messages render with reserved geometry and a useful inbox summary', async () => {
+    const page = await openHarness({ width: 900, height: 700 });
+    await page.evaluate(() => window.historyHarness.mount('image'));
+    await page.waitForFunction(() => document.querySelector('.message-images img'));
+    const result = await page.evaluate(() => {
+        const image = document.querySelector<HTMLImageElement>('.message-images img')!;
+        return {
+            width: image.getAttribute('width'),
+            height: image.getAttribute('height'),
+            alt: image.alt,
+            summary: document.querySelector('.chat-row__snippet')?.textContent,
+        };
+    });
+    assert.deepEqual(result, {
+        width: '430',
+        height: '960',
+        alt: 'Shared image',
+        summary: 'Photo',
+    });
+    await page.close();
+});
+
 test('intermediate shell clamps the non-resizable sidebar without horizontal overflow', async () => {
     const page = await openHarness({ width: 800, height: 650 });
     await page.evaluate(() => window.historyHarness.mount('resize'));

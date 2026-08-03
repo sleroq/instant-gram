@@ -93,6 +93,12 @@ function optionalString(value: unknown, field: string): string | undefined {
     throw new Error(`Invalid Instagram auth probe ${field}`);
 }
 
+function userId(value: unknown): string | undefined {
+    return typeof value === 'string' && /^\d+$/.test(value) && value !== '0'
+        ? value
+        : undefined;
+}
+
 function parseAuthProbe(detail: string): AuthProbePayload {
     const data = JSON.parse(detail) as unknown;
     if (!isRecord(data))
@@ -109,7 +115,7 @@ function parseAuthProbe(detail: string): AuthProbePayload {
         lsd: optionalString(data.lsd, 'lsd'),
         jazoest: optionalString(data.jazoest, 'jazoest'),
         deviceId: optionalString(data.deviceId, 'deviceId'),
-        viewerId: optionalString(data.viewerId, 'viewerId'),
+        viewerId: userId(data.viewerId),
         at: data.at,
         requireAvailable: data.requireAvailable,
         sources: {
@@ -124,6 +130,7 @@ function parseAuthProbe(detail: string): AuthProbePayload {
 
 function readProbeToken(key: TokenKey): string | undefined {
     const value = pageAuthProbe[key];
+    if (key === 'viewerId') return userId(value);
     return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
@@ -333,12 +340,14 @@ function harvestTokensNow(): Tokens {
             'viewerId',
             roots
                 .map(root =>
-                    findString(root, [
-                        'viewer_fbid',
-                        'actorID',
-                        'USER_ID',
-                        'account_id',
-                    ]),
+                    userId(
+                        findString(root, [
+                            'viewer_fbid',
+                            'actorID',
+                            'USER_ID',
+                            'account_id',
+                        ]),
+                    ),
                 )
                 .find(Boolean),
             'script[data-sjs] JSON',
@@ -346,20 +355,27 @@ function harvestTokensNow(): Tokens {
         source(
             sources,
             'viewerId',
-            firstMatch(text, [
-                /"viewer_fbid"\s*:\s*"?(\d+)/,
-                /"actorID"\s*:\s*"?(\d+)/,
-                /"USER_ID"\s*:\s*"?(\d+)/,
-            ]),
+            userId(
+                firstMatch(text, [
+                    /"viewer_fbid"\s*:\s*"?(\d+)/,
+                    /"actorID"\s*:\s*"?(\d+)/,
+                    /"USER_ID"\s*:\s*"?(\d+)/,
+                ]),
+            ),
             'page text',
         ) ??
         source(
             sources,
             'viewerId',
-            cookie('ds_user_id'),
+            userId(cookie('ds_user_id')),
             'ds_user_id cookie',
         ) ??
-        source(sources, 'viewerId', fbDtsg?.split(':')[1], 'fb_dtsg segment');
+        source(
+            sources,
+            'viewerId',
+            userId(fbDtsg?.split(':')[1]),
+            'fb_dtsg segment',
+        );
     const csrfToken = source(
         sources,
         'csrfToken',
@@ -425,7 +441,8 @@ function moduleUserId(): string | undefined {
         if (!isRecord(value)) continue;
         for (const key of ['viewer_fbid', 'actorID', 'USER_ID', 'ACCOUNT_ID']) {
             const found = value[key];
-            if (typeof found === 'string' && found.length > 0) return found;
+            const id = userId(found);
+            if (id) return id;
         }
     }
     return undefined;
@@ -444,7 +461,7 @@ function emitProbe() {
     const fbDtsg = moduleToken('DTSGInitialData');
     const lsd = moduleToken('LSD') ?? moduleToken('LSDToken');
     const jazoest = deriveJazoest(fbDtsg);
-    const viewerId = moduleUserId() ?? fbDtsg?.split(':')[1];
+    const viewerId = moduleUserId() ?? userId(fbDtsg?.split(':')[1]);
     const probe: AuthProbePayload = {
         fbDtsg,
         lsd,

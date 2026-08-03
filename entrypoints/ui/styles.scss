@@ -638,6 +638,22 @@ a:focus-visible {
     }
 }
 
+.message-images {
+    display: grid;
+    width: min(320px, 58vw);
+    gap: 4px;
+
+    img {
+        display: block;
+        width: 100%;
+        height: auto;
+        max-height: 480px;
+        object-fit: cover;
+        background: var(--color-panel-elevated);
+        border-radius: 12px;
+    }
+}
+
 .message__unsupported {
     color: var(--color-text-muted);
     font-style: italic;

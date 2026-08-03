@@ -6,7 +6,7 @@ import type { UiRpc } from '../entrypoints/ui/rpc';
 import { createFrontendStore } from '../entrypoints/ui/store';
 import '../entrypoints/ui/styles.scss';
 
-type Scenario = 'continuous' | 'delayed' | 'resize' | 'selection';
+type Scenario = 'continuous' | 'delayed' | 'resize' | 'selection' | 'image';
 
 let activeStore: ReturnType<typeof createFrontendStore> | undefined;
 let resolveVisible: ((result: Result<ThreadMessages>) => void) | undefined;
@@ -27,6 +27,18 @@ const secondThread = {
     ...thread,
     key: 'second-thread',
     title: 'Second history',
+};
+
+const imageMessage: Message = {
+    kind: 'image',
+    id: 'image-message',
+    senderId: 'sender',
+    ts: 1_000,
+    images: [{
+        url: 'data:image/gif;base64,R0lGODlhAQABAAAAACw=',
+        width: 430,
+        height: 960,
+    }],
 };
 
 function messages(start: number, end: number, variable = false): Message[] {
@@ -73,12 +85,18 @@ async function mount(scenario: Scenario) {
         ? page(40, 60, 'c1', true)
         : scenario === 'delayed' || scenario === 'selection'
             ? page(40, 80, 'c1', true, true)
-            : page(0, 40, undefined, false, true);
+            : scenario === 'image'
+                ? { ok: true as const, value: { items: [imageMessage], hasNextPage: false, viewerId: 'viewer' } }
+                : page(0, 40, undefined, false, true);
     const rpc: UiRpc = {
         getInbox: async () => ({
             ok: true,
             value: {
-                items: scenario === 'selection' ? [thread, secondThread] : [thread],
+                items: scenario === 'selection'
+                    ? [thread, secondThread]
+                    : scenario === 'image'
+                        ? [{ ...thread, lastMessage: imageMessage }]
+                        : [thread],
                 hasNextPage: false,
             },
         }),

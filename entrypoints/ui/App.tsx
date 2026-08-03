@@ -599,6 +599,20 @@ function MessageContent({ message }: { message: Message }) {
                 </a>
             ) : <span className="message-card">{content}</span>;
         }
+        case 'image': return (
+            <span className="message-images" aria-label={message.images.length === 1 ? 'Shared image' : 'Shared images'}>
+                {message.images.map((image, index) => (
+                    <img
+                        key={`${image.url}:${index}`}
+                        src={image.url}
+                        alt={message.images.length === 1 ? 'Shared image' : `Shared image ${index + 1}`}
+                        width={image.width ?? 400}
+                        height={image.height ?? 400}
+                        loading="lazy"
+                    />
+                ))}
+            </span>
+        );
         case 'unsupported': return <span className="message__unsupported">Unsupported message ({message.contentType})</span>;
     }
 }
@@ -659,6 +673,7 @@ function messageSummary(message: Message) {
         case 'reaction_log': return message.fragment;
         case 'reel_share': return message.caption || `Reel from ${message.author}`;
         case 'inline_share': return message.title;
+        case 'image': return message.images.length === 1 ? 'Photo' : `${message.images.length} photos`;
         case 'unsupported': return `Unsupported message (${message.contentType})`;
     }
 }
