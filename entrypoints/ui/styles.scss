@@ -1192,8 +1192,10 @@ textarea:focus-visible {
 }
 
 .spinner {
+    display: block;
     width: 17px;
     height: 17px;
+    flex: none;
     border: 2px solid rgba(189, 145, 243, 0.22);
     border-top-color: var(--color-accent-bright);
     border-radius: 50%;
@@ -1243,5 +1245,11 @@ textarea:focus-visible {
         transition-duration: 0.01ms !important;
         animation-duration: 0.01ms !important;
         animation-iteration-count: 1 !important;
+    }
+
+    .spinner {
+        animation-name: spin !important;
+        animation-duration: 1.4s !important;
+        animation-iteration-count: infinite !important;
     }
 }
