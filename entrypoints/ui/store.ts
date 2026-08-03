@@ -635,7 +635,7 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
             }
             history.cursor = result.value.cursor;
             history.hasOlder = result.value.hasNextPage;
-            history.viewerId = result.value.viewerId || history.viewerId;
+            history.viewerId = history.viewerId || result.value.viewerId;
             history.failedOlderCursor = undefined;
             loaded = true;
             return true;

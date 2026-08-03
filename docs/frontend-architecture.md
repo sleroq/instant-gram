@@ -72,7 +72,10 @@ Instagram history pages contain up to 20 messages and parsing presents each
 page oldest-to-newest. The API exposes older pagination only. “Newer” movement
 means moving through local loaded IDs. Pagination may omit
 `ThreadMessages.thread`; merge messages by `message.id`, not response object
-identity. `viewerId` determines outgoing presentation.
+identity. `viewerId` determines outgoing presentation. Keep the viewer identity
+established by initial thread detail: older-page responses can lack the thread
+viewer and therefore carry the weaker authenticated-user fallback instead of
+the interoperable sender ID used by messages.
 
 ## Current state: Milestones 1–3
 

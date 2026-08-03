@@ -7,7 +7,7 @@ import { createFrontendStore } from '../entrypoints/ui/store';
 import '../entrypoints/ui/styles.scss';
 
 type Scenario = 'continuous' | 'delayed' | 'resize' | 'selection' | 'image' | 'mutations' |
-    'older-send' | 'thread-state' | 'identity-pm' | 'identity-group';
+    'older-send' | 'thread-state' | 'identity-pm' | 'identity-group' | 'outgoing-prepend';
 
 let activeStore: ReturnType<typeof createFrontendStore> | undefined;
 let resolveVisible: ((result: Result<ThreadMessages>) => void) | undefined;
@@ -89,6 +89,13 @@ function messages(start: number, end: number, variable = false): Message[] {
     });
 }
 
+function outgoingMessages(start: number, end: number): Message[] {
+    return messages(start, end, true).map(message => ({
+        ...message,
+        senderId: 'interop-viewer',
+    }));
+}
+
 function page(start: number, end: number, cursor?: string, hasNextPage = false, variable = false) {
     return {
         ok: true as const,
@@ -122,6 +129,16 @@ async function mount(scenario: Scenario) {
     const selectedThreadId = scenario === 'identity-pm' ? 'peer' : thread.key;
     const initial = scenario === 'continuous'
         ? page(40, 60, 'c1', true)
+        : scenario === 'outgoing-prepend'
+            ? {
+                ok: true as const,
+                value: {
+                    items: outgoingMessages(40, 80),
+                    cursor: 'c1',
+                    hasNextPage: true,
+                    viewerId: 'interop-viewer',
+                },
+            }
         : scenario === 'delayed' || scenario === 'selection'
             ? page(40, 80, 'c1', true, true)
             : scenario === 'image'
@@ -204,7 +221,9 @@ async function mount(scenario: Scenario) {
                     : page(0, 40));
             }
             if (!payload.cursor) return Promise.resolve(initial);
-            if (payload.cursor === 'c1' && (scenario === 'delayed' || scenario === 'selection')) {
+            if (payload.cursor === 'c1' && (
+                scenario === 'delayed' || scenario === 'selection' || scenario === 'outgoing-prepend'
+            )) {
                 return new Promise(resolve => { resolveVisible = resolve; });
             }
             if (payload.cursor === 'c1') return Promise.resolve(page(20, 40, 'c2', true));
@@ -232,7 +251,17 @@ window.historyHarness = {
     calls: () => calls,
     resolveVisible: () => {
         if (!resolveVisible) throw new Error('No delayed visible request');
-        resolveVisible(page(20, 40, 'c2', true, true));
+        resolveVisible(activeStore?.state.histories.thread.viewerId === 'interop-viewer'
+            ? {
+                ok: true,
+                value: {
+                    items: messages(20, 40, true),
+                    cursor: 'c2',
+                    hasNextPage: true,
+                    viewerId: 'auth-viewer',
+                },
+            }
+            : page(20, 40, 'c2', true, true));
         resolveVisible = undefined;
     },
     resolveSend: () => {

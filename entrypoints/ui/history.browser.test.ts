@@ -157,6 +157,31 @@ test('same-sender history prepend preserves the message run DOM wrapper', async 
     await page.close();
 });
 
+test('older pagination preserves established viewer identity and outgoing row DOM', async () => {
+    const page = await openHarness({ width: 900, height: 600 });
+    await page.evaluate(() => window.historyHarness.mount('outgoing-prepend'));
+    await page.evaluate(() => {
+        document.querySelector<HTMLElement>('.messages')!.scrollTop = 260;
+    });
+    await page.waitForFunction(() =>
+        window.historyHarness.calls().includes('c1') && document.querySelector('[data-message-id="m40"]'),
+    );
+    const row = await page.locator('[data-message-id="m40"]').elementHandle();
+    const group = await page.locator('.message-group[data-sender-id="interop-viewer"]').elementHandle();
+    assert.ok(row && group);
+    assert.equal(await row.evaluate(element => element.querySelector('.message')?.classList.contains('message--outgoing')), true);
+
+    await page.evaluate(() => window.historyHarness.resolveVisible());
+    await page.waitForFunction(() => document.querySelector('[data-message-id="m20"]'));
+
+    assert.equal(await row.evaluate(element => element === document.querySelector('[data-message-id="m40"]')), true);
+    assert.equal(await group.evaluate(element =>
+        element === document.querySelector('.message-group[data-sender-id="interop-viewer"]'),
+    ), true);
+    assert.equal(await row.evaluate(element => element.querySelector('.message')?.classList.contains('message--outgoing')), true);
+    await page.close();
+});
+
 test('group sender names lead runs and incoming avatars stick to the visible group bottom', async () => {
     const page = await openHarness({ width: 900, height: 500 });
     await page.evaluate(() => window.historyHarness.mount('identity-group'));
