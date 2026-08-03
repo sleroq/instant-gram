@@ -112,6 +112,90 @@ test('image messages render with reserved geometry and a useful inbox summary', 
     await page.close();
 });
 
+test('private chats reserve sender identity only for a known non-peer participant', async () => {
+    const page = await openHarness({ width: 900, height: 600 });
+    await page.evaluate(() => window.historyHarness.mount('identity-pm'));
+    await page.waitForFunction(() => document.querySelector('[data-message-id="ai-2"]'));
+    const identity = await page.evaluate(() => ({
+        avatarSenders: [...document.querySelectorAll<HTMLElement>('.message-group--identity')]
+            .map(group => group.dataset.senderId),
+        senderNames: [...document.querySelectorAll('.message__sender-name')]
+            .map(name => name.textContent),
+        peerHasAvatar: Boolean(document.querySelector('.message-group[data-sender-id="peer"] .message-group__avatar')),
+        viewerHasAvatar: Boolean(document.querySelector('.message-group[data-sender-id="viewer"] .message-group__avatar')),
+        unknownHasAvatar: Boolean(document.querySelector('.message-group[data-sender-id="unknown"] .message-group__avatar')),
+    }));
+    assert.deepEqual(identity, {
+        avatarSenders: ['ai'],
+        senderNames: [],
+        peerHasAvatar: false,
+        viewerHasAvatar: false,
+        unknownHasAvatar: false,
+    });
+    await page.close();
+});
+
+test('same-sender history prepend preserves the message run DOM wrapper', async () => {
+    const page = await openHarness({ width: 900, height: 600 });
+    await page.evaluate(() => window.historyHarness.mount('delayed'));
+    await page.evaluate(() => {
+        document.querySelector<HTMLElement>('.messages')!.scrollTop = 260;
+    });
+    await page.waitForFunction(() =>
+        window.historyHarness.calls().includes('c1') && document.querySelector('[data-message-id="m40"]'),
+    );
+    await page.evaluate(() => {
+        const group = document.querySelector<HTMLElement>('.message-group')!;
+        (group as HTMLElement & { prependIdentity?: object }).prependIdentity = {};
+    });
+    await page.evaluate(() => window.historyHarness.resolveVisible());
+    await page.waitForFunction(() => document.querySelector('[data-message-id="m20"]'));
+    assert.equal(await page.evaluate(() => Boolean(
+        (document.querySelector('.message-group') as HTMLElement & { prependIdentity?: object })
+            .prependIdentity,
+    )), true);
+    await page.close();
+});
+
+test('group sender names lead runs and incoming avatars stick to the visible group bottom', async () => {
+    const page = await openHarness({ width: 900, height: 500 });
+    await page.evaluate(() => window.historyHarness.mount('identity-group'));
+    await page.waitForFunction(() => document.querySelector('[data-message-id="bob-group"]'));
+    const result = await page.evaluate(async () => {
+        const scroller = document.querySelector<HTMLElement>('.messages')!;
+        const aliceGroup = document.querySelector<HTMLElement>('.message-group[data-sender-id="peer"]')!;
+        scroller.scrollTop = aliceGroup.offsetTop + 120;
+        scroller.dispatchEvent(new Event('scroll'));
+        await new Promise(resolve => requestAnimationFrame(resolve));
+        const avatar = aliceGroup.querySelector<HTMLElement>('.message-group__avatar')!;
+        const firstName = document.querySelector('[data-message-id="alice-0"] .message__sender-name');
+        return {
+            identitySenders: [...document.querySelectorAll<HTMLElement>('.message-group--identity')]
+                .map(group => group.dataset.senderId),
+            names: [...document.querySelectorAll('.message__sender-name')].map(name => name.textContent),
+            firstName: firstName?.textContent,
+            laterAliceNames: document.querySelectorAll(
+                '[data-message-id^="alice-"]:not([data-message-id="alice-0"]) .message__sender-name',
+            ).length,
+            viewerIdentity: Boolean(document.querySelector('.message-group[data-sender-id="viewer"].message-group--identity')),
+            avatarBottom: avatar.getBoundingClientRect().bottom,
+            viewportBottom: scroller.getBoundingClientRect().bottom,
+            groupBottom: aliceGroup.getBoundingClientRect().bottom,
+        };
+    });
+    assert.deepEqual(result.identitySenders, ['peer', 'bob']);
+    assert.deepEqual(result.names, ['Alice', 'Bob']);
+    assert.equal(result.firstName, 'Alice');
+    assert.equal(result.laterAliceNames, 0);
+    assert.equal(result.viewerIdentity, false);
+    assert.ok(result.groupBottom > result.viewportBottom, 'test did not place the group across the viewport bottom');
+    assert.ok(
+        Math.abs(result.avatarBottom - (result.viewportBottom - 4)) < 1,
+        `avatar bottom ${result.avatarBottom}, viewport bottom ${result.viewportBottom}`,
+    );
+    await page.close();
+});
+
 test('intermediate shell clamps the non-resizable sidebar without horizontal overflow', async () => {
     const page = await openHarness({ width: 800, height: 650 });
     await page.evaluate(() => window.historyHarness.mount('resize'));
@@ -173,7 +257,25 @@ test('compact shell shows one pane and the rounded back control returns to inbox
         conversation: getComputedStyle(document.querySelector('.conversation')!).display,
     })), { selected: undefined, sidebar: 'flex', conversation: 'none' });
 
-    await page.getByRole('button', { name: 'History harness' }).click();
+    const chat = page.getByRole('button', { name: 'History harness', exact: true });
+    const chatBox = await chat.boundingBox();
+    assert.ok(chatBox);
+    await chat.dispatchEvent('pointerdown', {
+        pointerType: 'touch', pointerId: 4, isPrimary: true,
+        clientX: chatBox!.x + 12, clientY: chatBox!.y + 12,
+    });
+    await page.waitForTimeout(550);
+    await chat.dispatchEvent('pointerup', {
+        pointerType: 'touch', pointerId: 4, isPrimary: true,
+        clientX: chatBox!.x + 12, clientY: chatBox!.y + 12,
+    });
+    const chatMenu = page.getByRole('menu', { name: 'Actions for History harness' });
+    await chatMenu.waitFor();
+    await chat.dispatchEvent('click');
+    assert.equal(await page.evaluate(() => window.historyHarness.historyState('thread').selected), undefined);
+    await page.keyboard.press('Escape');
+    await chatMenu.waitFor({ state: 'detached' });
+    await chat.click();
     await page.waitForFunction(() => getComputedStyle(document.querySelector('.conversation')!).display === 'flex');
     assert.deepEqual(
         await page.evaluate(() => window.historyHarness.historyState('thread').viewportIds),
@@ -364,23 +466,61 @@ test('reply selection, failed-send recovery, and bounded reaction picker are acc
     const page = await openHarness({ width: 900, height: 700 });
     await page.evaluate(() => window.historyHarness.mount('mutations'));
 
-    await page.getByRole('button', { name: 'Reply' }).first().click();
+    assert.equal(await page.getByRole('button', { name: 'Message actions' }).count(), 0);
+    assert.equal(await page.locator('.chat-row__menu-trigger').count(), 0);
+    assert.equal(await page.getByText('•••', { exact: true }).count(), 0);
+    const reactionAffordance = page.locator('[data-message-id="m0"] .message__reaction-trigger');
+    assert.equal(await reactionAffordance.evaluate(element => getComputedStyle(element).opacity), '0');
+    await page.locator('[data-message-id="m0"] .message__bubble').hover();
+    await page.waitForFunction(() => getComputedStyle(
+        document.querySelector('[data-message-id="m0"] .message__reaction-trigger')!,
+    ).opacity === '1');
+    const incomingAlignment = await page.locator('[data-message-id="m0"]').evaluate(element => {
+        const bubble = element.querySelector('.message__bubble')!.getBoundingClientRect();
+        const trigger = element.querySelector('.message__reaction-trigger')!.getBoundingClientRect();
+        return { bubbleRight: bubble.right, triggerLeft: trigger.left };
+    });
+    assert.ok(incomingAlignment.triggerLeft >= incomingAlignment.bubbleRight);
+    await reactionAffordance.click();
+    await page.getByRole('menu', { name: 'Choose a reaction' }).waitFor();
+    await page.keyboard.press('Escape');
+    await page.locator('[data-message-id="m0"]').focus();
+    assert.equal(await reactionAffordance.evaluate(element => getComputedStyle(element).opacity), '1');
+
+    await page.locator('[data-message-id="m0"]').click({ button: 'right' });
+    const replyAnchorTop = await page.locator('[data-message-id="m0"]').evaluate(element => element.getBoundingClientRect().top);
+    await page.getByRole('menu', { name: 'Message actions' }).getByRole('menuitem', { name: 'Reply' }).click();
     await page.getByText('Replying to').waitFor();
     assert.ok(await page.locator('.composer__reply .message__reply').textContent());
     assert.equal((await page.evaluate(() => window.historyHarness.historyState('thread'))).replyTargetId, 'm0');
+    assert.equal(await page.getByRole('textbox', { name: 'Message' }).evaluate(element => element === document.activeElement), true);
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+    assert.ok(Math.abs(await page.locator('[data-message-id="m0"]').evaluate(
+        element => element.getBoundingClientRect().top,
+    ) - replyAnchorTop) < 1);
     await page.getByRole('button', { name: 'Cancel reply' }).click();
     assert.equal((await page.evaluate(() => window.historyHarness.historyState('thread'))).replyTargetId, undefined);
 
-    await page.getByRole('button', { name: 'React' }).first().click();
-    const picker = page.getByRole('group', { name: 'Choose a reaction' });
+    await page.locator('[data-message-id="m0"]').click({ button: 'right' });
+    await page.getByRole('menu', { name: 'Message actions' }).getByRole('menuitem', { name: 'Add reaction' }).click();
+    const picker = page.getByRole('menu', { name: 'Choose a reaction' });
     await picker.waitFor();
-    assert.equal(await picker.getByRole('button').count(), 6);
-    await picker.getByRole('button', { name: 'React with 😂' }).click();
+    assert.equal(await picker.getByRole('menuitemradio').count(), 6);
+    await picker.getByRole('menuitemradio', { name: 'React with ❤' }).press('ArrowRight');
+    await page.getByRole('menuitemradio', { name: 'React with 😂' }).press('Enter');
     await page.locator('.reaction-chip--viewer').first().waitFor();
     assert.match(
         await page.locator('.reaction-chip--viewer').first().getAttribute('aria-label') ?? '',
         /including yours/,
     );
+    await page.locator('[data-message-id="m0"]').click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Change reaction 😂' }).click();
+    const currentReaction = page.getByRole('menuitemradio', { name: '😂, current reaction' });
+    await currentReaction.waitFor();
+    assert.equal(await currentReaction.getAttribute('aria-checked'), 'true');
+    assert.equal(await currentReaction.isDisabled(), true);
+    await page.getByRole('menuitemradio', { name: 'React with 👍' }).click();
+    await page.waitForFunction(() => document.querySelector('.reaction-chip--viewer')?.textContent?.includes('👍'));
 
     await page.evaluate(() => {
         const scroller = document.querySelector<HTMLElement>('.messages')!;
@@ -395,9 +535,250 @@ test('reply selection, failed-send recovery, and bounded reaction picker are acc
     await failure.waitFor();
     assert.equal(await failure.getByRole('button', { name: 'Retry' }).count(), 1);
     assert.equal(await failure.getByRole('button', { name: 'Remove' }).count(), 1);
-    await failure.getByRole('button', { name: 'Retry' }).click();
+    await page.locator('[data-message-id^="local:"]').last().click({ button: 'right' });
+    const failedMenu = page.getByRole('menu', { name: 'Message actions' });
+    await failedMenu.waitFor();
+    assert.equal(await failedMenu.getByRole('menuitem', { name: 'Retry send' }).count(), 1);
+    assert.equal(await failedMenu.getByRole('menuitem', { name: 'Remove failed message' }).count(), 1);
+    await failedMenu.getByRole('menuitem', { name: 'Retry send' }).click();
     await page.locator('[data-message-id="server-1"]').waitFor();
     assert.equal(await failure.count(), 0);
+    await page.close();
+});
+
+test('context menus dismiss, restore focus, stay in the viewport, and close on thread switch', async () => {
+    const page = await openHarness({ width: 760, height: 500 });
+    await page.evaluate(() => window.historyHarness.mount('thread-state'));
+
+    const firstMessage = page.locator('[data-message-id="m80"]');
+    await firstMessage.click({ button: 'right', position: { x: 2, y: 2 } });
+    const menu = page.getByRole('menu', { name: 'Message actions' });
+    await menu.waitFor();
+    const rect = await menu.boundingBox();
+    assert.ok(rect && rect.x >= 0 && rect.y >= 0 && rect.x + rect.width <= 760 && rect.y + rect.height <= 500);
+    await page.keyboard.press('Escape');
+    await menu.waitFor({ state: 'detached' });
+    await page.waitForFunction(() => (document.activeElement as HTMLElement)?.dataset.messageId === 'm80');
+
+    await firstMessage.focus();
+    await firstMessage.press('Shift+F10');
+    await menu.waitFor();
+    await page.keyboard.press('Escape');
+    await menu.waitFor({ state: 'detached' });
+
+    await firstMessage.click({ button: 'right' });
+    await page.locator('.conversation__header').click();
+    await menu.waitFor({ state: 'detached' });
+
+    await firstMessage.click({ button: 'right' });
+    await page.evaluate(() => window.historyHarness.select('second-thread'));
+    await page.waitForFunction(() => document.querySelector('.conversation__header h2')?.textContent === 'Second history');
+    assert.equal(await menu.count(), 0);
+
+    await page.evaluate(() => window.historyHarness.showInbox());
+    const secondChat = page.getByRole('button', { name: 'Second history', exact: true });
+    assert.equal(await page.getByRole('button', { name: 'Actions for Second history' }).count(), 0);
+    await secondChat.click({ button: 'right' });
+    const chatMenu = page.getByRole('menu', { name: 'Actions for Second history' });
+    await chatMenu.waitFor();
+    await page.keyboard.press('Escape');
+    await chatMenu.waitFor({ state: 'detached' });
+    await secondChat.focus();
+    await secondChat.press('Shift+F10');
+    await chatMenu.waitFor();
+    assert.equal(await chatMenu.getByRole('menuitem').count(), 1);
+    assert.equal(await chatMenu.getByRole('menuitem').isDisabled(), false);
+    await chatMenu.getByRole('menuitem', { name: 'Open conversation' }).click();
+    await page.waitForFunction(() => document.querySelector('.conversation__header h2')?.textContent === 'Second history');
+    await page.close();
+});
+
+test('selected chat leaves native context menu semantics untouched', async () => {
+    const page = await openHarness();
+    await page.evaluate(() => window.historyHarness.mount('resize'));
+    const selected = page.getByRole('button', { name: 'History harness', exact: true });
+    const result = await selected.evaluate(element => ({
+        pointerAllowed: element.dispatchEvent(new MouseEvent('contextmenu', {
+            bubbles: true,
+            cancelable: true,
+            clientX: 20,
+            clientY: 20,
+        })),
+        keyboardAllowed: element.dispatchEvent(new KeyboardEvent('keydown', {
+            key: 'F10',
+            shiftKey: true,
+            bubbles: true,
+            cancelable: true,
+        })),
+    }));
+    assert.deepEqual(result, { pointerAllowed: true, keyboardAllowed: true });
+    assert.equal(await page.getByRole('menu', { name: 'Actions for History harness' }).count(), 0);
+    await page.close();
+});
+
+test('floating surfaces clamp and reposition within visual viewport offsets and dimensions', async () => {
+    const page = await openHarness({ width: 900, height: 600 });
+    await page.evaluate(() => {
+        const viewport = new EventTarget() as EventTarget & {
+            width: number;
+            height: number;
+            offsetLeft: number;
+            offsetTop: number;
+        };
+        viewport.width = 320;
+        viewport.height = 240;
+        viewport.offsetLeft = 110;
+        viewport.offsetTop = 70;
+        Object.defineProperty(window, 'visualViewport', { configurable: true, value: viewport });
+        window.historyHarness.mount('thread-state');
+    });
+    const message = page.locator('[data-message-id="m80"]');
+    await message.click({ button: 'right', position: { x: 2, y: 2 } });
+    const menu = page.getByRole('menu', { name: 'Message actions' });
+    await menu.waitFor();
+    await page.waitForTimeout(250);
+    const first = await menu.boundingBox();
+    assert.ok(
+        first && first.x >= 117.5 && first.y >= 77.5 && first.x + first.width <= 422.5 && first.y + first.height <= 302.5,
+        `initial visual viewport placement was ${JSON.stringify(first)}`,
+    );
+
+    await page.evaluate(() => {
+        const viewport = window.visualViewport! as VisualViewport & {
+            width: number;
+            height: number;
+            offsetLeft: number;
+            offsetTop: number;
+        };
+        viewport.width = 270;
+        viewport.height = 180;
+        viewport.offsetLeft = 180;
+        viewport.offsetTop = 120;
+        viewport.dispatchEvent(new Event('resize'));
+        viewport.dispatchEvent(new Event('scroll'));
+    });
+    await page.waitForTimeout(50);
+    const second = await menu.boundingBox();
+    assert.ok(second && second.x >= 187.5 && second.y >= 127.5 && second.x + second.width <= 442.5 && second.y + second.height <= 292.5);
+    await page.close();
+});
+
+test('real browser touch movement or cancellation before the hold threshold cancels long-press', async () => {
+    const page = await openTouchHarness({ width: 390, height: 700 });
+    await page.evaluate(() => window.historyHarness.mount('resize'));
+    await page.waitForFunction(() => document.querySelector('.chat-row--selected'));
+    await page.evaluate(() => window.historyHarness.showInbox());
+    const chat = page.getByRole('button', { name: 'History harness', exact: true });
+    const box = await chat.boundingBox();
+    assert.ok(box);
+    const point = { x: box!.x + 20, y: box!.y + 20 };
+    const cdp = await page.context().newCDPSession(page);
+
+    await cdp.send('Input.dispatchTouchEvent', {
+        type: 'touchStart',
+        touchPoints: [{ ...point, id: 1 }],
+    });
+    await cdp.send('Input.dispatchTouchEvent', {
+        type: 'touchMove',
+        touchPoints: [{ x: point.x, y: point.y + 35, id: 1 }],
+    });
+    await page.waitForTimeout(550);
+    assert.equal(await page.getByRole('menu', { name: 'Actions for History harness' }).count(), 0);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+
+    await cdp.send('Input.dispatchTouchEvent', {
+        type: 'touchStart',
+        touchPoints: [{ ...point, id: 2 }],
+    });
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchCancel', touchPoints: [] });
+    await page.waitForTimeout(550);
+    assert.equal(await page.getByRole('menu', { name: 'Actions for History harness' }).count(), 0);
+
+    await page.close();
+});
+
+test('real held touch release over the opened action cannot activate it', async () => {
+    const page = await openTouchHarness({ width: 390, height: 700 });
+    await page.evaluate(() => window.historyHarness.mount('resize'));
+    await page.waitForFunction(() => document.querySelector('.chat-row--selected'));
+    await page.evaluate(() => window.historyHarness.showInbox());
+    await page.evaluate(() => {
+        type CompatibilityEvent = { type: string; target: string; prevented: boolean };
+        const state = window as typeof window & { compatibilityEvents?: CompatibilityEvent[] };
+        state.compatibilityEvents = [];
+        for (const type of ['click', 'contextmenu']) {
+            document.addEventListener(type, event => {
+                const record = {
+                    type,
+                    target: (event.target as Element | null)?.textContent?.trim() ?? '',
+                    prevented: false,
+                };
+                state.compatibilityEvents!.push(record);
+                setTimeout(() => { record.prevented = event.defaultPrevented; });
+            }, true);
+        }
+    });
+    const chat = page.getByRole('button', { name: 'History harness', exact: true });
+    const box = await chat.boundingBox();
+    assert.ok(box);
+    const point = { x: box!.x + 20, y: box!.y + 20 };
+    const cdp = await page.context().newCDPSession(page);
+
+    await cdp.send('Input.dispatchTouchEvent', {
+        type: 'touchStart',
+        touchPoints: [{ ...point, id: 2 }],
+    });
+    const menu = page.getByRole('menu', { name: 'Actions for History harness' });
+    await menu.waitFor({ timeout: 1_000 });
+    const item = menu.getByRole('menuitem', { name: 'Open conversation' });
+    const menuBox = await item.boundingBox();
+    assert.ok(menuBox);
+    const menuPoint = {
+        x: menuBox!.x + 1,
+        y: menuBox!.y + 1,
+    };
+    await cdp.send('Input.dispatchTouchEvent', {
+        type: 'touchMove',
+        touchPoints: [{ ...menuPoint, id: 2 }],
+    });
+    assert.equal(await page.evaluate(() => window.historyHarness.historyState('thread').selected), undefined);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await page.waitForTimeout(100);
+    assert.equal(await page.evaluate(() => window.historyHarness.historyState('thread').selected), undefined);
+    const compatibilityEvents = await page.evaluate(() =>
+        (window as typeof window & {
+            compatibilityEvents?: Array<{ type: string; target: string; prevented: boolean }>;
+        }).compatibilityEvents ?? []);
+    assert.ok(compatibilityEvents.length > 0, 'Chromium generated no compatibility event for the held release');
+    assert.equal(
+        compatibilityEvents.every(event => event.prevented),
+        true,
+        JSON.stringify(compatibilityEvents),
+    );
+    assert.equal(compatibilityEvents.some(event => event.target.includes('Open conversation')), true);
+    await item.click();
+    await page.waitForFunction(() => window.historyHarness.historyState('thread').selected === 'thread');
+    await page.close();
+});
+
+test('actionable message names are descriptive and stable reply props preserve memoized rows', async () => {
+    const page = await openHarness();
+    await page.evaluate(() => window.historyHarness.mount('mutations'));
+    const row = page.locator('[data-message-id="m0"]');
+    await row.waitFor();
+    assert.match(await row.getAttribute('aria-label') ?? '', /Participant: message 0\. Delivered/);
+
+    await page.evaluate(() => {
+        const row = document.querySelector('[data-message-id="m0"]')!;
+        const observer = new MutationObserver(records => {
+            (window as typeof window & { messageRowMutationCount?: number }).messageRowMutationCount = records.length;
+        });
+        observer.observe(row, { attributes: true, childList: true, characterData: true, subtree: true });
+    });
+    await page.getByRole('textbox', { name: 'Message' }).fill('memo check');
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    assert.equal(await page.evaluate(() =>
+        (window as typeof window & { messageRowMutationCount?: number }).messageRowMutationCount ?? 0), 0);
     await page.close();
 });
 
@@ -614,8 +995,34 @@ test('controlled drafts and composer actions remain per-thread and operable at n
     await send.click();
     await page.locator('[data-message-id="server-1"]').waitFor();
 
-    await page.getByRole('button', { name: 'React' }).last().click();
-    const picker = page.getByRole('group', { name: 'Choose a reaction' });
+    assert.equal(await page.getByRole('button', { name: 'Message actions' }).count(), 0);
+    assert.equal(await page.getByText('•••', { exact: true }).count(), 0);
+    const newestMessage = page.locator('[data-message-id="server-1"]');
+    const box = await newestMessage.boundingBox();
+    assert.ok(box);
+    const outgoingAlignment = await newestMessage.evaluate(element => {
+        const bubble = element.querySelector('.message__bubble')!.getBoundingClientRect();
+        const trigger = element.querySelector('.message__reaction-trigger')!.getBoundingClientRect();
+        return { bubbleLeft: bubble.left, triggerRight: trigger.right };
+    });
+    assert.ok(outgoingAlignment.triggerRight <= outgoingAlignment.bubbleLeft);
+    await newestMessage.dispatchEvent('pointerdown', {
+        pointerType: 'touch', pointerId: 6, isPrimary: true, clientX: box!.x + 12, clientY: box!.y + 12,
+    });
+    await newestMessage.dispatchEvent('pointermove', {
+        pointerType: 'touch', pointerId: 6, isPrimary: true, clientX: box!.x + 30, clientY: box!.y + 30,
+    });
+    await page.waitForTimeout(550);
+    assert.equal(await page.getByRole('menu', { name: 'Message actions' }).count(), 0);
+    await newestMessage.dispatchEvent('pointerdown', {
+        pointerType: 'touch', pointerId: 7, isPrimary: true, clientX: box!.x + 12, clientY: box!.y + 12,
+    });
+    await page.waitForTimeout(550);
+    await newestMessage.dispatchEvent('pointerup', {
+        pointerType: 'touch', pointerId: 7, isPrimary: true, clientX: box!.x + 12, clientY: box!.y + 12,
+    });
+    await page.getByRole('menu', { name: 'Message actions' }).getByRole('menuitem', { name: 'Add reaction' }).click();
+    const picker = page.getByRole('menu', { name: 'Choose a reaction' });
     await picker.waitFor();
     const pickerFits = await picker.evaluate(element => {
         const buttons = [...element.querySelectorAll('button')];
@@ -625,13 +1032,20 @@ test('controlled drafts and composer actions remain per-thread and operable at n
         });
     });
     assert.equal(pickerFits, true);
-    await picker.getByRole('button', { name: 'React with 👍' }).click();
+    await picker.getByRole('menuitemradio', { name: 'React with 👍' }).click();
     await page.locator('.reaction-chip--viewer').last().waitFor();
     await page.close();
 });
 
 async function openHarness(viewport = { width: 900, height: 500 }): Promise<Page> {
     const page = await browser.newPage({ viewport });
+    await page.goto(`${baseUrl}tests/history-harness.html`);
+    await page.waitForFunction(() => Boolean(window.historyHarness));
+    return page;
+}
+
+async function openTouchHarness(viewport: { width: number; height: number }): Promise<Page> {
+    const page = await browser.newPage({ viewport, hasTouch: true });
     await page.goto(`${baseUrl}tests/history-harness.html`);
     await page.waitForFunction(() => Boolean(window.historyHarness));
     return page;

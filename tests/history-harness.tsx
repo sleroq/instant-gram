@@ -7,7 +7,7 @@ import { createFrontendStore } from '../entrypoints/ui/store';
 import '../entrypoints/ui/styles.scss';
 
 type Scenario = 'continuous' | 'delayed' | 'resize' | 'selection' | 'image' | 'mutations' |
-    'older-send' | 'thread-state';
+    'older-send' | 'thread-state' | 'identity-pm' | 'identity-group';
 
 let activeStore: ReturnType<typeof createFrontendStore> | undefined;
 let resolveVisible: ((result: Result<ThreadMessages>) => void) | undefined;
@@ -45,6 +45,36 @@ const imageMessage: Message = {
         height: 960,
     }],
 };
+
+const identityUsers = [
+    { id: 'bob', username: 'bob', fullName: 'Bob', picUrl: null },
+    { id: 'ai', username: 'metaai', fullName: 'Meta AI', picUrl: 'data:image/gif;base64,R0lGODlhAQABAAAAACw=' },
+    { id: 'peer', username: 'alice', fullName: 'Alice', picUrl: 'data:image/gif;base64,R0lGODlhAQABAAAAACw=' },
+];
+
+function identityMessages(scenario: 'identity-pm' | 'identity-group'): Message[] {
+    if (scenario === 'identity-pm') {
+        return [
+            { kind: 'text', id: 'peer-1', senderId: 'peer', ts: 1_000, text: 'ordinary peer' },
+            { kind: 'text', id: 'peer-2', senderId: 'peer', ts: 2_000, text: 'still ordinary' },
+            { kind: 'text', id: 'ai-1', senderId: 'ai', ts: 3_000, text: 'AI answer one' },
+            { kind: 'text', id: 'ai-2', senderId: 'ai', ts: 4_000, text: 'AI answer two' },
+            { kind: 'text', id: 'unknown-1', senderId: 'unknown', ts: 4_500, text: 'unknown sender' },
+            { kind: 'text', id: 'viewer-1', senderId: 'viewer', ts: 5_000, text: 'thanks' },
+        ];
+    }
+    return [
+        ...Array.from({ length: 16 }, (_, index): Message => ({
+            kind: 'text',
+            id: `alice-${index}`,
+            senderId: 'peer',
+            ts: (index + 1) * 1_000,
+            text: `Alice message ${index} ${'long group content '.repeat(3)}`,
+        })),
+        { kind: 'text', id: 'viewer-group', senderId: 'viewer', ts: 17_000, text: 'current user' },
+        { kind: 'text', id: 'bob-group', senderId: 'bob', ts: 18_000, text: 'Bob message' },
+    ];
+}
 
 function messages(start: number, end: number, variable = false): Message[] {
     return Array.from({ length: end - start }, (_, index) => {
@@ -89,12 +119,17 @@ async function mount(scenario: Scenario) {
         `;
         document.head.append(style);
     }
+    const selectedThreadId = scenario === 'identity-pm' ? 'peer' : thread.key;
     const initial = scenario === 'continuous'
         ? page(40, 60, 'c1', true)
         : scenario === 'delayed' || scenario === 'selection'
             ? page(40, 80, 'c1', true, true)
             : scenario === 'image'
                 ? { ok: true as const, value: { items: [imageMessage], hasNextPage: false, viewerId: 'viewer' } }
+                : scenario === 'identity-pm' || scenario === 'identity-group'
+                    ? { ok: true as const, value: {
+                        items: identityMessages(scenario), hasNextPage: false, viewerId: 'viewer',
+                    } }
                 : scenario === 'older-send' || scenario === 'thread-state'
                     ? page(0, 120, undefined, false, true)
                     : page(0, 40, undefined, false, true);
@@ -106,6 +141,14 @@ async function mount(scenario: Scenario) {
                     ? [thread, secondThread]
                     : scenario === 'image'
                         ? [{ ...thread, lastMessage: imageMessage }]
+                        : scenario === 'identity-pm' || scenario === 'identity-group'
+                            ? [{
+                                ...thread,
+                                key: selectedThreadId,
+                                title: scenario === 'identity-group' ? 'Identity group' : 'Custom support chat',
+                                isGroup: scenario === 'identity-group',
+                                users: identityUsers,
+                            }]
                         : [thread],
                 hasNextPage: false,
             },
@@ -171,8 +214,9 @@ async function mount(scenario: Scenario) {
     activeStore = createFrontendStore(rpc);
     TeactDOM.render(createElement(App, { store: activeStore }) as never, document.querySelector('#app')!);
     await waitFor(() => activeStore?.state.inbox.status === 'ready');
-    activeStore.selectThread('thread');
-    await waitFor(() => activeStore?.state.histories.thread?.status === 'ready');
+    activeStore.selectThread(selectedThreadId);
+    await waitFor(() => activeStore?.state.histories[selectedThreadId]?.status === 'ready');
+    await waitFor(() => Boolean(document.querySelector('[data-message-id]')));
 }
 
 async function waitFor(predicate: () => boolean) {

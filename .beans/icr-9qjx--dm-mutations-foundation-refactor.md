@@ -177,3 +177,50 @@ environment-only check remains unchecked above and is recorded rather than
 claimed. The milestone is completed based on the passing automated protocol,
 store, production-browser, type, and build acceptance suite; a future release
 operator may still perform the listed live smoke pass.
+
+## Interaction polish follow-up (2026-08-03)
+
+- [x] Replace always-expanded message actions with collision-safe top-layer
+  context menus available from right click, Context Menu/Shift+F10 keyboard
+  semantics, and movement-cancelled touch long-press. Chat and message rows have
+  no visible ellipsis/menu trigger at any width.
+- [x] Add a truthful chat-row menu. The only currently routed safe action is
+  open/select; mute, pin, delete, and read-state actions are intentionally not
+  implied by the UI.
+- [x] Make reaction choice an anchored keyboard-navigable menu, identify the
+  viewer's current reaction, and keep pending selection disabled through the
+  existing per-message single flight.
+- [x] Show the reaction affordance only on message hover/focus, on the outer
+  bubble side opposite for incoming versus outgoing messages, without changing
+  message geometry or scroll anchors.
+- [x] Preserve the visible message anchor while selecting reply, focus the
+  composer without scroll, and retain existing per-thread draft/reply ownership.
+- [x] Cover Escape/outside/action/thread-switch dismissal, focus return,
+  viewport clamping, reaction change/current indication, reply anchor behavior,
+  chat keyboard invocation, and narrow placement in the production browser
+  harness.
+- [x] Exercise long-press through Chromium's browser input dispatcher: movement
+  before the threshold and pointer cancellation prevent opening; after a real
+  held touch opens the menu, the same active touch moves onto its action and
+  releases there. Chromium's generated click is recorded, prevented, and cannot
+  activate that action; a later ordinary click proves suppression cleanup.
+  Visual-viewport size/offset repositioning is also covered. Selected chat rows
+  retain the native context menu rather than exposing a disabled custom action.
+- [x] Give focusable message rows sender/content/delivery accessible names and
+  keep the reply callback identity stable so memoized rows skip draft-only renders.
+- [ ] Reaction removal remains unavailable. The current narrow RPC/catalog only
+  proves `reaction_status: 'created'`; no delete route or captured delete
+  variables were added or guessed.
+- [ ] The real-Instagram manual extension pass remains unperformed in this
+  environment.
+
+This follow-up independently implements the behavior in ICR's existing visual
+language. No Telegram application source, styles, markup, icons, or assets were
+copied.
+
+Clean-room reference conclusion: the pinned Telegram Web A message and context
+menu paths use contextual desktop quick reaction, opposite outer-corner
+alignment for own/other messages, coordinate-anchored menus, and a touch hold
+that is cancelled by movement and suppresses click-through. ICR uses only those
+behavioral conclusions; its 500ms/10px gesture, focusable row semantics,
+top-layer helper, markup, visuals, and capability set are independent.

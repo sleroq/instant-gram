@@ -1,12 +1,20 @@
-import type { ChangeEvent, FormEvent, KeyboardEvent, UIEvent } from 'react';
+import type {
+    ChangeEvent,
+    FormEvent,
+    KeyboardEvent,
+    MouseEvent as ReactMouseEvent,
+    PointerEvent as ReactPointerEvent,
+    UIEvent,
+} from 'react';
 import {
     memo,
+    useCallback,
     useEffect,
     useLayoutEffect,
     useRef,
     useState,
 } from '../../vendor/teact/src/teact/teact';
-import type { Message, Thread } from '../../lib/domain';
+import type { Message, Thread, User } from '../../lib/domain';
 import type { FrontendStore, HistoryState } from './store';
 import { hasLocalOlderIds } from './history-window';
 import { computeChatWindow } from './virtual-list';
@@ -15,6 +23,8 @@ const ROW_HEIGHT = 72;
 const REACTION_EMOJIS = ['❤', '😂', '😮', '😢', '😡', '👍'];
 
 type AppProps = { store: FrontendStore };
+
+type SurfacePoint = { x: number; y: number; align?: 'left' | 'right' };
 
 export default function App({ store }: AppProps) {
     useStore(store);
@@ -145,40 +155,86 @@ type ChatRowProps = {
 };
 
 function ChatRow({ thread, index, selected, pinned, onSelect }: ChatRowProps) {
+    const [menuPoint, setMenuPoint] = useState<SurfacePoint>();
+    const rowRef = useRef<HTMLButtonElement>(null as unknown as HTMLButtonElement);
+    const longPress = useLongPress(openMenu, !selected);
     const user = thread.users[0];
     const snippet = thread.lastMessage ? messageSummary(thread.lastMessage) : 'No messages yet';
+
+    function openMenu(point: SurfacePoint) {
+        if (selected) return;
+        setMenuPoint(point);
+    }
+
     return (
-        <button
-            type="button"
+        <div
             className={`chat-row${selected ? ' chat-row--selected' : ''}`}
             style={{ transform: `translateY(${index * ROW_HEIGHT}px)` }}
-            onClick={onSelect}
-            aria-pressed={selected}
-            aria-label={`${thread.title}${thread.isMuted ? ', muted' : ''}${pinned ? ', pinned' : ''}`}
         >
-            <span className="avatar">
-                {user?.picUrl ? (
-                    <img src={user.picUrl} alt="" width="52" height="52" loading="lazy" />
-                ) : (
-                    <span>{initials(thread.title)}</span>
-                )}
-            </span>
-            <span className="chat-row__body">
-                <span className="chat-row__topline">
-                    <strong>{thread.title}</strong>
-                    <time dateTime={new Date(thread.lastActivityMs).toISOString()}>
-                        {formatThreadTime(thread.lastActivityMs)}
-                    </time>
+            <button
+                ref={rowRef}
+                type="button"
+                className="chat-row__select"
+                onClick={(event: ReactMouseEvent<HTMLButtonElement>) => {
+                    if (!longPress.consumeSyntheticEvent(event)) onSelect();
+                }}
+                onContextMenu={(event: ReactMouseEvent<HTMLButtonElement>) => {
+                    if (selected) return;
+                    event.preventDefault();
+                    if (!longPress.consumeSyntheticEvent(event)) {
+                        openMenu({ x: event.clientX, y: event.clientY });
+                    }
+                }}
+                onKeyDown={(event: KeyboardEvent<HTMLButtonElement>) => {
+                    if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return;
+                    if (selected) return;
+                    event.preventDefault();
+                    const rect = event.currentTarget.getBoundingClientRect();
+                    openMenu({ x: rect.left + 24, y: rect.top + rect.height / 2 });
+                }}
+                onPointerDown={longPress.onPointerDown}
+                onPointerMove={longPress.onPointerMove}
+                onPointerUp={longPress.onPointerUp}
+                onPointerCancel={longPress.onPointerCancel}
+                aria-pressed={selected}
+                aria-label={`${thread.title}${thread.isMuted ? ', muted' : ''}${pinned ? ', pinned' : ''}`}
+            >
+                <span className="avatar">
+                    {user?.picUrl ? (
+                        <img src={user.picUrl} alt="" width="52" height="52" loading="lazy" />
+                    ) : (
+                        <span>{initials(thread.title)}</span>
+                    )}
                 </span>
-                <span className="chat-row__bottomline">
-                    <span className="chat-row__snippet">{snippet}</span>
-                    <span className="chat-row__badges">
-                        {thread.isMuted && <span className="chat-row__badge" title="Muted" aria-hidden="true">⌁</span>}
-                        {pinned && <span className="chat-row__badge chat-row__badge--accent" title="Pinned" aria-hidden="true">◆</span>}
+                <span className="chat-row__body">
+                    <span className="chat-row__topline">
+                        <strong>{thread.title}</strong>
+                        <time dateTime={new Date(thread.lastActivityMs).toISOString()}>
+                            {formatThreadTime(thread.lastActivityMs)}
+                        </time>
+                    </span>
+                    <span className="chat-row__bottomline">
+                        <span className="chat-row__snippet">{snippet}</span>
+                        <span className="chat-row__badges">
+                            {thread.isMuted && <span className="chat-row__badge" title="Muted" aria-hidden="true">⌁</span>}
+                            {pinned && <span className="chat-row__badge chat-row__badge--accent" title="Pinned" aria-hidden="true">◆</span>}
+                        </span>
                     </span>
                 </span>
-            </span>
-        </button>
+            </button>
+            {menuPoint && (
+                <ContextMenu
+                    label={`Actions for ${thread.title}`}
+                    point={menuPoint}
+                    returnFocusRef={rowRef}
+                    onClose={() => setMenuPoint(undefined)}
+                    items={[{
+                        label: 'Open conversation',
+                        action: onSelect,
+                    }]}
+                />
+            )}
+        </div>
     );
 }
 
@@ -465,7 +521,7 @@ function MessagePane({
     const submitDraft = () => {
         const currentHistory = store.state.histories[thread.key];
         const scroller = scrollerRef.current;
-        if (!currentHistory || !scroller) return;
+        if (!currentHistory || !scroller) return false;
         // This measurement intentionally happens immediately before dispatch.
         const latestLoadedId = currentHistory.listedIds.at(-1);
         const followNewest = Boolean(
@@ -478,6 +534,7 @@ function MessagePane({
             replyToMessageId: currentHistory.replyTargetId,
         });
         if (localId && followNewest) followNewestThreadRef.current = thread.key;
+        return Boolean(localId);
     };
 
     const showNewest = () => {
@@ -489,6 +546,23 @@ function MessagePane({
     const hasNewerMessages = Boolean(
         latestId && history && !history.viewportIds.includes(latestId),
     );
+    const selectReply = useCallback((messageId: string) => {
+        const scroller = scrollerRef.current;
+        const visible = scroller
+            ? [...scroller.querySelectorAll<HTMLElement>('[data-message-id]')]
+                .filter(row => row.getBoundingClientRect().bottom > scroller.getBoundingClientRect().top)
+            : [];
+        const anchor = visible[1] ?? visible[0];
+        const anchorTop = anchor?.getBoundingClientRect().top;
+        if (!store.setReplyTarget(thread.key, messageId)) return;
+        requestAnimationFrame(() => {
+            if (scroller && anchor && anchorTop !== undefined) {
+                scroller.scrollTop += anchor.getBoundingClientRect().top - anchorTop;
+            }
+            document.querySelector<HTMLTextAreaElement>('.composer textarea')
+                ?.focus({ preventScroll: true });
+        });
+    }, [store, thread.key]);
 
     return (
         <>
@@ -552,30 +626,55 @@ function MessagePane({
                                 <div className="messages__beginning status-surface">Beginning of conversation</div>
                             )}
                             <div className="messages__rows" teactFastList>
-                                {history.viewportIds.map((id, index) => {
-                                    const message = history.byId[id];
-                                    const previous = index ? history.byId[history.viewportIds[index - 1]] : undefined;
-                                    const showDate = !previous || !sameDay(previous.ts, message.ts);
-                                    const grouped = Boolean(
-                                        previous && senderId(previous) === senderId(message) &&
-                                        message.ts - previous.ts < 5 * 60_000 && !showDate,
-                                    );
-                                    return (
-                                        <MessageRow
-                                            key={store.messageRowKey(thread.key, id)}
-                                            store={store}
-                                            threadId={thread.key}
-                                            message={message}
-                                            viewerId={history.viewerId}
-                                            pending={history.pendingSends[id]}
-                                            failed={history.failedSends[id]}
-                                            reactionMutation={history.reactionMutations[id]}
-                                            outgoing={senderId(message) === history.viewerId}
-                                            grouped={grouped}
-                                            showDate={showDate}
-                                        />
-                                    );
-                                })}
+                                {buildMessageGroups(history.viewportIds, history.byId, thread, history.viewerId)
+                                    .map(group => (
+                                        <div
+                                            key={`${thread.key}\u0000group\u0000${store.messageRowKey(thread.key, group.key)}`}
+                                            className={`message-group${group.showIdentity ? ' message-group--identity' : ''}`}
+                                            data-sender-id={group.senderId}
+                                        >
+                                            {group.showIdentity && (
+                                                <span className="message-group__avatar-rail" aria-hidden="true">
+                                                    <span className="avatar message-group__avatar">
+                                                        {group.sender?.picUrl ? (
+                                                            <img
+                                                                src={group.sender.picUrl}
+                                                                alt=""
+                                                                width="32"
+                                                                height="32"
+                                                                loading="lazy"
+                                                            />
+                                                        ) : (
+                                                            <span>{initials(group.senderLabel)}</span>
+                                                        )}
+                                                    </span>
+                                                </span>
+                                            )}
+                                            {group.ids.map((id, index) => {
+                                                const message = history.byId[id];
+                                                return (
+                                                    <MessageRow
+                                                        key={`${thread.key}\u0000${store.messageRowKey(thread.key, id)}`}
+                                                        store={store}
+                                                        threadId={thread.key}
+                                                        message={message}
+                                                        viewerId={history.viewerId}
+                                                        pending={history.pendingSends[id]}
+                                                        failed={history.failedSends[id]}
+                                                        reactionMutation={history.reactionMutations[id]}
+                                                        outgoing={group.outgoing}
+                                                        senderLabel={group.senderLabel}
+                                                        senderName={group.showSenderName && index === 0
+                                                            ? group.senderLabel
+                                                            : undefined}
+                                                        grouped={index > 0}
+                                                        showDate={group.showDate && index === 0}
+                                                        onReply={selectReply}
+                                                    />
+                                                );
+                                            })}
+                                        </div>
+                                    ))}
                             </div>
                         </div>
                     </>
@@ -609,8 +708,11 @@ const MessageRow = memo(function MessageRow({
     failed,
     reactionMutation,
     outgoing,
+    senderLabel,
+    senderName,
     grouped,
     showDate,
+    onReply,
 }: {
     store: FrontendStore;
     threadId: string;
@@ -620,21 +722,93 @@ const MessageRow = memo(function MessageRow({
     failed?: HistoryState['failedSends'][string];
     reactionMutation?: HistoryState['reactionMutations'][string];
     outgoing: boolean;
+    senderLabel: string;
+    senderName?: string;
     grouped: boolean;
     showDate: boolean;
+    onReply: (messageId: string) => void;
 }) {
-    const [pickerOpen, setPickerOpen] = useState(false);
+    const [menuPoint, setMenuPoint] = useState<SurfacePoint>();
+    const [pickerPoint, setPickerPoint] = useState<SurfacePoint>();
+    const rowRef = useRef<HTMLDivElement>(null as unknown as HTMLDivElement);
+    const reactionRef = useRef<HTMLButtonElement>(null as unknown as HTMLButtonElement);
     const isServerMessage = !message.id.startsWith('local:');
     const eligibleForActions = isServerMessage && 'senderId' in message;
     const groupedReactions = groupReactions(message, viewerId);
+    const viewerReaction = message.reactions?.find(reaction => reaction.senderId === viewerId)?.reaction;
+    const hasFailedActions = Boolean(failed);
+    const ownsContextMenu = eligibleForActions || hasFailedActions;
 
     const chooseReaction = (emoji: string) => {
-        setPickerOpen(false);
+        setPickerPoint(undefined);
         void store.setReaction(threadId, message.id, emoji);
     };
 
+    const openActionsAt = (point: SurfacePoint) => {
+        if (!eligibleForActions && !hasFailedActions) return;
+        setPickerPoint(undefined);
+        setMenuPoint(point);
+    };
+    const longPress = useLongPress(openActionsAt);
+
+    const openReactionPicker = () => {
+        const rect = reactionRef.current?.getBoundingClientRect();
+        if (!rect) return;
+        setMenuPoint(undefined);
+        setPickerPoint({
+            x: outgoing ? rect.left : rect.right,
+            y: rect.top,
+            align: outgoing ? 'right' : 'left',
+        });
+    };
+
+    const menuItems: ContextMenuItem[] = eligibleForActions ? [
+        { label: 'Reply', action: () => onReply(message.id) },
+        {
+            label: viewerReaction ? `Change reaction ${viewerReaction}` : 'Add reaction',
+            action: openReactionPicker,
+            disabled: reactionMutation?.status === 'pending',
+        },
+    ] : failed ? [
+        { label: 'Retry send', action: () => store.retrySend(threadId, message.id) },
+        { label: 'Remove failed message', action: () => store.removeFailedSend(threadId, message.id), danger: true },
+    ] : [];
+
     return (
-        <div data-message-id={message.id}>
+        <div
+            ref={rowRef}
+            data-message-id={message.id}
+            className="message-row"
+            tabIndex={ownsContextMenu ? 0 : undefined}
+            aria-label={ownsContextMenu
+                ? messageAccessibleLabel(message, senderLabel, pending, failed)
+                : undefined}
+            onContextMenu={(event: ReactMouseEvent<HTMLDivElement>) => {
+                if (!ownsContextMenu) return;
+                event.preventDefault();
+                if (!longPress.consumeSyntheticEvent(event)) {
+                    openActionsAt({ x: event.clientX, y: event.clientY });
+                }
+            }}
+            onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
+                if (!ownsContextMenu || (
+                    event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')
+                )) return;
+                event.preventDefault();
+                const bubble = event.currentTarget.querySelector<HTMLElement>('.message__bubble');
+                const rect = (bubble ?? event.currentTarget).getBoundingClientRect();
+                openActionsAt({
+                    x: outgoing ? rect.right : rect.left,
+                    y: rect.top + Math.min(24, rect.height / 2),
+                    align: outgoing ? 'right' : 'left',
+                });
+            }}
+            onClickCapture={longPress.consumeSyntheticEvent}
+            onPointerDown={longPress.onPointerDown}
+            onPointerMove={longPress.onPointerMove}
+            onPointerUp={longPress.onPointerUp}
+            onPointerCancel={longPress.onPointerCancel}
+        >
             {showDate && (
                 <div className="message-date">
                     <time className="status-surface" dateTime={new Date(message.ts).toISOString()}>{formatMessageDate(message.ts)}</time>
@@ -642,6 +816,7 @@ const MessageRow = memo(function MessageRow({
             )}
             <div className={`message${outgoing ? ' message--outgoing' : ''}${grouped ? ' message--grouped' : ''}${message.kind === 'reaction_log' ? ' message--log' : ''}`}>
                 <div className="message__bubble">
+                    {senderName && <strong className="message__sender-name">{senderName}</strong>}
                     {'replyPreview' in message && message.replyPreview && (
                         <ReplyPreview preview={message.replyPreview} />
                     )}
@@ -674,42 +849,38 @@ const MessageRow = memo(function MessageRow({
                         </div>
                     )}
                     {eligibleForActions && (
-                        <div className="message__actions" aria-busy={reactionMutation?.status === 'pending'}>
-                            <button
-                                type="button"
-                                onClick={() => store.setReplyTarget(threadId, message.id)}
-                            >
-                                Reply
-                            </button>
-                            <button
-                                type="button"
-                                aria-expanded={pickerOpen}
-                                aria-controls={`reaction-picker-${message.id}`}
-                                disabled={reactionMutation?.status === 'pending'}
-                                onClick={() => setPickerOpen(open => !open)}
-                            >
-                                React
-                            </button>
-                            {pickerOpen && (
-                                <div
-                                    id={`reaction-picker-${message.id}`}
-                                    className="reaction-picker"
-                                    role="group"
-                                    aria-label="Choose a reaction"
-                                >
-                                    {REACTION_EMOJIS.map(emoji => (
-                                        <button
-                                            key={emoji}
-                                            type="button"
-                                            aria-label={`React with ${emoji}`}
-                                            onClick={() => chooseReaction(emoji)}
-                                        >
-                                            {emoji}
-                                        </button>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
+                        <button
+                            ref={reactionRef}
+                            type="button"
+                            className="message__reaction-trigger"
+                            aria-label={viewerReaction ? `Change reaction ${viewerReaction}` : 'Add reaction'}
+                            aria-haspopup="menu"
+                            aria-expanded={Boolean(pickerPoint)}
+                            aria-busy={reactionMutation?.status === 'pending'}
+                            disabled={reactionMutation?.status === 'pending'}
+                            onClick={openReactionPicker}
+                        >
+                            <span aria-hidden="true">☺</span>
+                        </button>
+                    )}
+                    {menuPoint && (
+                        <ContextMenu
+                            label="Message actions"
+                            point={menuPoint}
+                            returnFocusRef={rowRef}
+                            onClose={() => setMenuPoint(undefined)}
+                            items={menuItems}
+                        />
+                    )}
+                    {pickerPoint && (
+                        <ReactionPicker
+                            point={pickerPoint}
+                            current={viewerReaction}
+                            busy={reactionMutation?.status === 'pending'}
+                            returnFocusRef={reactionRef}
+                            onChoose={chooseReaction}
+                            onClose={() => setPickerPoint(undefined)}
+                        />
                     )}
                     {reactionMutation?.status === 'error' && (
                         <span className="message__reaction-error" role="alert">
@@ -722,6 +893,316 @@ const MessageRow = memo(function MessageRow({
     );
 });
 
+type ContextMenuItem = {
+    label: string;
+    action: () => void;
+    disabled?: boolean;
+    danger?: boolean;
+};
+
+type FocusRef = { current: HTMLElement };
+
+function ContextMenu({
+    label,
+    point,
+    items,
+    returnFocusRef,
+    onClose,
+}: {
+    label: string;
+    point: SurfacePoint;
+    items: ContextMenuItem[];
+    returnFocusRef: FocusRef;
+    onClose: () => void;
+}) {
+    const surfaceRef = useRef<HTMLDivElement>(null as unknown as HTMLDivElement);
+
+    useFloatingSurface(surfaceRef, point, returnFocusRef, onClose);
+
+    const moveFocus = (event: KeyboardEvent<HTMLDivElement>) => {
+        const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];
+        if (!buttons.length) return;
+        const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
+        let next: number | undefined;
+        if (event.key === 'ArrowDown') next = (current + 1) % buttons.length;
+        if (event.key === 'ArrowUp') next = (current - 1 + buttons.length) % buttons.length;
+        if (event.key === 'Home') next = 0;
+        if (event.key === 'End') next = buttons.length - 1;
+        if (next === undefined) return;
+        event.preventDefault();
+        buttons[next].focus();
+    };
+
+    return (
+        <div
+            ref={surfaceRef}
+            className="context-menu"
+            role="menu"
+            aria-label={label}
+            onKeyDown={moveFocus}
+        >
+            {items.map(item => (
+                <button
+                    key={item.label}
+                    type="button"
+                    role="menuitem"
+                    className={item.danger ? 'context-menu__danger' : ''}
+                    disabled={item.disabled}
+                    onClick={() => {
+                        onClose();
+                        item.action();
+                    }}
+                >
+                    {item.label}
+                </button>
+            ))}
+        </div>
+    );
+}
+
+function ReactionPicker({
+    point,
+    current,
+    busy,
+    returnFocusRef,
+    onChoose,
+    onClose,
+}: {
+    point: SurfacePoint;
+    current?: string;
+    busy: boolean;
+    returnFocusRef: FocusRef;
+    onChoose: (emoji: string) => void;
+    onClose: () => void;
+}) {
+    const surfaceRef = useRef<HTMLDivElement>(null as unknown as HTMLDivElement);
+    useFloatingSurface(surfaceRef, point, returnFocusRef, onClose);
+
+    const moveFocus = (event: KeyboardEvent<HTMLDivElement>) => {
+        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+        const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button')];
+        const currentIndex = buttons.indexOf(document.activeElement as HTMLButtonElement);
+        const next = event.key === 'Home'
+            ? 0
+            : event.key === 'End'
+                ? buttons.length - 1
+                : event.key === 'ArrowLeft'
+                    ? (currentIndex - 1 + buttons.length) % buttons.length
+                    : (currentIndex + 1) % buttons.length;
+        event.preventDefault();
+        buttons[next]?.focus();
+    };
+
+    return (
+        <div
+            ref={surfaceRef}
+            className="reaction-picker"
+            role="menu"
+            aria-label="Choose a reaction"
+            aria-busy={busy}
+            onKeyDown={moveFocus}
+        >
+            {REACTION_EMOJIS.map(emoji => (
+                <button
+                    key={emoji}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={current === emoji}
+                    aria-label={current === emoji ? `${emoji}, current reaction` : `React with ${emoji}`}
+                    className={current === emoji ? 'reaction-picker__current' : ''}
+                    disabled={busy || current === emoji}
+                    onClick={() => onChoose(emoji)}
+                >
+                    <span aria-hidden="true">{emoji}</span>
+                </button>
+            ))}
+            {current && (
+                <span className="reaction-picker__note">Choose another to change</span>
+            )}
+        </div>
+    );
+}
+
+function useFloatingSurface(
+    surfaceRef: { current: HTMLDivElement },
+    point: SurfacePoint,
+    returnFocusRef: FocusRef,
+    onClose: () => void,
+) {
+    useLayoutEffect(() => {
+        const surface = surfaceRef.current;
+        if (!surface) return;
+        surface.setAttribute('popover', 'manual');
+        surface.showPopover?.();
+        const position = () => {
+            const viewport = window.visualViewport;
+            const viewportLeft = viewport?.offsetLeft ?? 0;
+            const viewportTop = viewport?.offsetTop ?? 0;
+            const viewportWidth = viewport?.width ?? window.innerWidth;
+            const viewportHeight = viewport?.height ?? window.innerHeight;
+            surface.style.minWidth = '0';
+            surface.style.maxWidth = `${Math.max(0, viewportWidth - 16)}px`;
+            surface.style.maxHeight = `${Math.max(0, viewportHeight - 16)}px`;
+            surface.style.overflowY = 'auto';
+            const width = surface.offsetWidth;
+            const height = surface.offsetHeight;
+            const requestedLeft = point.align === 'right' ? point.x - width : point.x;
+            const left = Math.max(
+                viewportLeft + 8,
+                Math.min(requestedLeft, viewportLeft + viewportWidth - width - 8),
+            );
+            const top = Math.max(
+                viewportTop + 8,
+                Math.min(point.y, viewportTop + viewportHeight - height - 8),
+            );
+            surface.style.left = `${left}px`;
+            surface.style.top = `${top}px`;
+        };
+        position();
+        surface.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus({ preventScroll: true });
+
+        const closeFromPointer = (event: PointerEvent) => {
+            if (!surface.contains(event.target as Node)) onClose();
+        };
+        const closeFromKey = (event: globalThis.KeyboardEvent) => {
+            if (event.key !== 'Escape') return;
+            event.preventDefault();
+            onClose();
+            requestAnimationFrame(() => returnFocusRef.current?.focus({ preventScroll: true }));
+        };
+        const closeFromViewport = () => onClose();
+        document.addEventListener('pointerdown', closeFromPointer, true);
+        document.addEventListener('keydown', closeFromKey, true);
+        window.addEventListener('resize', closeFromViewport);
+        window.addEventListener('scroll', closeFromViewport, true);
+        window.visualViewport?.addEventListener('resize', position);
+        window.visualViewport?.addEventListener('scroll', position);
+        return () => {
+            surface.hidePopover?.();
+            document.removeEventListener('pointerdown', closeFromPointer, true);
+            document.removeEventListener('keydown', closeFromKey, true);
+            window.removeEventListener('resize', closeFromViewport);
+            window.removeEventListener('scroll', closeFromViewport, true);
+            window.visualViewport?.removeEventListener('resize', position);
+            window.visualViewport?.removeEventListener('scroll', position);
+        };
+    }, [point.x, point.y, point.align]);
+}
+
+function useLongPress(onOpen: (point: SurfacePoint) => void, enabled = true) {
+    const pressRef = useRef<{
+        pointerId: number;
+        x: number;
+        y: number;
+        timer: number;
+    }>();
+    const suppressUntilRef = useRef(0);
+    const compatibilityCleanupRef = useRef<() => void>();
+
+    const clear = () => {
+        const press = pressRef.current;
+        if (press) window.clearTimeout(press.timer);
+        pressRef.current = undefined;
+    };
+
+    const clearCompatibilitySuppression = () => {
+        compatibilityCleanupRef.current?.();
+        compatibilityCleanupRef.current = undefined;
+    };
+
+    const suppressCompatibilityEvents = () => {
+        clearCompatibilitySuppression();
+        const consume = (event: Event) => {
+            if (performance.now() >= suppressUntilRef.current) {
+                clearCompatibilitySuppression();
+                return;
+            }
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            if (event.type === 'click') {
+                suppressUntilRef.current = 0;
+                clearCompatibilitySuppression();
+            }
+        };
+        const timeout = window.setTimeout(clearCompatibilitySuppression, 850);
+        compatibilityCleanupRef.current = () => {
+            window.clearTimeout(timeout);
+            document.removeEventListener('click', consume, true);
+            document.removeEventListener('contextmenu', consume, true);
+        };
+        document.addEventListener('click', consume, true);
+        document.addEventListener('contextmenu', consume, true);
+    };
+
+    useEffect(() => () => {
+        clear();
+        clearCompatibilitySuppression();
+    }, []);
+
+    const onPointerDown = (event: ReactPointerEvent<HTMLElement>) => {
+        if (!enabled || event.pointerType !== 'touch' || !event.isPrimary) return;
+        clear();
+        const x = event.clientX;
+        const y = event.clientY;
+        const pointerId = event.pointerId;
+        const timer = window.setTimeout(() => {
+            const press = pressRef.current;
+            if (!press || press.pointerId !== pointerId) return;
+            suppressUntilRef.current = performance.now() + 800;
+            pressRef.current = undefined;
+            suppressCompatibilityEvents();
+            onOpen({ x, y });
+        }, 500);
+        pressRef.current = { pointerId, x, y, timer };
+    };
+
+    const onPointerMove = (event: ReactPointerEvent<HTMLElement>) => {
+        const press = pressRef.current;
+        if (!press || press.pointerId !== event.pointerId) return;
+        if (Math.hypot(event.clientX - press.x, event.clientY - press.y) > 10) clear();
+    };
+
+    const onPointerUp = (event: ReactPointerEvent<HTMLElement>) => {
+        if (pressRef.current?.pointerId === event.pointerId) clear();
+        if (performance.now() < suppressUntilRef.current) {
+            event.preventDefault();
+            // Chromium can dispatch the compatibility click in a later task.
+            // Keep document capture alive briefly so a newly opened popover
+            // cannot become that click's target.
+            window.setTimeout(clearCompatibilitySuppression, 50);
+        }
+    };
+
+    const onPointerCancel = (event: ReactPointerEvent<HTMLElement>) => {
+        if (pressRef.current?.pointerId === event.pointerId) clear();
+    };
+
+    const consumeSyntheticEvent = (event: {
+        type?: string;
+        target?: EventTarget | null;
+        preventDefault: () => void;
+        stopPropagation: () => void;
+    }) => {
+        if (performance.now() >= suppressUntilRef.current) return false;
+        if (
+            event.target instanceof Element &&
+            event.target.closest('.context-menu, .reaction-picker')
+        ) return false;
+        event.preventDefault();
+        event.stopPropagation();
+        if (event.type === 'click') suppressUntilRef.current = 0;
+        return true;
+    };
+
+    return {
+        consumeSyntheticEvent,
+        onPointerCancel,
+        onPointerDown,
+        onPointerMove,
+        onPointerUp,
+    };
+}
+
 function Composer({
     history,
     threadId,
@@ -733,19 +1214,20 @@ function Composer({
     threadId: string;
     onDraftChange: (threadId: string, draft: string) => void;
     onCancelReply: () => void;
-    onSubmit: () => void;
+    onSubmit: () => boolean;
 }) {
+    const textareaRef = useRef<HTMLTextAreaElement>(null as unknown as HTMLTextAreaElement);
     const replyTarget = history.replyTargetId
         ? history.byId[history.replyTargetId]
         : undefined;
     const submit = (event?: FormEvent<HTMLFormElement>) => {
         event?.preventDefault();
-        onSubmit();
+        if (onSubmit() && textareaRef.current) textareaRef.current.value = '';
     };
     const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
         if (event.key !== 'Enter' || event.shiftKey) return;
         event.preventDefault();
-        onSubmit();
+        if (onSubmit()) event.currentTarget.value = '';
     };
     const changeDraft = (event: ChangeEvent<HTMLTextAreaElement>) => {
         const textarea = event.currentTarget;
@@ -756,7 +1238,9 @@ function Composer({
         // Restore the store value in a microtask without creating a second
         // draft owner so normal multi-character browser input remains intact.
         queueMicrotask(() => {
-            if (textarea.isConnected && textarea.value !== value) textarea.value = value;
+            if (
+                history.draft === value && textarea.isConnected && textarea.value !== value
+            ) textarea.value = value;
         });
     };
 
@@ -772,6 +1256,7 @@ function Composer({
             <div className="composer__controls">
                 <label className="visually-hidden" htmlFor={`message-draft-${threadId}`}>Message</label>
                 <textarea
+                    ref={textareaRef}
                     id={`message-draft-${threadId}`}
                     rows={1}
                     value={history.draft}
@@ -887,6 +1372,92 @@ function messageSummary(message: Message) {
         case 'image': return message.images.length === 1 ? 'Photo' : `${message.images.length} photos`;
         case 'unsupported': return `Unsupported message (${message.contentType})`;
     }
+}
+
+type MessageRenderGroup = {
+    key: string;
+    ids: string[];
+    senderId?: string;
+    sender?: User;
+    senderLabel: string;
+    outgoing: boolean;
+    showDate: boolean;
+    showIdentity: boolean;
+    showSenderName: boolean;
+};
+
+function buildMessageGroups(
+    ids: string[],
+    byId: Record<string, Message>,
+    thread: Thread,
+    viewerId?: string,
+): MessageRenderGroup[] {
+    const groups: MessageRenderGroup[] = [];
+    const knownNonViewerUsers = thread.users.filter(user => user.id !== viewerId);
+    const keyedPeer = knownNonViewerUsers.find(user => user.id === thread.key);
+    const primaryPeerId = !thread.isGroup
+        ? (keyedPeer ?? (
+            knownNonViewerUsers.length === 1 ? knownNonViewerUsers[0] : undefined
+        ))?.id
+        : undefined;
+
+    for (const [index, id] of ids.entries()) {
+        const message = byId[id];
+        const messageSenderId = senderId(message);
+        const previous = index ? byId[ids[index - 1]] : undefined;
+        const showDate = !previous || !sameDay(previous.ts, message.ts);
+        const previousGroup = groups.at(-1);
+        const continuesGroup = Boolean(
+            previousGroup && previous && messageSenderId &&
+            senderId(previous) === messageSenderId &&
+            message.ts - previous.ts < 5 * 60_000 && !showDate,
+        );
+        if (continuesGroup) {
+            previousGroup!.ids.push(id);
+            // The newest ID stays stable when older same-sender messages prepend.
+            previousGroup!.key = id;
+            continue;
+        }
+
+        const outgoing = Boolean(messageSenderId && messageSenderId === viewerId);
+        const sender = thread.users.find(user => user.id === messageSenderId);
+        const senderLabel = messageSenderLabel(message, thread, viewerId);
+        const showIdentity = Boolean(
+            sender && messageSenderId && !outgoing && (
+                thread.isGroup || (primaryPeerId && messageSenderId !== primaryPeerId)
+            ),
+        );
+        groups.push({
+            key: id,
+            ids: [id],
+            senderId: messageSenderId,
+            sender,
+            senderLabel,
+            outgoing,
+            showDate,
+            showIdentity,
+            showSenderName: showIdentity && thread.isGroup,
+        });
+    }
+    return groups;
+}
+
+function messageSenderLabel(message: Message, thread: Thread, viewerId?: string) {
+    if (!('senderId' in message)) return 'Conversation update';
+    if (message.senderId === viewerId) return 'You';
+    const user = thread.users.find(candidate => candidate.id === message.senderId);
+    return user?.fullName || user?.username || 'Participant';
+}
+
+function messageAccessibleLabel(
+    message: Message,
+    senderLabel: string,
+    pending?: HistoryState['pendingSends'][string],
+    failed?: HistoryState['failedSends'][string],
+) {
+    const summary = messageSummary(message).replace(/\s+/g, ' ').trim().slice(0, 160);
+    const delivery = failed ? 'Not sent' : pending ? 'Sending' : 'Delivered';
+    return `${senderLabel}: ${summary || 'Message'}. ${delivery}`;
 }
 
 function replyPreviewFor(message: Message): Parameters<typeof ReplyPreview>[0]['preview'] {

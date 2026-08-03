@@ -184,6 +184,23 @@ Do not reuse it for older-page lookahead.
 restores visited chats from an ID-plus-offset anchor, groups adjacent senders,
 and renders every current domain message variant and reply preview.
 
+Sender runs remain a presentation derived from normalized `viewportIds` and
+`byId`; they are not another cache. A run breaks on sender, date, or the existing
+five-minute grouping interval. In group chats, each incoming run reserves a
+32px identity gutter, shows the sender name on its first message, and keeps one
+avatar anchored to the run's last message or sticky at the scrollport bottom
+while that last message is below the viewport. Outgoing runs never show either.
+In a private thread, the ordinary peer has no identity gutter; a known additional
+participant (for example Meta AI) gets the run avatar but not a repeated group
+name. The existing normalized thread key identifies the ordinary peer when it
+matches a known participant; otherwise only a sole known non-viewer participant
+is accepted as the ordinary peer. Titles and participant order never determine
+identity, and unknown senders receive no fallback avatar.
+Run wrappers use their newest message's stable row key so prepending older
+same-sender messages preserves wrapper DOM identity. The run wrappers remain
+bounded by the same maximum 80 message IDs, and logical anchors continue to use
+the nested stable `data-message-id` rows.
+
 ### Status, errors, and explicit retry
 
 Initial inbox loading uses `inbox.status = 'loading'`; pagination leaves loaded
@@ -255,6 +272,42 @@ older local window leaves `viewportIds` and the logical anchor intact and shows
 scrolling. Follow intent is cleared on thread changes so it cannot affect a
 restored chat. Enter submits, Shift+Enter inserts a newline, and drafts remain
 store-owned per thread.
+
+Message and conversation-row action surfaces are component-owned transient DOM
+state, not another entity cache. Desktop rows expose no permanent ellipsis or
+menu button: right click, the Context Menu key, and Shift+F10 open native
+top-layer popovers so transformed virtual rows cannot clip them. A stationary
+500ms touch long-press is the compact-layout fallback; movement beyond 10px or
+pointer cancellation cancels it so scrolling wins, and any generated browser
+compatibility contextmenu/click is suppressed across the document so releasing
+over a newly opened surface cannot activate it. The surfaces clamp using the visual
+viewport's width, height, and offsets, reposition on visual-viewport resize or
+scroll, and fall back to layout-viewport resize handling. They move focus to
+their first enabled action, dismiss on outside press, Escape, document scrolling,
+action, or thread replacement, and return focus after Escape. Message-row keys include
+the thread identity so transient state cannot survive a switch between histories
+that happen to contain the same message ID; optimistic/server reconciliation
+within one thread still uses `rowKeyByMessageId` unchanged.
+
+Menus expose only capabilities already owned by this frontend. An unselected chat
+row offers open/select; a selected row leaves native pointer and keyboard context
+menus untouched rather than presenting an empty or disabled custom surface. A
+loaded server message offers reply and create/change reaction;
+and a failed local send offers retry/remove. The reaction picker marks the
+viewer's current choice and serializes through the existing store action. It
+does not offer reaction removal: the routed `setReaction` mutation and captured
+catalog currently prove only `reaction_status: 'created'`, so removal would be
+an invented protocol capability. Reply selection preserves a visible DOM anchor,
+focuses the thread composer without browser scrolling, and remains isolated with
+the store-owned per-thread draft/reply target.
+
+Server message rows also expose a small reaction affordance only while the row
+is hovered or contains keyboard focus. It sits beyond the bubble's trailing edge
+for incoming messages and leading edge for outgoing messages, is absolutely
+positioned so message geometry and anchors do not change, and opens the same
+clamped keyboard-operable picker. Context-menu keyboard handling lives on the
+focusable row itself; the browser menu is prevented only for rows whose custom
+menu owns real actions.
 
 ### Warmup generations, timers, and budget
 
@@ -382,9 +435,15 @@ reaction normalization, and malformed HTTP-200 data. Store tests cover send
 insertion, duplicate-safe retry, all-index reconciliation, stable row keys,
 bounded/scrolled-up windows, inbox read races, per-thread drafts, reaction
 single-flight/rollback/read overlap, and stale completions. Production browser
-tests cover composer keys, reply/cancel, accessible delivery recovery and emoji
+tests cover composer keys, reply/cancel, descriptive actionable-row names,
+accessible delivery recovery and emoji
 picker, narrow layout, stable DOM identity, bottom follow, older-window anchor
-preservation/newest navigation, and thread-scoped follow state.
+preservation/newest navigation, thread-scoped follow state, contextual action
+dismissal/focus/collision behavior, visual-viewport offset/size changes,
+current-reaction keyboard selection, and Chromium CDP-dispatched movement and
+cancellation before threshold plus a held active touch moved onto a newly opened
+action before release. The generated compatibility click is observed and proven
+unable to activate the action, followed by an ordinary click that proves cleanup.
 
 Replacement state lives in normalized history while DOM measurements remain in
 `MessagePane`. Intersection state survives observer transitions and reevaluates
@@ -424,8 +483,24 @@ In particular:
   and adjacent preload. **Implemented adaptation:** 40-message slices, max 80
   DOM messages, exactly one older lookahead page, and only two visible unopened
   chat warmups rather than Telegram's wider policy.
+- Telegram sender groups informed identity placement: one avatar belongs to an
+  incoming sender run and sticks at the visible bottom until the run's final
+  message reaches it, while the sender name belongs to the run's first message.
+  **Implemented adaptation:** direct CSS sticky positioning inside ICR's bounded
+  run wrapper, with Instagram PM/non-peer rules and no imported Telegram markup,
+  styles, or assets.
 
 These are architectural observations, not permission to import GPL code.
+
+For contextual actions, a clean-room review of pinned `Message.tsx`,
+`Message.scss`, `MessageContextMenu.tsx`, and `useContextMenuHandlers.ts`
+concluded that Telegram Web A keeps desktop message actions contextual, places
+its quick-reaction affordance on opposite outer bubble corners for incoming and
+outgoing messages, opens custom menus from pointer context-menu coordinates,
+and uses a movement-cancelled touch hold while suppressing the resulting click.
+ICR independently adopts only those interaction conclusions with its own DOM,
+timing, styling, six-reaction capability, focus semantics, and viewport surface
+helper; no Telegram source, styles, markup, icons, or assets are copied.
 
 ### Complexity intentionally excluded
 
