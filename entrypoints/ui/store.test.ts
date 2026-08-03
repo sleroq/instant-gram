@@ -232,6 +232,48 @@ test('stored pins are deduplicated before ordering', async () => {
     store.destroy();
 });
 
+test('conversation pins are optimistic, single-flight, authoritative, and roll back visibly', async () => {
+    let attempt = 0;
+    let resolveFirst!: (result: Awaited<ReturnType<CompleteUiRpc['togglePin']>>) => void;
+    const toggleCalls: Parameters<CompleteUiRpc['togglePin']>[0][] = [];
+    const rpc = fakeRpc(async () => ({
+        ok: true,
+        value: { items: [thread('a'), thread('b')], hasNextPage: false },
+    }), undefined, async () => ({ pinned: ['b'] }), undefined, undefined, payload => {
+        toggleCalls.push(payload);
+        attempt++;
+        if (attempt === 1) return new Promise(resolve => { resolveFirst = resolve; });
+        return Promise.resolve({
+            ok: true,
+            value: {
+                pinned: ['a', 'b'],
+                receipt: { threadFbid: payload.threadFbid, isPinned: payload.pin },
+            },
+        });
+    });
+    const store = createFrontendStore(rpc);
+    store.start();
+    await settle();
+
+    const first = store.togglePin('a');
+    assert.deepEqual(store.state.pinnedIds, ['a', 'b']);
+    assert.equal(store.state.pinMutations.a.status, 'pending');
+    assert.equal(await store.togglePin('a'), false);
+    assert.equal(toggleCalls.length, 1);
+    resolveFirst({ ok: false, error: { message: 'denied' } });
+    assert.equal(await first, false);
+    assert.deepEqual(store.state.pinnedIds, ['b']);
+    assert.deepEqual(store.state.pinMutations.a, {
+        pin: true, status: 'error', error: 'denied',
+    });
+
+    assert.equal(await store.togglePin('a'), true);
+    assert.deepEqual(store.state.pinnedIds, ['a', 'b']);
+    assert.equal(store.state.pinMutations.a, undefined);
+    assert.equal(toggleCalls[0]?.threadFbid, 'a');
+    store.destroy();
+});
+
 test('older history deduplicates overlaps, stays bounded, and preloads once', async () => {
     installWindowTimers();
     const calls: Array<{ threadKey: string; cursor?: string }> = [];
@@ -662,12 +704,19 @@ function fakeRpc(
         ok: false,
         error: { message: 'not used' },
     }),
+    togglePin: CompleteUiRpc['togglePin'] = async payload => ({
+        ok: true,
+        value: {
+            pinned: payload.pin ? [payload.threadKey] : [],
+            receipt: { threadFbid: payload.threadFbid, isPinned: payload.pin },
+        },
+    }),
 ): CompleteUiRpc {
     return {
         getInbox,
         getThread,
         getPins,
-        togglePin: async () => ({ pinned: [] }),
+        togglePin,
         sendText,
         setReaction,
         getReelMedia: async () => ({

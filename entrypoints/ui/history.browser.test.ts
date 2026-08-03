@@ -626,12 +626,17 @@ test('context menus dismiss, restore focus, stay in the viewport, and close on t
     await chatMenu.waitFor();
     assert.equal(await chatMenu.getByRole('menuitem').count(), 1);
     assert.equal(await chatMenu.getByRole('menuitem').isDisabled(), false);
-    await chatMenu.getByRole('menuitem', { name: 'Open conversation' }).click();
+    await chatMenu.getByRole('menuitem', { name: 'Pin conversation' }).click();
+    await page.getByRole('alert').filter({ hasText: 'Harness pin failure' }).waitFor();
+    await secondChat.click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Pin conversation' }).click();
+    await page.getByRole('button', { name: 'Second history, pinned', exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Second history, pinned', exact: true }).click();
     await page.waitForFunction(() => document.querySelector('.conversation__header h2')?.textContent === 'Second history');
     await page.close();
 });
 
-test('selected chat leaves native context menu semantics untouched', async () => {
+test('selected chat exposes the same keyboard and pointer pin action', async () => {
     const page = await openHarness();
     await page.evaluate(() => window.historyHarness.mount('resize'));
     const selected = page.getByRole('button', { name: 'History harness', exact: true });
@@ -649,8 +654,10 @@ test('selected chat leaves native context menu semantics untouched', async () =>
             cancelable: true,
         })),
     }));
-    assert.deepEqual(result, { pointerAllowed: true, keyboardAllowed: true });
-    assert.equal(await page.getByRole('menu', { name: 'Actions for History harness' }).count(), 0);
+    assert.deepEqual(result, { pointerAllowed: false, keyboardAllowed: false });
+    const menu = page.getByRole('menu', { name: 'Actions for History harness' });
+    await menu.waitFor();
+    assert.equal(await menu.getByRole('menuitem', { name: 'Pin conversation' }).count(), 1);
     await page.close();
 });
 
@@ -768,7 +775,7 @@ test('real held touch release over the opened action cannot activate it', async 
     });
     const menu = page.getByRole('menu', { name: 'Actions for History harness' });
     await menu.waitFor({ timeout: 1_000 });
-    const item = menu.getByRole('menuitem', { name: 'Open conversation' });
+    const item = menu.getByRole('menuitem', { name: 'Pin conversation' });
     const menuBox = await item.boundingBox();
     assert.ok(menuBox);
     const menuPoint = {
@@ -793,9 +800,10 @@ test('real held touch release over the opened action cannot activate it', async 
         true,
         JSON.stringify(compatibilityEvents),
     );
-    assert.equal(compatibilityEvents.some(event => event.target.includes('Open conversation')), true);
+    assert.equal(compatibilityEvents.some(event => event.target.includes('Pin conversation')), true);
     await item.click();
-    await page.waitForFunction(() => window.historyHarness.historyState('thread').selected === 'thread');
+    await page.getByRole('button', { name: 'History harness, pinned', exact: true }).waitFor();
+    assert.equal(await page.evaluate(() => window.historyHarness.historyState('thread').selected), undefined);
     await page.close();
 });
 

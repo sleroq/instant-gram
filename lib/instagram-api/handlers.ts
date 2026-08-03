@@ -15,6 +15,7 @@ import {
     parseMessageActionsResponse,
     parseMessageRequestsResponse,
     parsePinnedMessageResponse,
+    parsePinnedThreadResponse,
     parseReactionMutationResponse,
     parseSentCutoutStickerResponse,
     parseSentTextResponse,
@@ -37,7 +38,7 @@ type AsyncHandlers<Map extends Record<keyof Map, (...args: never[]) => unknown>>
 };
 type CanonicalHandlerRpcMap = Pick<
     RpcMap,
-    'getInbox' | 'getThread' | 'sendText' | 'setReaction'
+    'getInbox' | 'getThread' | 'sendText' | 'setReaction' | 'togglePin'
 >;
 export type InstagramRpcHandlers = AsyncHandlers<CanonicalHandlerRpcMap>;
 type CatalogHandlerRpcMap = Pick<RpcMap, 'getInbox' | 'getThread'> & InstagramRpcMap;
@@ -367,6 +368,23 @@ function createInstagramHandlers(
                 await execute('IGDirectReactionSendMutation', input),
             );
         },
+        async togglePin(value: unknown) {
+            const payload = record(value);
+            exactKeys(payload, ['threadKey', 'threadFbid', 'pin']);
+            requiredString(payload.threadKey, 'thread key');
+            const input = {
+                threadFbid: requiredString(payload.threadFbid, 'thread FBID'),
+            };
+            if (typeof payload.pin !== 'boolean')
+                throw new Error('Invalid Instagram conversation pin state');
+            const receipt = parsePinnedThreadResponse(await execute(
+                payload.pin ? 'useIGDPinThreadMutation' : 'useIGDUnpinThreadMutation',
+                input,
+            ));
+            if (receipt.threadFbid !== input.threadFbid || receipt.isPinned !== payload.pin)
+                throw new Error('Instagram conversation pin receipt did not match the request');
+            return { pinned: [], receipt };
+        },
         async markThreadRead(value: unknown) {
             const payload = record(value);
             exactKeys(payload, ['threadIgId', 'messageId', 'messageTimestampMs']);
@@ -441,6 +459,7 @@ export function createInstagramRpcHandlers(
         getThread: handlers.getThread,
         sendText: handlers.sendText,
         setReaction: handlers.setReaction,
+        togglePin: handlers.togglePin,
     };
 }
 
@@ -467,6 +486,8 @@ export const INSTAGRAM_RPC_OPERATION_REACHABILITY = {
     IGDInboxInfoOffMsysQuery: 'getThreadInfo',
     IGDUserMessageRowMoreActionsMenuOffMsysQuery: 'getMessageActions',
     useIGDPinMessageOffMsysMutation: 'pinMessage',
+    useIGDPinThreadMutation: 'togglePin',
+    useIGDUnpinThreadMutation: 'togglePin',
     useIGDMarkThreadAsReadMutation: 'markThreadRead',
     useIGDMarkThreadAsReadValidationMutation: 'markThreadRead',
     IGDirectTextSendMutation: 'sendText',

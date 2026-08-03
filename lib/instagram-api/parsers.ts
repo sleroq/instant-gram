@@ -7,6 +7,7 @@ import type {
     MessageReaction,
     MessageRequestFolder,
     MutationSuccess,
+    PinThreadResult,
     SetReactionResult,
     InstagramSecondaryGraphqlResult,
     Page,
@@ -819,6 +820,15 @@ export function parsePinnedMessageResponse(json: unknown): {
     const result = objectProp(responseData(json)?.xig_direct_pin_message);
     if (!result) throw new Error('Instagram pin result was not returned');
     return { pinnedMessageIds: pinnedMessageIds(result) };
+}
+
+export function parsePinnedThreadResponse(json: unknown): PinThreadResult {
+    const result = objectProp(responseData(json)?.xig_direct_pin_thread);
+    const threadFbid = stringProp(result?.id);
+    const isPinned = booleanProp(result?.is_pin);
+    if (!result || !threadFbid || isPinned === undefined)
+        throw new Error('Instagram conversation pin receipt was not returned');
+    return { threadFbid, isPinned };
 }
 
 export function parseReelMediaResponse(

@@ -150,6 +150,8 @@ async function mount(scenario: Scenario) {
                 : scenario === 'older-send' || scenario === 'thread-state'
                     ? page(0, 120, undefined, false, true)
                     : page(0, 40, undefined, false, true);
+    let pinned: string[] = [];
+    const pinFailures = new Set<string>();
     const rpc: CompleteUiRpc = {
         getInbox: async () => ({
             ok: true,
@@ -170,8 +172,23 @@ async function mount(scenario: Scenario) {
                 hasNextPage: false,
             },
         }),
-        getPins: async () => ({ pinned: [] }),
-        togglePin: async () => ({ pinned: [] }),
+        getPins: async () => ({ pinned }),
+        togglePin: async payload => {
+            if (scenario === 'thread-state' && payload.threadKey === secondThread.key && !pinFailures.has(payload.threadKey)) {
+                pinFailures.add(payload.threadKey);
+                return { ok: false, error: { message: 'Harness pin failure' } };
+            }
+            pinned = payload.pin
+                ? [payload.threadKey, ...pinned.filter(id => id !== payload.threadKey)]
+                : pinned.filter(id => id !== payload.threadKey);
+            return {
+                ok: true,
+                value: {
+                    pinned,
+                    receipt: { threadFbid: payload.threadFbid, isPinned: payload.pin },
+                },
+            };
+        },
         sendText: payload => {
             if (scenario !== 'mutations' && scenario !== 'older-send' && scenario !== 'thread-state') {
                 return Promise.resolve({ ok: false, error: { message: 'not used' } });

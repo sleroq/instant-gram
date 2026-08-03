@@ -200,6 +200,33 @@ test('reaction handler returns the authoritative captured reaction state', async
     }]);
 });
 
+test('conversation pin handler selects the exact mutation and rejects mismatched receipts', async () => {
+    const calls: Call[] = [];
+    const handlers = createInstagramRpcHandlers(executor({
+        useIGDPinThreadMutation: {
+            data: { xig_direct_pin_thread: { is_pin: true, id: 'thread-fbid' } },
+        },
+        useIGDUnpinThreadMutation: {
+            data: { xig_direct_pin_thread: { is_pin: true, id: 'thread-fbid' } },
+        },
+    }, calls));
+    assert.deepEqual(await handlers.togglePin({
+        threadKey: 'route-key', threadFbid: 'thread-fbid', pin: true,
+    }), {
+        pinned: [],
+        receipt: { threadFbid: 'thread-fbid', isPinned: true },
+    });
+    await assert.rejects(
+        handlers.togglePin({ threadKey: 'route-key', threadFbid: 'thread-fbid', pin: false }),
+        /did not match/,
+    );
+    assert.deepEqual(calls.map(call => call.operation), [
+        'useIGDPinThreadMutation',
+        'useIGDUnpinThreadMutation',
+    ]);
+    assert.deepEqual(calls[0]?.input, { threadFbid: 'thread-fbid' });
+});
+
 test('unread count includes pending and spam bounded pages', async () => {
     const calls: Call[] = [];
     const mailbox = (id: string, hasNextPage: boolean) => ({
@@ -357,7 +384,7 @@ test('every closed catalog operation has a semantic or secondary RPC route', () 
         Object.keys(INSTAGRAM_RPC_OPERATION_REACHABILITY).sort(),
         Object.keys(INSTAGRAM_GRAPHQL_OPERATIONS).sort(),
     );
-    assert.equal(Object.keys(INSTAGRAM_RPC_OPERATION_REACHABILITY).length, 29);
+    assert.equal(Object.keys(INSTAGRAM_RPC_OPERATION_REACHABILITY).length, 31);
     assert.equal(
         INSTAGRAM_RPC_OPERATION_REACHABILITY.IGDirectCutoutStickerShareMutation,
         'sendCutoutSticker',

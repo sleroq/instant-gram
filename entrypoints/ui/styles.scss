@@ -780,6 +780,20 @@ textarea:focus-visible {
     color: var(--color-danger) !important;
 }
 
+.chat-row__pin-error {
+    position: absolute;
+    right: 12px;
+    bottom: 3px;
+    z-index: 1;
+    max-width: 190px;
+    overflow: hidden;
+    color: var(--color-danger);
+    font-size: 10px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    pointer-events: none;
+}
+
 .context-menu::backdrop,
 .reaction-picker::backdrop {
     background: transparent;

@@ -8,11 +8,13 @@ import {
     parseMessageActionsResponse,
     parseMessageRequestsResponse,
     parsePinnedMessageResponse,
+    parsePinnedThreadResponse,
     parseReactionMutationResponse,
     parseSentCutoutStickerResponse,
     parseSentTextResponse,
     parseSecondaryGraphqlResponse,
     parseThreadInfoResponses,
+    parseThread,
     parseThreadResponse,
     parseUnreadCountResponses,
 } from '../../lib/instagram-api/parsers.ts';
@@ -87,6 +89,30 @@ test('current inbox aliases normalize thread flags, folders, and server pins', (
         cursor: 'next-page',
         hasNextPage: true,
     });
+});
+
+test('thread FBID is retained independently from the stable UI key', () => {
+    const parsed = parseThread({
+        thread_key: 'route-key',
+        thread_fbid: 'mutation-fbid',
+        thread_igid: 'different-igid',
+    });
+    assert.equal(parsed?.key, 'route-key');
+    assert.equal(parsed?.threadFbid, 'mutation-fbid');
+});
+
+test('conversation pin receipt requires authoritative id and boolean state', () => {
+    assert.deepEqual(parsePinnedThreadResponse({
+        data: { xig_direct_pin_thread: { is_pin: false, id: 'mutation-fbid' } },
+    }), { threadFbid: 'mutation-fbid', isPinned: false });
+    assert.throws(
+        () => parsePinnedThreadResponse({ data: { xig_direct_pin_thread: { is_pin: 'false', id: 'mutation-fbid' } } }),
+        /receipt was not returned/,
+    );
+    assert.throws(
+        () => parsePinnedThreadResponse({ data: { xig_direct_pin_thread: { is_pin: true } } }),
+        /receipt was not returned/,
+    );
 });
 
 test('thread parsing keeps images, reactions, structured fallbacks, and pin state', () => {

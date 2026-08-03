@@ -1,7 +1,7 @@
 import '../lib/bridge';
 import { defineBackground } from 'wxt/utils/define-background';
 import browser from 'webextension-polyfill';
-import type { RpcMap } from '../lib/domain';
+import type { Result, RpcMap } from '../lib/domain';
 
 type PinStore = { pinned?: string[] };
 
@@ -31,7 +31,8 @@ async function ensureAnchorTab(): Promise<number> {
     return created.id;
 }
 
-type RemoteRpcName = Exclude<keyof RpcMap, 'getPins' | 'togglePin'>;
+type RemoteRpcName = Exclude<keyof RpcMap, 'getPins'>;
+type DirectRemoteRpcName = Exclude<RemoteRpcName, 'togglePin'>;
 type RpcPayload<K extends keyof RpcMap> = Parameters<RpcMap[K]>[0];
 type RpcResult<K extends keyof RpcMap> = Awaited<ReturnType<RpcMap[K]>>;
 
@@ -41,7 +42,8 @@ const REMOTE_RPC_NAMES = [
     'getReelMedia',
     'sendText',
     'setReaction',
-] as const satisfies readonly RemoteRpcName[];
+] as const satisfies readonly DirectRemoteRpcName[];
+let pinQueue: Promise<unknown> = Promise.resolve();
 
 async function routeToAnchor<K extends RemoteRpcName>(
     name: K,
@@ -72,15 +74,24 @@ export default defineBackground(() => {
         onMessage<null, 'getPins'>('getPins', async () => ({
             pinned: await getPinned(),
         }));
-        onMessage<{ threadKey: string }, 'togglePin'>(
+        onMessage<Parameters<RpcMap['togglePin']>[0], 'togglePin'>(
             'togglePin',
-            async ({ data }) => {
-                const pinned = await getPinned();
-                const next = pinned.includes(data.threadKey)
-                    ? pinned.filter(key => key !== data.threadKey)
-                    : [data.threadKey, ...pinned];
-                await browser.storage.local.set({ pinned: next });
-                return { pinned: next };
+            ({ data }) => {
+                const run = pinQueue.then(async (): Promise<Awaited<ReturnType<RpcMap['togglePin']>>> => {
+                    const result = await routeToAnchor('togglePin', data);
+                    if (!result.ok) return result;
+                    const pinned = [...new Set(await getPinned())];
+                    const next = data.pin
+                        ? [data.threadKey, ...pinned.filter(key => key !== data.threadKey)]
+                        : pinned.filter(key => key !== data.threadKey);
+                    await browser.storage.local.set({ pinned: next });
+                    return { ok: true, value: { pinned: next, receipt: result.value.receipt } };
+                }).catch((error): Result<never> => ({
+                    ok: false,
+                    error: { message: error instanceof Error ? error.message : 'Could not update conversation pin' },
+                }));
+                pinQueue = run;
+                return run;
             },
         );
     });

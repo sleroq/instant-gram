@@ -21,13 +21,14 @@ import {
 import type { Result, RpcMap } from '../lib/domain';
 
 type ReelPayload = Parameters<RpcMap['getReelMedia']>[0];
-type RemoteRpcName = Exclude<keyof RpcMap, 'getPins' | 'togglePin'>;
+type RemoteRpcName = Exclude<keyof RpcMap, 'getPins'>;
 const REMOTE_RPC_NAMES = [
     'getInbox',
     'getThread',
     'getReelMedia',
     'sendText',
     'setReaction',
+    'togglePin',
 ] as const satisfies readonly RemoteRpcName[];
 
 type GraphqlRequest = {

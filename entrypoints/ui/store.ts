@@ -64,12 +64,19 @@ export type ReactionMutation = {
     rollbackReactions?: MessageReaction[];
 };
 
+export type PinMutation = {
+    pin: boolean;
+    status: 'pending' | 'error';
+    error?: string;
+};
+
 export type FrontendStoreRpc = UiRpc & Pick<CompleteUiRpc, 'sendText' | 'setReaction'>;
 
 export type FrontendState = {
     inbox: InboxState;
     pinnedIds: string[];
     pinsStatus: Status;
+    pinMutations: Record<string, PinMutation>;
     selectedThreadId?: string;
     histories: Record<string, HistoryState>;
 };
@@ -89,6 +96,7 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
         },
         pinnedIds: [],
         pinsStatus: 'idle',
+        pinMutations: {},
         histories: {},
     };
     const listeners = new Set<() => void>();
@@ -100,6 +108,9 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
     const olderSettledListeners = new Map<string, () => void>();
     const sendRequests = new Map<string, symbol>();
     const reactionRequests = new Map<string, symbol>();
+    const pinRequests = new Map<string, symbol>();
+    const pinMutationOrder = new Map<string, number>();
+    let nextPinMutationOrder = 0;
     const openedThreadIds = new Set<string>();
     let inboxRequest: symbol | undefined;
     let generation = 0;
@@ -200,13 +211,84 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
         try {
             const result = await rpc.getPins();
             if (generation !== requestGeneration) return;
-            state.pinnedIds = [...new Set(result.pinned)];
+            state.pinnedIds = applyPendingPins([...new Set(result.pinned)]);
             state.pinsStatus = 'ready';
         } catch {
             if (generation !== requestGeneration) return;
             state.pinsStatus = 'error';
         }
         emit();
+    }
+
+    function applyPendingPins(base: string[]) {
+        const ids = [...base];
+        const pending = Object.entries(state.pinMutations)
+            .filter(([, mutation]) => mutation.status === 'pending')
+            .sort(([left], [right]) =>
+                (pinMutationOrder.get(left) ?? 0) - (pinMutationOrder.get(right) ?? 0));
+        for (const [threadId, mutation] of pending) {
+            const existing = ids.indexOf(threadId);
+            if (existing >= 0) ids.splice(existing, 1);
+            if (mutation.pin) ids.unshift(threadId);
+        }
+        return ids;
+    }
+
+    async function togglePin(threadId: string) {
+        const thread = state.inbox.byId[threadId];
+        if (!thread?.threadFbid || pinRequests.has(threadId)) return false;
+        const pin = !state.pinnedIds.includes(threadId);
+        const originalIndex = state.pinnedIds.indexOf(threadId);
+        const request = Symbol(threadId);
+        const requestGeneration = generation;
+        pinRequests.set(threadId, request);
+        pinMutationOrder.set(threadId, ++nextPinMutationOrder);
+        state.pinMutations[threadId] = { pin, status: 'pending' };
+        state.pinnedIds = pin
+            ? [threadId, ...state.pinnedIds.filter(id => id !== threadId)]
+            : state.pinnedIds.filter(id => id !== threadId);
+        emit();
+
+        try {
+            const result = await rpc.togglePin({
+                threadKey: threadId,
+                threadFbid: thread.threadFbid,
+                pin,
+            });
+            if (generation !== requestGeneration || pinRequests.get(threadId) !== request)
+                return false;
+            if (!result.ok) throw new Error(result.error.message);
+            if (
+                result.value.receipt.threadFbid !== thread.threadFbid ||
+                result.value.receipt.isPinned !== pin
+            ) throw new Error('Instagram conversation pin receipt did not match the request');
+            delete state.pinMutations[threadId];
+            pinMutationOrder.delete(threadId);
+            state.pinnedIds = applyPendingPins([...new Set(result.value.pinned)]);
+            return true;
+        } catch (error) {
+            if (generation !== requestGeneration || pinRequests.get(threadId) !== request)
+                return false;
+            if (pin) {
+                state.pinnedIds = state.pinnedIds.filter(id => id !== threadId);
+            } else if (!state.pinnedIds.includes(threadId)) {
+                const index = originalIndex < 0
+                    ? state.pinnedIds.length
+                    : Math.min(originalIndex, state.pinnedIds.length);
+                state.pinnedIds.splice(index, 0, threadId);
+            }
+            state.pinMutations[threadId] = {
+                pin,
+                status: 'error',
+                error: errorMessage(error),
+            };
+            return false;
+        } finally {
+            if (generation === requestGeneration && pinRequests.get(threadId) === request) {
+                pinRequests.delete(threadId);
+                emit();
+            }
+        }
     }
 
     async function loadInitialHistory(threadId: string, isPreloading = false) {
@@ -798,6 +880,8 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
             olderSettledListeners.clear();
             sendRequests.clear();
             reactionRequests.clear();
+            pinRequests.clear();
+            pinMutationOrder.clear();
             inboxRequest = undefined;
         },
         loadNextInboxPage() {
@@ -917,6 +1001,7 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
             if (!emoji) return Promise.resolve(false);
             return runReaction(threadId, messageId, emoji);
         },
+        togglePin,
         messageRowKey(threadId: string, messageId: string) {
             return state.histories[threadId]?.rowKeyByMessageId[messageId] ?? messageId;
         },

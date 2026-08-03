@@ -150,6 +150,7 @@ export type SetReactionResult = {
 };
 export type MutationSuccess = { success: true };
 export type PinMessageResult = { pinnedMessageIds: string[] };
+export type PinThreadResult = { threadFbid: string; isPinned: boolean };
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
@@ -267,7 +268,11 @@ export type CoreRpcMap = {
         mediaId?: string;
     }) => Result<ReelMedia>;
     getPins: () => { pinned: string[] };
-    togglePin: (payload: { threadKey: string }) => { pinned: string[] };
+    togglePin: (payload: {
+        threadKey: string;
+        threadFbid: string;
+        pin: boolean;
+    }) => Result<{ pinned: string[]; receipt: PinThreadResult }>;
 };
 
 /** Contracts implemented by the Instagram anchor as DM capabilities land. */
@@ -294,6 +299,11 @@ export type InstagramRpcMap = {
         messageId: string;
         emoji: string;
     }) => Result<SetReactionResult>;
+    togglePin: (payload: {
+        threadKey: string;
+        threadFbid: string;
+        pin: boolean;
+    }) => Result<{ pinned: string[]; receipt: PinThreadResult }>;
     markThreadRead: (payload: {
         threadIgId: string;
         messageId: string;

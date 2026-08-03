@@ -15,7 +15,7 @@ import {
     useState,
 } from '../../vendor/teact/src/teact/teact';
 import type { Message, Thread, User } from '../../lib/domain';
-import type { FrontendStore, HistoryState } from './store';
+import type { FrontendStore, HistoryState, PinMutation } from './store';
 import { hasLocalOlderIds } from './history-window';
 import { computeChatWindow } from './virtual-list';
 
@@ -126,7 +126,9 @@ function ChatList({ store }: AppProps) {
                         index={start + offset}
                         selected={id === state.selectedThreadId}
                         pinned={state.pinnedIds.includes(id)}
+                        pinMutation={state.pinMutations[id]}
                         onSelect={() => store.selectThread(id)}
+                        onTogglePin={() => { void store.togglePin(id); }}
                     />
                 ))}
             </div>
@@ -151,18 +153,23 @@ type ChatRowProps = {
     index: number;
     selected: boolean;
     pinned: boolean;
+    pinMutation?: PinMutation;
     onSelect: () => void;
+    onTogglePin: () => void;
 };
 
-function ChatRow({ thread, index, selected, pinned, onSelect }: ChatRowProps) {
+function ChatRow({
+    thread, index, selected, pinned, pinMutation, onSelect, onTogglePin,
+}: ChatRowProps) {
     const [menuPoint, setMenuPoint] = useState<SurfacePoint>();
     const rowRef = useRef<HTMLButtonElement>(null as unknown as HTMLButtonElement);
-    const longPress = useLongPress(openMenu, !selected);
+    const canPin = Boolean(thread.threadFbid);
+    const longPress = useLongPress(openMenu, canPin);
     const user = thread.users[0];
     const snippet = thread.lastMessage ? messageSummary(thread.lastMessage) : 'No messages yet';
 
     function openMenu(point: SurfacePoint) {
-        if (selected) return;
+        if (!canPin) return;
         setMenuPoint(point);
     }
 
@@ -179,7 +186,7 @@ function ChatRow({ thread, index, selected, pinned, onSelect }: ChatRowProps) {
                     if (!longPress.consumeSyntheticEvent(event)) onSelect();
                 }}
                 onContextMenu={(event: ReactMouseEvent<HTMLButtonElement>) => {
-                    if (selected) return;
+                    if (!canPin) return;
                     event.preventDefault();
                     if (!longPress.consumeSyntheticEvent(event)) {
                         openMenu({ x: event.clientX, y: event.clientY });
@@ -187,7 +194,7 @@ function ChatRow({ thread, index, selected, pinned, onSelect }: ChatRowProps) {
                 }}
                 onKeyDown={(event: KeyboardEvent<HTMLButtonElement>) => {
                     if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return;
-                    if (selected) return;
+                    if (!canPin) return;
                     event.preventDefault();
                     const rect = event.currentTarget.getBoundingClientRect();
                     openMenu({ x: rect.left + 24, y: rect.top + rect.height / 2 });
@@ -197,6 +204,7 @@ function ChatRow({ thread, index, selected, pinned, onSelect }: ChatRowProps) {
                 onPointerUp={longPress.onPointerUp}
                 onPointerCancel={longPress.onPointerCancel}
                 aria-pressed={selected}
+                aria-busy={pinMutation?.status === 'pending'}
                 aria-label={`${thread.title}${thread.isMuted ? ', muted' : ''}${pinned ? ', pinned' : ''}`}
             >
                 <span className="avatar">
@@ -222,6 +230,11 @@ function ChatRow({ thread, index, selected, pinned, onSelect }: ChatRowProps) {
                     </span>
                 </span>
             </button>
+            {pinMutation?.status === 'error' && (
+                <span className="chat-row__pin-error" role="alert">
+                    {pinMutation.error ?? 'Could not update conversation pin'}
+                </span>
+            )}
             {menuPoint && (
                 <ContextMenu
                     label={`Actions for ${thread.title}`}
@@ -229,8 +242,11 @@ function ChatRow({ thread, index, selected, pinned, onSelect }: ChatRowProps) {
                     returnFocusRef={rowRef}
                     onClose={() => setMenuPoint(undefined)}
                     items={[{
-                        label: 'Open conversation',
-                        action: onSelect,
+                        label: (pinMutation?.pin ?? !pinned)
+                            ? 'Pin conversation'
+                            : 'Unpin conversation',
+                        action: onTogglePin,
+                        disabled: pinMutation?.status === 'pending',
                     }]}
                 />
             )}

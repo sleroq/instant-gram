@@ -105,8 +105,21 @@ test('reaction builder matches the HAR-backed mutation variables exactly', () =>
     );
 });
 
+test('conversation pin and unpin use distinct current web documents and exact variables', () => {
+    const pin = operations.useIGDPinThreadMutation;
+    const unpin = operations.useIGDUnpinThreadMutation;
+    assert.deepEqual(
+        [pin.friendlyName, pin.docId, pin.kind, pin.buildVariables({ threadFbid: 'fbid' }, context)],
+        ['useIGDPinThreadMutation', '26491513390471063', 'mutation', { thread_fbid: 'fbid', pin: true }],
+    );
+    assert.deepEqual(
+        [unpin.friendlyName, unpin.docId, unpin.kind, unpin.buildVariables({ threadFbid: 'fbid' }, context)],
+        ['useIGDUnpinThreadMutation', '26719492947719993', 'mutation', { thread_fbid: 'fbid', pin: false }],
+    );
+});
+
 test('catalog is a closed DM allowlist', () => {
-    assert.equal(Object.keys(operations).length, 29);
+    assert.equal(Object.keys(operations).length, 31);
     assert.equal(isInstagramGraphqlOperationName('IGDirectReactionSendMutation'), true);
     for (const shellOperation of [
         'PolarisFeedTimelinePaginationQuery',

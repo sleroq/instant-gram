@@ -194,6 +194,22 @@ export const INSTAGRAM_GRAPHQL_OPERATIONS = {
             should_replace_oldest_pin: input.replaceOldest ?? false,
         }),
     ),
+    useIGDPinThreadMutation: mutation(
+        FRIENDLY_NAMES.pinThread,
+        DOC_IDS.pinThread,
+        (input: { threadFbid: string }) => ({
+            thread_fbid: input.threadFbid,
+            pin: true,
+        }),
+    ),
+    useIGDUnpinThreadMutation: mutation(
+        FRIENDLY_NAMES.unpinThread,
+        DOC_IDS.unpinThread,
+        (input: { threadFbid: string }) => ({
+            thread_fbid: input.threadFbid,
+            pin: false,
+        }),
+    ),
     useIGDMarkThreadAsReadMutation: mutation(
         FRIENDLY_NAMES.markThreadRead,
         DOC_IDS.markThreadRead,
