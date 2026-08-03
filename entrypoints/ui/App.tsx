@@ -980,7 +980,8 @@ function ReactionPicker({
 
     const moveFocus = (event: KeyboardEvent<HTMLDivElement>) => {
         if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-        const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button')];
+        const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];
+        if (!buttons.length) return;
         const currentIndex = buttons.indexOf(document.activeElement as HTMLButtonElement);
         const next = event.key === 'Home'
             ? 0
@@ -990,8 +991,12 @@ function ReactionPicker({
                     ? (currentIndex - 1 + buttons.length) % buttons.length
                     : (currentIndex + 1) % buttons.length;
         event.preventDefault();
-        buttons[next]?.focus();
+        if (currentIndex >= 0) buttons[currentIndex].tabIndex = -1;
+        buttons[next].tabIndex = 0;
+        buttons[next].focus();
     };
+
+    const firstEnabled = busy ? undefined : REACTION_EMOJIS.find(emoji => emoji !== current);
 
     return (
         <div
@@ -1011,6 +1016,7 @@ function ReactionPicker({
                     aria-label={current === emoji ? `${emoji}, current reaction` : `React with ${emoji}`}
                     className={current === emoji ? 'reaction-picker__current' : ''}
                     disabled={busy || current === emoji}
+                    tabIndex={emoji === firstEnabled ? 0 : -1}
                     onClick={() => onChoose(emoji)}
                 >
                     <span aria-hidden="true">{emoji}</span>

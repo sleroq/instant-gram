@@ -519,8 +519,21 @@ test('reply selection, failed-send recovery, and bounded reaction picker are acc
     await currentReaction.waitFor();
     assert.equal(await currentReaction.getAttribute('aria-checked'), 'true');
     assert.equal(await currentReaction.isDisabled(), true);
-    await page.getByRole('menuitemradio', { name: 'React with 👍' }).click();
-    await page.waitForFunction(() => document.querySelector('.reaction-chip--viewer')?.textContent?.includes('👍'));
+    const earlierReaction = page.getByRole('menuitemradio', { name: 'React with ❤' });
+    const laterReaction = page.getByRole('menuitemradio', { name: 'React with 😮' });
+    await earlierReaction.press('ArrowRight');
+    assert.equal(await laterReaction.evaluate(element => element === document.activeElement), true);
+    await laterReaction.press('ArrowLeft');
+    assert.equal(await earlierReaction.evaluate(element => element === document.activeElement), true);
+    await earlierReaction.press('End');
+    assert.equal(await page.getByRole('menuitemradio', { name: 'React with 👍' }).evaluate(
+        element => element === document.activeElement,
+    ), true);
+    await page.getByRole('menuitemradio', { name: 'React with 👍' }).press('Home');
+    assert.equal(await earlierReaction.evaluate(element => element === document.activeElement), true);
+    await earlierReaction.press('ArrowRight');
+    await laterReaction.press('Enter');
+    await page.waitForFunction(() => document.querySelector('.reaction-chip--viewer')?.textContent?.includes('😮'));
 
     await page.evaluate(() => {
         const scroller = document.querySelector<HTMLElement>('.messages')!;
