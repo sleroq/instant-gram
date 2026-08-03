@@ -8,25 +8,25 @@ tags:
     - dm
     - refactor
 created_at: 2026-07-04T16:57:29Z
-updated_at: 2026-07-04T16:57:29Z
+updated_at: 2026-08-03T13:17:24Z
 ---
 
-Large milestone for making the read-only DM client ready for sending, replies, and reactions without bloating App.svelte or the anchor content script.
+Prepare the current TypeScript/Teact DM client for sending, replies, and reactions without expanding `App.tsx` or the Instagram anchor into mutation-specific state machines.
+
+## Verified current state
+
+- The production UI is Teact (`entrypoints/ui/App.tsx` and `store.ts`), not Svelte.
+- The Instagram transport and parsing currently live in `entrypoints/ig-anchor.content.ts`.
+- `lib/domain.ts` and typed RPC are the authoritative shared boundary.
 
 ## Scope
 
-Refactor current read-only Instagram communication and UI state boundaries before adding mutations.
+- Extract only the reusable Instagram GraphQL transport/auth-retry and parser helpers needed to keep mutation additions maintainable; preserve existing read paths.
+- Add mutation-oriented domain/RPC types for send state, replies, and reactions.
+- Add documented send/reaction operation configuration without putting Instagram protocol details in UI components.
+- Keep inbox, bounded history, pins, and share rendering working.
 
-## Checklist
+## Acceptance criteria
 
-- [ ] Split Instagram GraphQL transport/auth retry code out of `entrypoints/ig-anchor.content.ts` into a reusable module.
-- [ ] Move thread/message parsing into a focused parser module with existing behavior preserved.
-- [ ] Add mutation-oriented domain types in `lib/domain.ts` for message status, reply previews, reactions, and RPC payload/results.
-- [ ] Add placeholders/config entries for documented send/reaction friendly names and doc ids.
-- [ ] Move thread cache/update helpers out of `entrypoints/ui/App.svelte` into a local state module.
-- [ ] Keep existing inbox, thread history, reel opening, pinning, and scroll behavior working.
-- [ ] Verify with `npm run check`.
-
-## Notes
-
-Use the existing docs in `docs/instagram-live-communication.md` and preserve the current WXT + Svelte 5 patterns.
+- Mutation features can use typed store actions and RPC without importing Instagram request details into `App.tsx`.
+- Existing read-only flows continue to pass the repository checks.

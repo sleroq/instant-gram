@@ -1,7 +1,7 @@
 ---
 # icr-kphj
 title: Lazy older-message buffer above viewport
-status: in-progress
+status: scrapped
 type: milestone
 priority: high
 tags:
@@ -9,7 +9,7 @@ tags:
     - scroll
     - preload
 created_at: 2026-07-04T17:29:19Z
-updated_at: 2026-07-04T17:41:57Z
+updated_at: 2026-08-03T13:17:24Z
 blocked_by:
     - icr-03bb
 ---
@@ -56,3 +56,9 @@ Acceptance criteria:
 - When a thread has enough history, the app lazily loads about 200 messages above the visible range.
 - User can continue reading while background older-page loads happen with no visible jump.
 - Preload stops cleanly at the oldest page or when switching threads.
+
+
+
+## Disposition (2026-08-03)
+
+Scrapped after codebase review. This describes the removed Svelte/TanStack virtualizer and a 200-message background buffer, neither of which exists nor fits the current Teact architecture. The implemented supported behavior is the normalized 40–80 row history window with one-page lookahead and anchor correction documented in `docs/frontend-architecture.md`. Reply navigation/prefetch is not an active product requirement and should be re-scoped from the current architecture if needed later.

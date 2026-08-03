@@ -8,29 +8,21 @@ tags:
     - dm
     - reactions
 created_at: 2026-07-04T16:58:10Z
-updated_at: 2026-07-04T16:58:10Z
+updated_at: 2026-08-03T13:17:24Z
 blocked_by:
     - icr-9qjx
 ---
 
-Large milestone for structured reactions, emoji selection, and creating/changing reactions from the UI.
+Render structured reactions and let a user create or change one from the current TypeScript/Teact UI.
+
+## Verified current state
+
+`REACTION_LOG_XMAT` history rows are intentionally omitted by the parser and no structured reaction fields, mutation RPC, or message-level reaction UI exists. The documented create/change request is available in `docs/instagram-live-communication.md`; removal still lacks HAR evidence.
 
 ## Scope
 
-Render reactions on messages and support creating/changing reactions with a small emoji picker.
-
-## Checklist
-
-- [ ] Inspect live/HAR message payloads enough to identify structured reaction fields and update parser accordingly.
-- [ ] Add `MessageReaction` domain type and group reactions by emoji for display.
-- [ ] Extract `ReactionBar.svelte` to show grouped emoji counts and whether the viewer reacted.
-- [ ] Add message-level reaction trigger and a fixed first-pass emoji picker: `❤ 😂 😮 😢 😡 👍`.
-- [ ] Add `sendReaction({ threadKey, messageId, emoji })` to `RpcMap`, background routing, and anchor content script handlers.
-- [ ] Implement `IGDirectReactionSendMutation` using doc id `24374451552236906` with `reaction_status: "created"`.
-- [ ] Optimistically update local reactions and rollback or refresh on failure.
-- [ ] Do not implement reaction removal until a HAR/live sample confirms the correct request shape.
-- [ ] Verify with `npm run check` and manual reaction QA.
-
-## Notes
-
-Existing `reaction_log` messages can remain as activity logs until structured reactions are reliable; avoid using them as the source of truth for bubble reactions.
+- Inspect a live/HAR payload for structured reaction fields and extend `Message` parsing/domain types.
+- Render grouped emoji counts and viewer state in Teact message rows.
+- Add an accessible message action and small fixed emoji picker (`❤ 😂 😮 😢 😡 👍`).
+- Route `sendReaction({ threadKey, messageId, emoji })` through domain, UI RPC, background, and anchor using the documented create/change mutation.
+- Optimistically update local state and reconcile failure. Do not implement removal without a confirmed request shape.

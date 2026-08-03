@@ -1,7 +1,7 @@
 ---
 # icr-pdaz
 title: scrollToMessage API for reply navigation
-status: in-progress
+status: scrapped
 type: milestone
 priority: high
 tags:
@@ -9,7 +9,7 @@ tags:
     - scroll
     - replies
 created_at: 2026-07-04T17:29:45Z
-updated_at: 2026-07-04T17:54:51Z
+updated_at: 2026-08-03T13:17:25Z
 blocked_by:
     - icr-kphj
 ---
@@ -60,3 +60,9 @@ Acceptance criteria:
 - Calling scrollToMessage for a loaded message centers or reveals it smoothly.
 - Calling scrollToMessage for an unloaded older message loads pages until found and then navigates without buggy teleports.
 - Passive preparation for reply targets can run without moving the user's viewport.
+
+
+
+## Disposition (2026-08-03)
+
+Scrapped after codebase review. This describes the removed Svelte/TanStack virtualizer and a 200-message background buffer, neither of which exists nor fits the current Teact architecture. The implemented supported behavior is the normalized 40–80 row history window with one-page lookahead and anchor correction documented in `docs/frontend-architecture.md`. Reply navigation/prefetch is not an active product requirement and should be re-scoped from the current architecture if needed later.

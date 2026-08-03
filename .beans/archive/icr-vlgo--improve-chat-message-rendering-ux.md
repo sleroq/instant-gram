@@ -1,7 +1,7 @@
 ---
 # icr-vlgo
 title: Improve chat message rendering UX
-status: done
+status: completed
 type: task
 priority: normal
 tags:
@@ -10,7 +10,7 @@ tags:
     - reels
     - replies
 created_at: 2026-07-04T16:59:26Z
-updated_at: 2026-07-04T17:50:39Z
+updated_at: 2026-08-03T13:17:50Z
 ---
 
 Consolidate related message rendering UX improvements into one task.

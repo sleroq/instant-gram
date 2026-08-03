@@ -1,7 +1,7 @@
 ---
 # icr-b6uv
 title: Teact message history and infinite scroll
-status: done
+status: completed
 type: milestone
 priority: high
 tags:
@@ -9,7 +9,7 @@ tags:
     - frontend
     - virtualization
 created_at: 2026-08-02T23:19:32Z
-updated_at: 2026-08-03T00:00:00Z
+updated_at: 2026-08-03T13:17:50Z
 ---
 
 Implement Milestone 2 in docs/frontend-rewrite-plan.md from the reviewed Milestone 1 baseline.
