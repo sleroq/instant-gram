@@ -464,9 +464,9 @@ checking this runtime.
    `useLayoutEffect`.
 5. For list corruption, verify unique direct-child IDs and ensure fragments are
    absent under `teactFastList`.
-6. Use browser DOM/performance tools for component behavior. The current Node
-   tests exercise pure store/window behavior; there is no component DOM harness
-   yet.
+6. Use browser DOM/performance tools for component behavior. Node tests exercise
+   store/window behavior, and the focused Vite+Playwright harness mounts the
+   production App for history sentinel and anchor regressions.
 
 Run the repository checks after frontend changes:
 
@@ -497,6 +497,6 @@ git diff --check
    and honor reduced motion.
 7. Add a focused pure test when changing state merging, cursor gating,
    generation handling, ordering, or window boundaries. DOM anchor behavior
-   requires a browser-level regression once that harness exists.
+   requires a browser-level regression in the focused Vite+Playwright harness.
 8. Run the four checks above and manually exercise `/ui.html` in the extension
    for DOM, focus, scroll, and network timing behavior.

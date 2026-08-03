@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { Page, Result, Thread, ThreadMessages } from '../../lib/domain.ts';
+import type { Message, Page, Result, Thread, ThreadMessages } from '../../lib/domain.ts';
 import type { UiRpc } from './rpc.ts';
 import { createFrontendStore } from './store.ts';
 import { computeChatWindow } from './virtual-list.ts';
@@ -173,6 +173,49 @@ test('stored pins are deduplicated before ordering', async () => {
     store.destroy();
 });
 
+test('older history deduplicates overlaps, stays bounded, and preloads once', async () => {
+    installWindowTimers();
+    const calls: Array<{ threadKey: string; cursor?: string }> = [];
+    let resolveVisible!: (result: Result<ThreadMessages>) => void;
+    let resolvePreload!: (result: Result<ThreadMessages>) => void;
+    const rpc = fakeRpc(async () => ({
+        ok: true,
+        value: { items: [thread('a')], hasNextPage: false },
+    }), payload => {
+        calls.push(payload);
+        if (!payload.cursor) return Promise.resolve(historyPage(40, 60, 'c1', true));
+        return new Promise(resolve => {
+            if (payload.cursor === 'c1') resolveVisible = resolve;
+            else resolvePreload = resolve;
+        });
+    });
+    const store = createFrontendStore(rpc);
+
+    store.start();
+    await settle();
+    store.selectThread('a');
+    await settle();
+    store.revealOlderHistory('a');
+    store.revealOlderHistory('a');
+    assert.deepEqual(calls.map(call => call.cursor), [undefined, 'c1']);
+
+    resolveVisible(historyPage(20, 41, 'c2', true));
+    await settle();
+    await settle();
+    assert.deepEqual(calls.map(call => call.cursor), [undefined, 'c1', 'c2']);
+    store.revealOlderHistory('a', true);
+    assert.deepEqual(store.state.histories.a.viewportIds, messageIds(20, 60));
+
+    resolvePreload(historyPage(0, 21, undefined, false));
+    await settle();
+    const history = store.state.histories.a;
+    assert.deepEqual(history.listedIds, messageIds(0, 60));
+    assert.deepEqual(history.viewportIds, messageIds(20, 60));
+    assert.equal(history.viewportIds.length <= 80, true);
+    assert.equal(calls.length, 3);
+    store.destroy();
+});
+
 function fakeRpc(
     getInbox: UiRpc['getInbox'],
     getThread: UiRpc['getThread'] = async () => emptyHistory(),
@@ -205,6 +248,33 @@ function thread(key: string): Thread {
         serverIsPin: false,
         users: [],
     };
+}
+
+function historyPage(
+    start: number,
+    end: number,
+    cursor: string | undefined,
+    hasNextPage: boolean,
+): Result<ThreadMessages> {
+    return {
+        ok: true,
+        value: {
+            items: messageIds(start, end).map((id, index): Message => ({
+                kind: 'text',
+                id,
+                senderId: 'sender',
+                ts: start + index,
+                text: id,
+            })),
+            cursor,
+            hasNextPage,
+            viewerId: 'viewer',
+        },
+    };
+}
+
+function messageIds(start: number, end: number) {
+    return Array.from({ length: end - start }, (_, index) => `m${start + index}`);
 }
 
 async function settle() {

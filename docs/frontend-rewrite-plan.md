@@ -1,6 +1,6 @@
 # Frontend MVP rewrite plan
 
-Status: Milestone 1 complete and reviewed; Milestone 2 ready for implementation
+Status: Milestones 1 and 2 complete
 
 Telegram reference: [`Ajaxy/telegram-tt@a323b1f`](https://github.com/Ajaxy/telegram-tt/tree/a323b1f29f5b91e9a32b8c14866234e925fb0bfa)
 
@@ -112,7 +112,7 @@ Milestone 1 is implemented in `entrypoints/ui/` and was independently reviewed a
 - `main.tsx` mounts one application-scoped store through the vendored Teact runtime.
 - `store.ts` already owns normalized inbox/history entities, cursor pagination, explicit retries, request-generation guards, pin deduplication, selection, one-time initial history loading, and the two-chat warmup budget.
 - `virtual-list.ts` provides the bounded 25-row chat window with three rows of overscan on each side. Keep chat-list geometry independent from variable-height history geometry.
-- `App.tsx` contains the current shell, virtualized chat list, and temporary one-page `MessagePane`. Milestone 2 should replace only the message-pane implementation, not rewrite the shell or inbox path.
+- `App.tsx` contains the current shell, virtualized chat list, and bounded `MessagePane`. Milestone 2 replaced only the message-pane implementation without rewriting the shell or inbox path.
 - `rpc.ts` is the typed frontend transport. Older history must call `getThread({ threadKey: thread.cursor ?? thread.key, cursor: history.cursor })`; do not confuse the stable thread request key with the page cursor.
 - `vendor/teact/` is pinned MIT code with local modifications documented in its README. Teact already exports `useLayoutEffect`, `useRef`, and `memo`, which are sufficient for anchor correction and bounded message rendering. Do not add React as a runtime.
 - `HistoryState.isPreloading` currently means an initial page is being warmed from the chat list. Do not overload it for older-page lookahead; add distinct `isLoadingOlder` and `isPreloadingOlder` state in Milestone 2.
@@ -154,7 +154,7 @@ Milestone 1 verification at handoff: typecheck passed, 8 state/window tests pass
 - A page cursor is never requested twice concurrently, and duplicate thread IDs do not render.
 - Selecting an already cached chat starts no duplicate initial-history request.
 
-## Milestone 2 — Bounded history, preloading, and stable infinite scroll (next)
+## Milestone 2 — Bounded history, preloading, and stable infinite scroll (complete)
 
 ### Deliverables
 
