@@ -474,6 +474,15 @@ export function parseInboxResponse(json: unknown): Page<Thread> {
     return parseThreads(mailbox?.threads_by_folder);
 }
 
+/** Interop messaging FBID required by Slide mailbox pagination. */
+export function parseMailboxId(json: unknown): string | undefined {
+    const data = responseData(json);
+    const mailbox =
+        objectProp(data?.get_slide_mailbox_for_iris_subscription) ??
+        objectProp(data?.fetch__SlideMailbox);
+    return stringProp(mailbox?.id);
+}
+
 export function parseMessageRequestsResponse(
     json: unknown,
     folder: MessageRequestFolder,

@@ -11,6 +11,7 @@ import {
     parseInboxResponse,
     parseMarkThreadReadResponse,
     parseMarkThreadReadValidationResponse,
+    parseMailboxId,
     parseMessageActionsResponse,
     parseMessageRequestsResponse,
     parsePinnedMessageResponse,
@@ -225,6 +226,16 @@ export function createInstagramRpcHandlers(
     } = {},
 ): RemoteHandlers {
     const now = options.now ?? Date.now;
+    let mailboxId: string | undefined;
+
+    async function requireMailboxId(): Promise<string> {
+        if (mailboxId) return mailboxId;
+        const json = await execute('PolarisDirectInboxQuery', {});
+        mailboxId = parseMailboxId(json);
+        if (!mailboxId)
+            throw new Error('Instagram inbox did not return a messaging mailbox ID');
+        return mailboxId;
+    }
 
     return {
         async getInbox(value: unknown) {
@@ -237,8 +248,10 @@ export function createInstagramRpcHandlers(
                       cursor: nextCursor,
                       folder: 'INBOX',
                       newerThanTimestampMs: null,
+                      mailboxId: await requireMailboxId(),
                   })
                 : await execute('PolarisDirectInboxQuery', {});
+            mailboxId = parseMailboxId(json) ?? mailboxId;
             return parseInboxResponse(json);
         },
         async getThread(value: unknown) {
@@ -270,10 +283,12 @@ export function createInstagramRpcHandlers(
                       cursor: nextCursor,
                       folder: folder === 'REQUESTS' ? 'PENDING' : 'JUNK',
                       newerThanTimestampMs: null,
+                      mailboxId: await requireMailboxId(),
                   })
                 : await execute('PolarisDirectMessageRequestQuery', {
                       thirtyDaysAgoTimestampMs: String(now() - 30 * 24 * 60 * 60 * 1_000),
                   });
+            mailboxId = parseMailboxId(json) ?? mailboxId;
             return parseMessageRequestsResponse(json, folder);
         },
         async getThreadInfo(value: unknown) {

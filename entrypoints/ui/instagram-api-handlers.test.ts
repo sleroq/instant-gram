@@ -92,6 +92,17 @@ test('semantic handlers dispatch to the catalog with exact caller-supplied send 
                         },
                     },
                 },
+                PolarisDirectInboxQuery: {
+                    data: {
+                        get_slide_mailbox_for_iris_subscription: {
+                            id: 'mailbox-viewer',
+                            threads_by_folder: {
+                                edges: [],
+                                page_info: { has_next_page: false },
+                            },
+                        },
+                    },
+                },
             },
             calls,
         ),
@@ -138,12 +149,17 @@ test('semantic handlers dispatch to the catalog with exact caller-supplied send 
             },
         },
         {
+            operation: 'PolarisDirectInboxQuery',
+            input: {},
+        },
+        {
             operation: 'IGDThreadListOffMsysPaginationQuery',
             input: {
                 count: 5,
                 cursor: 'next',
                 folder: 'JUNK',
                 newerThanTimestampMs: null,
+                mailboxId: 'mailbox-viewer',
             },
         },
     ]);

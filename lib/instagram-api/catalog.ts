@@ -87,12 +87,13 @@ export const INSTAGRAM_GRAPHQL_OPERATIONS = {
             cursor: string;
             folder: 'INBOX' | 'PENDING' | 'JUNK';
             newerThanTimestampMs: string | null;
-        }, context) => ({
+            mailboxId: string;
+        }) => ({
             count: input.count,
             cursor: input.cursor,
             folder: input.folder,
             newer_than_timestamp_ms: input.newerThanTimestampMs,
-            id: context.viewerId,
+            id: input.mailboxId,
             ...listFlags,
         }),
     ),
