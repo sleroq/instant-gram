@@ -30,7 +30,7 @@ The frontend calls the background through the contracts in [`lib/domain.ts`](../
 getInbox({ cursor? }): Result<Page<Thread>>
 getThread({ threadKey, cursor? }): Result<ThreadMessages>
 getPins(): { pinned: string[] }
-togglePin({ threadKey }): { pinned: string[] }
+togglePin({ threadKey, threadFbid, pin }): Result<{ pinned, receipt }>
 ```
 
 Important Instagram semantics:

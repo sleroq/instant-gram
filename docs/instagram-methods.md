@@ -1,6 +1,6 @@
 # Instagram DM MVP methods
 
-Source captures: `examples/www.instagram.com.har`, `examples/www.instagram.com-the-second.har`. Values below omit live auth tokens; use the current page's harvested `fb_dtsg`, `lsd`, `jazoest`, `csrftoken`, `device_id_for_iris_subscription`, and viewer FBID. All rows except `getReelMedia` are HAR-backed; `getReelMedia` is carried over from the plan because the HARs contain reel-share XMA data but not the video lookup request. See `instagram-har-useful-requests.md` for copyable request examples.
+Source captures: `examples/www.instagram.com.har`, `examples/www.instagram.com-the-second.har`. Values below omit live auth tokens; use the current page's harvested `fb_dtsg`, `lsd`, `jazoest`, `csrftoken`, `device_id_for_iris_subscription`, and viewer FBID. Read methods are HAR-backed; conversation pin/unpin uses the dated live evidence recorded below. `getReelMedia` is carried over from the plan because the HARs contain reel-share XMA data but not the video lookup request. See `instagram-har-useful-requests.md` for copyable request examples.
 
 ## Common request shape
 
@@ -18,6 +18,8 @@ Source captures: `examples/www.instagram.com.har`, `examples/www.instagram.com-t
 | `getThread`        |                `IGDThreadDetailQuery` | `27852254574460474` | `{ thread_fbid, __relay_internal__pv__IGDEnableOffMsysChatThemesQErelayprovider:false, __relay_internal__pv__IGDInitialMessagePageCountrelayprovider:20, __relay_internal__pv__PolarisAIGMAccountLabelEnabledrelayprovider:false }`                                                                                                                                                                  | `data.get_slide_thread_nullable.as_ig_direct_thread.slide_messages` |
 | `getOlderMessages` |          `IGDMessageListOffMsysQuery` | `25255103937520139` | `{ after:end_cursor, before:null, first:20, last:null, newer_than_message_id:null, older_than_message_id:null, id:thread_fbid, __relay_internal__pv__IGDInitialMessagePageCountrelayprovider:20 }`                                                                                                                                                                                                   | `data.fetch__SlideThread.as_ig_direct_thread.slide_messages`        |
 | `getReelMedia`     | `PolarisPostActionLoadPostQueryQuery` |  `8845758582119845` | `{ shortcode, fetch_tagged_user_count:null, hoisted_comment_id:null, hoisted_reply_id:null }` to `/graphql/query`                                                                                                                                                                                                                                                                                    | `data.xdt_shortcode_media.video_url`                                |
+| `pinThread`        |             `useIGDPinThreadMutation` | `26491513390471063` | `{ thread_fbid, pin:true }`                                                                                                                                                                                                                                                                                                                                                                         | `data.xig_direct_pin_thread.{ is_pin, id }`                         |
+| `unpinThread`      |           `useIGDUnpinThreadMutation` | `26719492947719993` | `{ thread_fbid, pin:false }`                                                                                                                                                                                                                                                                                                                                                                        | `data.xig_direct_pin_thread.{ is_pin, id }`                         |
 
 ## Parser notes
 
@@ -26,3 +28,14 @@ Source captures: `examples/www.instagram.com.har`, `examples/www.instagram.com-t
 - Text messages are `content_type: 'TEXT'` with `content.__typename: 'SlideMessageText'` and `text_body`.
 - Reel/post shares are `content_type: 'MESSAGE_INLINE_SHARE'` with `content.__typename: 'SlideMessageXMAContent'`; reel shares have `content.xma.__typename: 'SlideMessagePortraitXMA'`, `target_url` like `/reel/<shortcode>/...`, and `preview_image.url` for the thumbnail. Some shares are `SlideMessageStandardXMA` posts or `SlideMessagePlaceholderXMA` unavailable content.
 - Replies are embedded as `replied_to_message`; they can contain the same text/XMA shapes as normal messages.
+
+## Live private-protocol evidence
+
+Conversation pinning was reverified on 2026-08-03 from current Instagram Web
+bundle `https://static.cdninstagram.com/rsrc.php/v4iZaf4/yY/l/en_US-j/mm1DRbFIyVy.js`
+and reversible live traffic. It is distinct from message pinning. The mutation
+identifier is `XFBIGDirectViewerThread.thread_fbid`, which can differ from the
+normalized route/key. These are private persisted-query document IDs and may
+drift when Instagram deploys a new bundle; update catalog fixtures from fresh,
+reversible evidence rather than adding a fallback operation or embedding auth
+data. No server pin-count limit was inferred because the evidence did not prove one.

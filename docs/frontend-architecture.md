@@ -35,7 +35,7 @@ getInbox({ cursor? }): Result<Page<Thread>>
 getThread({ threadKey, cursor? }): Result<ThreadMessages>
 getReelMedia({ shortcode, mediaId? }): Result<ReelMedia>
 getPins(): { pinned: string[] }
-togglePin({ threadKey }): { pinned: string[] }
+togglePin({ threadKey, threadFbid, pin }): Result<{ pinned, receipt }>
 sendText({ threadFbid, text, replyToMessageId?, offlineThreadingId }): Result<SentTextMessage>
 setReaction({ threadFbid, messageId, emoji }): Result<SetReactionResult>
 ```
@@ -46,10 +46,10 @@ requires only `sendText` and `setReaction`. `rpc.ts` sends each message to
 `background`; it does not interpret results. Keep the discriminated `Result<T>`
 check in actions at the store boundary.
 
-The extension bridge is a closed capability list. Only the two mutation RPCs
+The extension bridge is a closed capability list. Only the three mutation RPCs
 above are routed through UI, background, and content script; the broader
 Instagram operation catalog (including generic GraphQL execution, read markers,
-server pins, and richer sends) is not exposed to UI code. The content-script
+message pins, and richer sends) is not exposed to UI code. The content-script
 anchor executes catalog descriptors and converts thrown request/decoder errors
 to `Result` failures. Text success requires both server message ID and timestamp;
 reaction success requires the matching target ID and the complete authoritative
@@ -165,8 +165,13 @@ Pins load independently from inbox. `loadPins` deduplicates persisted IDs with a
 2. emits loaded pinned IDs in persisted pin order;
 3. emits inbox IDs not in that pinned set, preserving server order.
 
-The current UI displays pin state but does not invoke `togglePin`. `Thread.serverIsPin`
-is domain metadata and is not substituted for extension `pinnedIds`.
+Conversation pin/unpin is store-owned and optimistic. It uses the normalized
+`Thread.threadFbid` operation identifier retained separately from `Thread.key`
+(never substituting the route/key), serializes
+durable updates in the background, and reconciles only a matching authoritative
+`{ id, is_pin }` receipt. Per-thread flights are deduplicated; failures roll back
+the optimistic order and remain visible on the row. `Thread.serverIsPin` is read
+metadata and is not substituted for persisted `pinnedIds`.
 
 ### Selection and initial history
 
@@ -239,6 +244,9 @@ remain gated until `retryOlderHistory(id)` explicitly clears that cursor.
   Local optimistic messages cannot be reaction targets. A history read that
   overlaps a pending reaction refreshes the rollback baseline while retaining
   the viewer's optimistic choice.
+- `pinRequests` permits one conversation pin mutation per thread. The background
+  serializes storage commits so persisted prepend order follows invocation order;
+  other pending optimistic pins are replayed over each authoritative list.
 - Every request captures the store `generation` and its unique symbol. Result,
   error, and `finally` mutation occur only when both still match.
 - `destroy()` increments `generation`, clears listeners/request registries and
@@ -292,9 +300,10 @@ the thread identity so transient state cannot survive a switch between histories
 that happen to contain the same message ID; optimistic/server reconciliation
 within one thread still uses `rowKeyByMessageId` unchanged.
 
-Menus expose only capabilities already owned by this frontend. An unselected chat
-row offers open/select; a selected row leaves native pointer and keyboard context
-menus untouched rather than presenting an empty or disabled custom surface. A
+Menus expose only capabilities already owned by this frontend. Selected and
+unselected chat rows offer Pin conversation or Unpin conversation by right click,
+Context Menu/Shift+F10, or movement-cancelled touch hold. Pending actions are
+disabled and mutation failures are announced on the affected row. A
 loaded server message offers reply and create/change reaction;
 and a failed local send offers retry/remove. The reaction picker marks the
 viewer's current choice and serializes through the existing store action. It
