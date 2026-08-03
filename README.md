@@ -3,6 +3,32 @@
 A Chromium extension for using Instagram direct messages and reels in a
 focused client.
 
+## How it works
+
+The add-on uses your existing Instagram web session. It does not ask for or
+store your password. When opened, it finds an Instagram tab—or creates an
+inactive one—and uses it to communicate with Instagram.
+
+```text
+╭──────────────╮     ╭────────────╮     ╭───────────────╮
+│ Extension UI │────▶│ Background │────▶│ Instagram tab │
+╰──────▲───────╯     ╰────────────╯     ╰───────┬───────╯
+       │                                        │
+       │ parsed messages                        ▼
+       ╰─────────────────────────────── Instagram APIs
+```
+
+### Data pipeline
+
+1. The UI asks the background worker for conversations, messages, or reel data.
+2. The worker forwards the request to a content script in the Instagram tab.
+3. The content script uses your logged-in session to call Instagram's APIs.
+4. Responses are validated, converted into stable app data, and sent to the UI.
+5. The UI caches data by ID and renders only the visible inbox and message rows.
+
+Pinned conversations are stored locally by the extension. If your Instagram
+session expires, sign in or refresh Instagram and retry.
+
 ## Install
 
 1. Download the Chrome ZIP from the latest [GitHub release](../../releases/latest).
