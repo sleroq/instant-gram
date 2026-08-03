@@ -3,6 +3,10 @@ import { defineContentScript } from 'wxt/utils/define-content-script';
 import { DOC_IDS, FRIENDLY_NAMES } from '../lib/config';
 import { getErrorMessage } from '../lib/errors';
 import {
+    parseThreadActivityMs,
+    parseTimestampMs,
+} from '../lib/instagram-timestamps';
+import {
     clearTokenCache,
     harvestTokens,
     startAuthProbeListener,
@@ -150,9 +154,8 @@ function messageId(node: Record<string, unknown>): string {
 }
 function messageTs(node: Record<string, unknown>): number {
     for (const value of [node.timestamp_ms, node.timestamp]) {
-        if (typeof value === 'number') return value;
-        if (typeof value === 'string' && /^\d+$/.test(value))
-            return Number(value);
+        const timestamp = parseTimestampMs(value);
+        if (timestamp !== undefined) return timestamp;
     }
     return 0;
 }
@@ -464,12 +467,7 @@ function parseThread(value: unknown): Thread | undefined {
             typeof thread.folder === 'string' && thread.folder.length > 0
                 ? (thread.folder as Folder)
                 : 'PRIMARY',
-        lastActivityMs:
-            typeof thread.last_activity_at_ms === 'number'
-                ? thread.last_activity_at_ms
-                : typeof thread.last_activity_ms === 'number'
-                  ? thread.last_activity_ms
-                  : 0,
+        lastActivityMs: parseThreadActivityMs(thread),
         serverIsPin: Boolean(thread.is_pin),
         users,
         lastMessage,
