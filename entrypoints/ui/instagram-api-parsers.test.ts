@@ -382,6 +382,35 @@ test('inline-share aliases normalize detailed cards and incomplete media to frie
     }
 });
 
+test('reel shares normalize captured XMA preview geometry before reel media loads', () => {
+    const message = parseMessage({
+        message_id: 'reel-with-geometry',
+        sender_fbid: 'sender',
+        timestamp_ms: '1000',
+        content_type: 'MESSAGE_INLINE_SHARE',
+        content: { xma: {
+            target_url: 'https://www.instagram.com/reel/ABC/',
+            target_id: '3953224267254190889_123',
+            title_text: 'alice',
+            preview_image: {
+                url: 'https://cdn.example/reel.jpg',
+                width: 1080,
+                height: 1440,
+            },
+        } },
+    });
+    assert.equal(message?.kind, 'reel_share');
+    assert.deepEqual(message?.kind === 'reel_share' ? {
+        mediaId: message.mediaId,
+        previewWidth: message.previewWidth,
+        previewHeight: message.previewHeight,
+    } : undefined, {
+        mediaId: '3953224267254190889',
+        previewWidth: 1080,
+        previewHeight: 1440,
+    });
+});
+
 test('attachment-less photos and future types retain safe normalized diagnostics', () => {
     const photo = parseMessage({ message_id: 'photo', content_type: 'IMAGES', content: {} });
     assert.equal(photo?.kind, 'unsupported');
@@ -770,6 +799,7 @@ test('reel info represents captured video variants and complete carousel media',
         product_type: 'carousel_container',
         carousel_media: [{
             pk: 'slide-video', video_duration: 5,
+            original_width: 1080, original_height: 1920,
             video_versions: [
                 { url: 'https://cdn.example/video-low.mp4', type: 101, width: 360, height: 640 },
                 { url: 'https://cdn.example/video-high.mp4', type: 102, width: 720, height: 1280 },
@@ -779,6 +809,9 @@ test('reel info represents captured video variants and complete carousel media',
         }, {
             pk: 'slide-image',
             image_versions2: { candidates: [{ url: 'https://cdn.example/image.jpg', width: 1080, height: 1080 }] },
+        }, {
+            pk: 'slide-landscape', original_width: 1920, original_height: 1080,
+            image_versions2: { candidates: [{ url: 'https://cdn.example/landscape.jpg', width: 960, height: 540 }] },
         }],
     }] }, { shortcode: 'ABC' });
 
@@ -787,7 +820,10 @@ test('reel info represents captured video variants and complete carousel media',
         id: 'owner-1', username: 'alice', fullName: 'Alice',
         picUrl: 'https://cdn.example/avatar.jpg', isVerified: true,
     });
-    assert.deepEqual(parsed.items.map(item => item.kind), ['video', 'image']);
+    assert.deepEqual(parsed.items.map(item => item.kind), ['video', 'image', 'image']);
+    assert.deepEqual(parsed.items.map(item => [item.width, item.height]), [
+        [1080, 1920], [1080, 1080], [1920, 1080],
+    ]);
     assert.equal(parsed.items[0]?.posterUrl, 'https://cdn.example/poster.jpg');
     assert.equal(parsed.items[0]?.kind === 'video' && parsed.items[0].videoUrl,
         'https://cdn.example/video-high.mp4');
@@ -798,6 +834,21 @@ test('reel info represents captured video variants and complete carousel media',
     assert.equal(parsed.hasLiked, true);
     assert.equal(parsed.hasSaved, true);
     assert.equal(parsed.canDownload, true);
+
+    const incompleteOriginal = parseReelInfoResponse({ items: [{
+        ...base,
+        media_type: 1,
+        product_type: 'feed',
+        original_width: 2_000,
+        image_versions2: { candidates: [{
+            url: 'https://cdn.example/fallback-landscape.jpg', width: 640, height: 360,
+        }] },
+    }] }, { shortcode: 'ABC' });
+    assert.deepEqual(
+        [incompleteOriginal.items[0].width, incompleteOriginal.items[0].height],
+        [640, 360],
+        'dimensions must come from one complete source pair',
+    );
 });
 
 test('reel identities and complete mixed carousels are required end to end', () => {
@@ -840,7 +891,7 @@ test('reel identities and complete mixed carousels are required end to end', () 
         ...media,
         media_type: 1,
         product_type: 'feed',
-        image_versions2: { candidates: [{ url: 'https://cdn/parent.jpg' }] },
+        image_versions2: { candidates: [{ url: 'https://cdn/parent.jpg', width: 1080, height: 1080 }] },
     };
     for (const carousel_media of [[], [{
         image_versions2: { candidates: [{ url: 'https://cdn/not-a-slide.jpg' }] },

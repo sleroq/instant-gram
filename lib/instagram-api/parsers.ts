@@ -90,6 +90,18 @@ function xmaThumb(xma: JsonObject | undefined): string | undefined {
     return imageUrl(xma?.preview_image) ?? imageUrl(xma?.xmaPreviewImage);
 }
 
+function positiveDimension(value: unknown): number | undefined {
+    const dimension = numberProp(value);
+    return dimension !== undefined && dimension > 0 ? dimension : undefined;
+}
+
+function xmaPreviewDimensions(xma: JsonObject): { width: number; height: number } | undefined {
+    const image = objectProp(xma.preview_image) ?? objectProp(xma.xmaPreviewImage);
+    const width = positiveDimension(image?.width);
+    const height = positiveDimension(image?.height);
+    return width !== undefined && height !== undefined ? { width, height } : undefined;
+}
+
 function messageId(node: JsonObject): string {
     return (
         stringProp(node.message_id) ??
@@ -321,7 +333,8 @@ export function parseMessage(value: unknown): Message | undefined {
         const title = xmaTitle(xma) ?? 'Instagram share';
         const subtitle = xmaSubtitle(xma, content);
         const shortcode = targetUrl ? reelShortcode(targetUrl) : undefined;
-        if (targetUrl && shortcode && thumbUrl)
+        if (targetUrl && shortcode && thumbUrl) {
+            const previewDimensions = xmaPreviewDimensions(xma);
             return {
                 ...common,
                 kind: 'reel_share',
@@ -329,9 +342,12 @@ export function parseMessage(value: unknown): Message | undefined {
                 mediaId: reelMediaId(xma, targetUrl),
                 targetUrl,
                 thumbUrl,
+                previewWidth: previewDimensions?.width,
+                previewHeight: previewDimensions?.height,
                 author: title,
                 caption: subtitle,
             };
+        }
         if (thumbUrl)
             return {
                 ...common,
@@ -917,8 +933,18 @@ function reelItem(
         });
     const videoUrl = stringProp(versions[0]?.url) ?? stringProp(node.video_url);
     const id = stringProp(node.pk) ?? stringProp(node.id) ?? fallbackId;
-    const width = numberProp(versions[0]?.width) ?? image?.width;
-    const height = numberProp(versions[0]?.height) ?? image?.height;
+    const dimensionPairs = [
+        [node.original_width, node.original_height],
+        [node.width, node.height],
+        [versions[0]?.width, versions[0]?.height],
+        [image?.width, image?.height],
+    ] as const;
+    const dimensions = dimensionPairs.map(([rawWidth, rawHeight]) => ({
+        width: positiveDimension(rawWidth),
+        height: positiveDimension(rawHeight),
+    })).find(pair => pair.width !== undefined && pair.height !== undefined);
+    if (!dimensions?.width || !dimensions.height) return undefined;
+    const { width, height } = dimensions;
     if (videoUrl) return {
         id,
         kind: 'video',

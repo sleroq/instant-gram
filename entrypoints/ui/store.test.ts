@@ -639,6 +639,7 @@ test('visible reply prefetch is serialized, bounded, and reused by priority navi
     resolveOlder(historyPage(60, 80, 'c2', true));
     assert.equal(await navigation, true);
     assert.equal(store.state.histories.a.replyReturnStack.at(-1), 'm119');
+    assert.deepEqual(calls, [undefined, 'c1', 'c2']);
     store.destroy();
 });
 
@@ -1142,6 +1143,8 @@ test('reactions are server-only, per-thread single-flight, authoritative, and ro
     store.selectThread('b');
     await settle();
     const order = [...store.state.inbox.orderedIds];
+    assert.equal(await store.setReaction('a', 'same', '❤'), false);
+    assert.equal(reactionCalls.length, 0);
     const aFlight = store.setReaction('a', 'same', '😂');
     const duplicate = await store.setReaction('a', 'same', '😮');
     const bFlight = store.setReaction('b', 'same', '👍');
@@ -1330,6 +1333,7 @@ test('reel shares preload with a bounded deduped cache while comments and mutati
                     videoUrl: 'https://cdn.example/video.mp4',
                     variants: [{ url: 'https://cdn.example/video.mp4' }],
                     posterUrl: 'https://cdn.example/poster.jpg', durationSec: 5,
+                    width: 720, height: 1280,
                     canDownload: true,
                 }],
                 likeCount: 4,
@@ -1782,6 +1786,8 @@ function reelMedia(shortcode: string, id: string, url: string) {
             videoUrl: url,
             variants: [{ url }],
             posterUrl: url,
+            width: 720,
+            height: 1280,
             durationSec: 1,
             canDownload: true,
             downloadUrl: url,

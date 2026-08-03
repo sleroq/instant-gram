@@ -836,6 +836,8 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
         if (history.pendingSends[messageId] || history.failedSends[messageId] || messageId.startsWith('local:')) {
             return false;
         }
+        if (message.reactions?.some(reaction =>
+            reaction.senderId === viewerId && reaction.reaction === emoji)) return false;
         const previous = message.reactions ? [...message.reactions] : undefined;
         const optimistic: MessageReaction[] = [
             ...(message.reactions ?? []).filter(reaction => reaction.senderId !== viewerId),
@@ -1156,12 +1158,28 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
         }
     }
 
+    function resumeReplyPrefetchQueueAfterRender() {
+        const requestGeneration = generation;
+        if (typeof window.requestAnimationFrame !== 'function') {
+            void drainReplyPrefetchQueue();
+            return;
+        }
+        window.requestAnimationFrame(() => {
+            if (generation === requestGeneration) void drainReplyPrefetchQueue();
+        });
+    }
+
     function prefetchReplyTargets(threadId: string, targetIds: string[]) {
         const history = state.histories[threadId];
         if (!history || history.status !== 'ready' || state.selectedThreadId !== threadId) return;
         const uniqueTargets = [...new Set(targetIds.filter(Boolean))];
         const visibleKey = `${threadId}\u0000${uniqueTargets.join('\u0000')}`;
-        if (visibleKey === visibleReplyPrefetchKey) return;
+        if (visibleKey === visibleReplyPrefetchKey) {
+            // Explicit navigation only pauses the queue. A post-navigation DOM
+            // scan with unchanged targets resumes any still-relevant work.
+            void drainReplyPrefetchQueue();
+            return;
+        }
         visibleReplyPrefetchKey = visibleKey;
         const intent = ++replyPrefetchIntent;
         replyPrefetchQueue.length = 0;
@@ -1191,10 +1209,6 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
         const request = Symbol(`reply-navigation:${threadId}`);
         const navigationRequestId = ++nextReplyNavigationRequestId;
         const requestGeneration = generation;
-        visibleReplyPrefetchKey = '';
-        replyPrefetchIntent++;
-        replyPrefetchQueue.length = 0;
-        queuedReplyPrefetches.clear();
         replyNavigationRequests.set(threadId, request);
         history.replyNavigation = {
             requestId: navigationRequestId,
@@ -1231,7 +1245,7 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
                 ) history.replyReturnStack.push(returnId);
                 replyNavigationRequests.delete(threadId);
                 emit();
-                void drainReplyPrefetchQueue();
+                resumeReplyPrefetchQueueAfterRender();
                 return true;
             }
             if (!history.hasOlder || !history.cursor) {
@@ -1244,7 +1258,7 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
                 };
                 replyNavigationRequests.delete(threadId);
                 emit();
-                void drainReplyPrefetchQueue();
+                resumeReplyPrefetchQueueAfterRender();
                 return false;
             }
             const beforeCount = history.listedIds.length;
@@ -1286,7 +1300,7 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
                 history.error = undefined;
                 replyNavigationRequests.delete(threadId);
                 emit();
-                void drainReplyPrefetchQueue();
+                resumeReplyPrefetchQueueAfterRender();
                 return false;
             }
         }

@@ -55,6 +55,8 @@ export type Message = MessageMetadata &
               mediaId?: string;
               targetUrl: string;
               thumbUrl: string;
+              previewWidth?: number;
+              previewHeight?: number;
               author: string;
               caption?: string;
           })
@@ -100,8 +102,8 @@ export type Thread = {
 };
 export type ReelMediaItem = {
     id: string;
-    width?: number;
-    height?: number;
+    width: number;
+    height: number;
     posterUrl: string;
     canDownload: boolean;
     downloadUrl?: string;

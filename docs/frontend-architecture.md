@@ -236,8 +236,14 @@ shortcode cache and open one modal over the application shell; the shell becomes
 inert and hidden from assistive technology until close, background scrolling is
 locked, focus is contained, and close by button, backdrop, or Escape restores the
 invoking preview. The modal owns only presentation state (the stable carousel
-index and native media element state). Author, comments, mutation state, and
-ordered media remain store-owned. Comments therefore appear only after open and
+index and native media element state). The application root retains a small
+session-only playback record keyed by shortcode and media-item ID: current time
+plus explicit user-paused intent. Closing or changing slides snapshots time;
+metadata readiness restores it. A new video autoplays, while a video explicitly
+paused by the user remains paused when revisited. Each carousel video therefore
+has independent progress without becoming a second media/entity cache. Author,
+comments, mutation state, and ordered media remain store-owned. Comments
+therefore appear only after open and
 retain the store's explicit retry path. Modal image/video decode or CDN failures
 retain cached media and metadata, show an accessible retry over the current
 carousel item, and force the existing store-owned single-flight refresh. The
@@ -247,8 +253,11 @@ active.
 
 The independently implemented player uses native media decoding beneath custom
 play, mute/volume, seek, time, and fullscreen controls. While a modal video is
-already playing, holding Space temporarily uses 2× playback and restores 1× on
-keyup, blur, pause, slide replacement, or modal teardown; it never toggles play.
+already playing, holding Space for 250ms temporarily uses 2× playback and restores
+the pre-hold rate on keyup, blur, pause, slide replacement, or modal teardown; it
+never toggles play. Releasing Space before that threshold is a tap and toggles
+play/pause exactly once. Cancelling a pending tap through blur or teardown does
+not toggle playback.
 Comma and period move a paused video by one frame. Instagram's current reel
 contract exposes duration but no frame rate, so the UI uses a documented 1/30s
 fallback. Editable targets keep their native keys. Carousel arrows and Left/Right
@@ -260,7 +269,20 @@ change restores current time, playing/paused intent, volume, mute, and playback
 rate after replacement metadata loads. Variant selection is presentation state,
 not another media cache.
 
-Inline previews reuse the first cached reel item and reserve a 9:16 box. A video
+Inline previews reuse the first cached reel item and reserve its normalized
+source dimensions; while that cache is warming they use the normalized XMA
+preview dimensions when Instagram supplies them. The media box is capped at
+360px high without cropping or changing its ratio. Item dimensions are required
+at the reel parser boundary (original media dimensions first, then the selected
+video/poster candidate), including every carousel child. Modal stages remain
+fixed to the available viewport; stage container units fit each item's
+dimension-derived box against both available axes before `contain` fitting, so
+portrait, square, and landscape slides preserve ratio without resizing the
+comments column. The first cached item is also an explicit memoized-row prop:
+asynchronous preload completion invalidates only its reel-bearing message row
+instead of leaving the XMA dimensions/source mounted indefinitely.
+Any cache-arrival geometry correction stays under the existing history
+`ResizeObserver` anchor contract rather than media load handlers. A video
 is activated only after a playable media event and while intersecting or within
 160px of the message scrollport; it is muted/looped and pauses when outside that
 range. A direct geometry check backs the observer on playable and scroll events,
@@ -337,7 +359,10 @@ failures remain retryable alerts.
 `isPositioned` is acknowledged by the pane only after that DOM operation. Older
 sentinel reveal is paused between the ready viewport replacement and this
 acknowledgement, preventing a still-visible top sentinel from replacing a return
-target before it can be teleported and focused.
+target before it can be teleported and focused. Click-only loading, progress,
+retry, and completion announcements are siblings of the message scrollport,
+positioned against the conversation viewport; they never enter scroll content or
+participate in row, anchor, or scroll-height measurement.
 
 Visible or near-visible actionable previews report only their current target IDs
 to the store. A global queue retains at most four targets including the active
@@ -349,9 +374,12 @@ Changing the visible target set or selected thread invalidates queued work and
 prevents an obsolete task from starting another page; an already in-flight page
 may still normalize. User navigation pauses queue draining, joins an in-flight
 prefetch for its thread, and takes ownership after that page settles, continuing
-without a page budget or duplicate cursor call. This bounds actual request work,
-not only queue memory, without inventing a second message cache or an Instagram
-range-query contract.
+without a page budget or duplicate cursor call. The pane attaches its observer
+and immediately scans committed preview geometry rather than waiting for the
+observer's asynchronous first delivery. Explicit navigation retains the latest
+visible-target queue while paused and resumes still-relevant missing targets
+after it settles. This bounds actual request work, not only queue memory, without
+inventing a second message cache or an Instagram range-query contract.
 
 A successful A→B reply navigation appends A to the history-owned return stack;
 failed, stale, duplicate-top, and self navigation do not. The down-arrow control
@@ -525,6 +553,21 @@ dialog-like surfaces suppress these bindings. Context-menu pin actions restore
 the invoking row after reordering only while the originating selection and focus
 intent remain current; focus/pane/thread changes, row teardown, and newer intent
 cancel the queued animation frames.
+
+On a keyboard-focused history row, Enter activates only an existing rendered
+shared-post action: a `reel_share` uses the same internal reel-preview button,
+while an `inline_share` with its parser-provided `targetUrl` uses the same
+`target="_blank"` link. Plain text, images without an action, activity, and
+unsupported rows do nothing; the UI neither derives nor invents Instagram URLs.
+Plain Space on a reaction-capable server row applies `❤`, the first established
+reaction-picker choice. The row and store both treat an existing viewer `❤` as
+a safe no-op, and a pending mutation remains single-flight. The row reads the
+current normalized mutation and reaction synchronously: only a newly accepted
+reaction prevents Space scrolling, while pending and already-default no-ops do
+not. Editors, modifier chords, nested links/buttons, contextual surfaces, and
+dialogs retain their native keys. These actions use the normalized current
+message ID and existing stable row-key bridge, so pane focus survives thread
+reuse without creating parallel selection or mutation state.
 
 Menus expose only capabilities already owned by this frontend. Selected and
 unselected chat rows offer Pin conversation or Unpin conversation by right click,

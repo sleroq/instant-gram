@@ -112,12 +112,76 @@ test('image messages render with reserved geometry and a useful inbox summary', 
     await page.close();
 });
 
+test('delayed reel metadata updates inline ratio without moving the history anchor', async () => {
+    const page = await openHarness({ width: 900, height: 700 });
+    await page.evaluate(() => window.historyHarness.mount('reel-delayed'));
+    const previewMedia = page.locator('.message-reel-preview__media');
+    await previewMedia.waitFor();
+    const anchor = page.locator('[data-message-id="m30"]');
+    await anchor.scrollIntoViewIfNeeded();
+    await anchor.focus();
+    const before = await page.evaluate(() => {
+        const scroller = document.querySelector<HTMLElement>('.messages')!;
+        const anchorRow = document.querySelector<HTMLElement>('[data-message-id="m30"]')!;
+        const preview = document.querySelector<HTMLElement>('.message-reel-preview__media')!;
+        return {
+            anchorTop: anchorRow.getBoundingClientRect().top,
+            ratio: preview.getBoundingClientRect().width / preview.getBoundingClientRect().height,
+            viewportIds: window.historyHarness.historyState('thread').viewportIds,
+            calls: window.historyHarness.calls(),
+            rows: document.querySelectorAll('[data-message-id]').length,
+        };
+    });
+    assert.ok(Math.abs(before.ratio - 1 / 2) < 0.01);
+
+    await page.evaluate(() => window.historyHarness.resolveReelMedia());
+    await page.waitForFunction(() => {
+        const media = document.querySelector<HTMLElement>('.message-reel-preview__media');
+        return media?.querySelector('video') && media.getBoundingClientRect().width / media.getBoundingClientRect().height > 1.7;
+    });
+    await page.waitForTimeout(100);
+    const after = await page.evaluate(() => {
+        const anchorRow = document.querySelector<HTMLElement>('[data-message-id="m30"]')!;
+        const preview = document.querySelector<HTMLElement>('.message-reel-preview__media')!;
+        return {
+            anchorTop: anchorRow.getBoundingClientRect().top,
+            ratio: preview.getBoundingClientRect().width / preview.getBoundingClientRect().height,
+            source: preview.querySelector('video')?.getAttribute('src'),
+            focusedId: document.activeElement?.closest<HTMLElement>('[data-message-id]')?.dataset.messageId,
+            viewportIds: window.historyHarness.historyState('thread').viewportIds,
+            calls: window.historyHarness.calls(),
+            rows: document.querySelectorAll('[data-message-id]').length,
+        };
+    });
+    assert.ok(Math.abs(after.ratio - 16 / 9) < 0.01);
+    assert.match(after.source ?? '', /^data:video\/mp4/);
+    assert.ok(Math.abs(after.anchorTop - before.anchorTop) < 1);
+    assert.equal(after.focusedId, 'm30');
+    assert.deepEqual(after.viewportIds, before.viewportIds);
+    assert.deepEqual(after.calls, before.calls);
+    assert.ok(after.rows <= 80);
+    await page.close();
+});
+
 test('reel preview and modal own playback, carousel, actions, comments, links, and focus', async () => {
     const page = await openHarness({ width: 1100, height: 760 });
     await page.evaluate(() => window.historyHarness.mount('reel'));
     const preview = page.getByRole('button', { name: 'Open reel from reel_author' });
     await preview.waitFor();
     assert.equal(await page.locator('[data-message-id="reel-message"] a[href*="/reel/"]').count(), 0);
+    const inlineGeometry = await page.locator('.message-reel-preview__media').evaluate(element => {
+        const rect = element.getBoundingClientRect();
+        const video = element.querySelector('video')!;
+        return {
+            ratio: rect.width / rect.height,
+            width: video.getAttribute('width'),
+            height: video.getAttribute('height'),
+        };
+    });
+    assert.ok(Math.abs(inlineGeometry.ratio - 9 / 16) < 0.01);
+    assert.deepEqual({ width: inlineGeometry.width, height: inlineGeometry.height }, {
+        width: '540', height: '960',
+    });
 
     const inlinePlayback = await page.locator('.message-reel-preview video').evaluate(async video => {
         const playback = { plays: 0, pauses: 0 };
@@ -125,9 +189,19 @@ test('reel preview and modal own playback, carousel, actions, comments, links, a
         Object.defineProperty(HTMLMediaElement.prototype, 'pause', { configurable: true, value: () => { playback.pauses++; } });
         video.scrollIntoView({ block: 'center' });
         await new Promise(resolve => setTimeout(resolve, 350));
+        const scroller = video.closest('.messages')!;
+        const beforeLoad = {
+            scrollTop: scroller.scrollTop,
+            top: video.getBoundingClientRect().top,
+            height: video.getBoundingClientRect().height,
+        };
         video.dispatchEvent(new Event('canplay'));
         await new Promise(resolve => setTimeout(resolve, 200));
-        const scroller = video.closest('.messages')!;
+        const afterLoad = {
+            scrollTop: scroller.scrollTop,
+            top: video.getBoundingClientRect().top,
+            height: video.getBoundingClientRect().height,
+        };
         scroller.scrollTop = scroller.scrollHeight;
         await new Promise(resolve => setTimeout(resolve, 80));
         const afterVisible = { ...playback };
@@ -137,11 +211,15 @@ test('reel preview and modal own playback, carousel, actions, comments, links, a
         await new Promise(resolve => setTimeout(resolve, 350));
         const afterHidden = { ...playback };
         row.style.display = '';
-        return { afterVisible, afterHidden };
+        return { beforeLoad, afterLoad, afterVisible, afterHidden };
     });
+    assert.ok(Math.abs(inlinePlayback.afterLoad.scrollTop - inlinePlayback.beforeLoad.scrollTop) < 1);
+    assert.ok(Math.abs(inlinePlayback.afterLoad.top - inlinePlayback.beforeLoad.top) < 1);
+    assert.ok(Math.abs(inlinePlayback.afterLoad.height - inlinePlayback.beforeLoad.height) < 1);
     assert.ok(inlinePlayback.afterVisible.plays > 0, `visible loaded preview did not autoplay: ${JSON.stringify(inlinePlayback)}`);
     assert.ok(inlinePlayback.afterHidden.pauses > inlinePlayback.afterVisible.pauses, 'hidden preview did not pause');
 
+    const historyScrollBeforeModal = await page.locator('.messages').evaluate(element => element.scrollTop);
     await preview.click();
     const dialog = page.getByRole('dialog', { name: 'Reel by Reel Author' });
     await dialog.waitFor();
@@ -168,6 +246,8 @@ test('reel preview and modal own playback, carousel, actions, comments, links, a
     assert.equal(await page.getByRole('button', { name: 'Unsave reel' }).getAttribute('aria-pressed'), 'true');
 
     const modalVideo = page.locator('.reel-stage video');
+    const portraitRect = await page.locator('.reel-media').boundingBox();
+    assert.ok(portraitRect && Math.abs(portraitRect.width / portraitRect.height - 9 / 16) < 0.01);
     await modalVideo.evaluate(video => {
         Object.defineProperty(video, 'paused', { configurable: true, get: () => false });
         Object.defineProperty(video, 'duration', { configurable: true, value: 10 });
@@ -194,6 +274,7 @@ test('reel preview and modal own playback, carousel, actions, comments, links, a
     await modalVideo.evaluate(video => { (video as HTMLVideoElement).playbackRate = 1; });
 
     await page.keyboard.down('Space');
+    await page.waitForTimeout(275);
     assert.equal(await modalVideo.evaluate(video => (video as HTMLVideoElement).playbackRate), 2);
     await page.evaluate(() => window.dispatchEvent(new Event('blur')));
     assert.equal(await modalVideo.evaluate(video => (video as HTMLVideoElement).playbackRate), 1);
@@ -228,15 +309,23 @@ test('reel preview and modal own playback, carousel, actions, comments, links, a
     const oldVideo = await modalVideo.elementHandle();
     await page.keyboard.down('Space');
     await page.keyboard.press('ArrowRight');
-    await page.waitForFunction(() => document.querySelector('.reel-stage')?.getAttribute('aria-label') === 'Slide 2 of 2');
+    await page.waitForFunction(() => document.querySelector('.reel-stage')?.getAttribute('aria-label') === 'Slide 2 of 4');
     assert.equal(await oldVideo!.evaluate(video => (video as HTMLVideoElement).playbackRate), 1);
     await page.keyboard.up('Space');
     assert.equal(await page.locator('.reel-stage img[alt="Reel image"]').count(), 1);
+    const squareRect = await page.locator('.reel-media').boundingBox();
+    assert.ok(squareRect && Math.abs(squareRect.width / squareRect.height - 1) < 0.01);
     assert.equal(await download.getAttribute('href'), 'https://cdn.example/image.jpg');
+    await page.keyboard.press('ArrowRight');
+    await page.waitForFunction(() => document.querySelector('.reel-stage')?.getAttribute('aria-label') === 'Slide 3 of 4');
+    const landscapeRect = await page.locator('.reel-media').boundingBox();
+    assert.ok(landscapeRect && Math.abs(landscapeRect.width / landscapeRect.height - 16 / 9) < 0.01);
+    await page.keyboard.press('ArrowLeft');
     await page.keyboard.press('ArrowLeft');
     await page.getByRole('button', { name: 'Close reel' }).click();
     await dialog.waitFor({ state: 'detached' });
     await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Open reel from reel_author');
+    assert.equal(await page.locator('.messages').evaluate(element => element.scrollTop), historyScrollBeforeModal);
 
     await preview.click();
     await dialog.waitFor();
@@ -257,6 +346,173 @@ test('reel preview and modal own playback, carousel, actions, comments, links, a
     });
     await dialog.waitFor({ state: 'detached' });
     await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Open reel from reel_author');
+    await page.close();
+});
+
+test('short landscape reel modal contains every native ratio and keeps controls reachable', async () => {
+    const page = await openHarness({ width: 700, height: 480 });
+    await page.evaluate(() => window.historyHarness.mount('reel'));
+    await page.getByRole('button', { name: 'Open reel from reel_author' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Reel by Reel Author' });
+    await dialog.waitFor();
+
+    const assertContained = async (ratio: number) => {
+        const geometry = await page.evaluate(() => {
+            const dialogElement = document.querySelector<HTMLElement>('.reel-modal__dialog')!;
+            const stage = document.querySelector<HTMLElement>('.reel-stage')!;
+            const media = document.querySelector<HTMLElement>('.reel-media')!;
+            const dialogRect = dialogElement.getBoundingClientRect();
+            const stageRect = stage.getBoundingClientRect();
+            const mediaRect = media.getBoundingClientRect();
+            return {
+                dialogRect: { top: dialogRect.top, left: dialogRect.left, right: dialogRect.right, bottom: dialogRect.bottom },
+                stageRect: { top: stageRect.top, left: stageRect.left, right: stageRect.right, bottom: stageRect.bottom },
+                mediaRect: { top: mediaRect.top, left: mediaRect.left, right: mediaRect.right, bottom: mediaRect.bottom, width: mediaRect.width, height: mediaRect.height },
+                viewport: { width: innerWidth, height: innerHeight },
+                pageOverflows: document.documentElement.scrollWidth > innerWidth || document.documentElement.scrollHeight > innerHeight,
+                dialogOverflowsX: dialogElement.scrollWidth > dialogElement.clientWidth,
+            };
+        });
+        assert.ok(
+            Math.abs(geometry.mediaRect.width / geometry.mediaRect.height - ratio) < 0.01,
+            `unexpected media geometry: ${JSON.stringify({ ratio, geometry })}`,
+        );
+        assert.ok(geometry.mediaRect.left >= geometry.stageRect.left - 0.5);
+        assert.ok(geometry.mediaRect.right <= geometry.stageRect.right + 0.5);
+        assert.ok(geometry.mediaRect.top >= geometry.stageRect.top - 0.5);
+        assert.ok(geometry.mediaRect.bottom <= geometry.stageRect.bottom + 0.5);
+        assert.ok(geometry.dialogRect.left >= 0 && geometry.dialogRect.top >= 0);
+        assert.ok(geometry.dialogRect.right <= geometry.viewport.width && geometry.dialogRect.bottom <= geometry.viewport.height);
+        assert.equal(geometry.pageOverflows, false);
+        assert.equal(geometry.dialogOverflowsX, false);
+    };
+
+    await assertContained(9 / 16);
+    assert.equal(await page.getByRole('slider', { name: 'Seek reel' }).count(), 1);
+    await page.getByRole('button', { name: 'Next slide' }).click();
+    await page.waitForFunction(() => document.querySelector('.reel-stage')?.getAttribute('aria-label') === 'Slide 2 of 4');
+    await assertContained(1);
+    await page.getByRole('button', { name: 'Next slide' }).click();
+    await page.waitForFunction(() => document.querySelector('.reel-stage')?.getAttribute('aria-label') === 'Slide 3 of 4');
+    await assertContained(16 / 9);
+    await page.getByRole('button', { name: 'Like reel' }).scrollIntoViewIfNeeded();
+    assert.equal(await page.getByRole('button', { name: 'Like reel' }).isVisible(), true);
+    await page.close();
+});
+
+test('reel playback remembers each video and separates Space taps from holds', async () => {
+    const page = await openHarness({ width: 1100, height: 760 });
+    await page.evaluate(() => {
+        Object.defineProperty(HTMLMediaElement.prototype, 'paused', {
+            configurable: true,
+            get() { return (this as HTMLElement).dataset.testPaused !== 'false'; },
+        });
+        Object.defineProperty(HTMLMediaElement.prototype, 'play', {
+            configurable: true,
+            value(this: HTMLMediaElement) {
+                this.dataset.testPaused = 'false';
+                this.dataset.playCalls = String(Number(this.dataset.playCalls ?? 0) + 1);
+                this.dispatchEvent(new Event('play'));
+                return Promise.resolve();
+            },
+        });
+        Object.defineProperty(HTMLMediaElement.prototype, 'pause', {
+            configurable: true,
+            value(this: HTMLMediaElement) {
+                this.dataset.testPaused = 'true';
+                this.dataset.pauseCalls = String(Number(this.dataset.pauseCalls ?? 0) + 1);
+                this.dispatchEvent(new Event('pause'));
+            },
+        });
+        window.historyHarness.mount('reel');
+    });
+
+    const preview = page.getByRole('button', { name: 'Open reel from reel_author' });
+    const dialog = page.getByRole('dialog', { name: 'Reel by Reel Author' });
+    await preview.click();
+    await dialog.waitFor();
+    let video = page.locator('.reel-stage video');
+    await page.waitForTimeout(50);
+    await video.dispatchEvent('loadedmetadata');
+    assert.equal(await video.getAttribute('data-play-calls'), '1', 'a new video should autoplay');
+
+    const mute = page.getByRole('button', { name: 'Mute reel' });
+    assert.equal(await mute.locator('svg').count(), 1);
+    assert.equal((await mute.textContent())?.trim(), '', 'mute control should use an icon, not a text substitute');
+
+    await video.evaluate(element => {
+        (element as HTMLVideoElement).currentTime = 4.25;
+        element.dispatchEvent(new Event('timeupdate'));
+    });
+    await page.keyboard.press('Space');
+    assert.equal(await video.getAttribute('data-pause-calls'), '1', 'a Space tap should pause');
+    await page.getByRole('button', { name: 'Close reel' }).click();
+    await dialog.waitFor({ state: 'detached' });
+
+    await preview.click();
+    await dialog.waitFor();
+    video = page.locator('.reel-stage video');
+    await page.waitForTimeout(50);
+    await video.dispatchEvent('loadedmetadata');
+    assert.equal(await video.getAttribute('data-play-calls'), null, 'a user-paused video should not autoplay on reopen');
+    assert.ok(Math.abs(await video.evaluate(element => (element as HTMLVideoElement).currentTime) - 4.25) < 0.01);
+
+    await page.keyboard.press('Space');
+    assert.equal(await video.getAttribute('data-play-calls'), '1', 'a Space tap should resume');
+    await video.evaluate(element => { (element as HTMLVideoElement).playbackRate = 1.5; });
+    const callsBeforeHold = await video.evaluate(element => ({
+        plays: element.getAttribute('data-play-calls'),
+        pauses: element.getAttribute('data-pause-calls'),
+    }));
+    await page.keyboard.down('Space');
+    await page.waitForTimeout(275);
+    assert.equal(await video.evaluate(element => (element as HTMLVideoElement).playbackRate), 2);
+    await page.keyboard.up('Space');
+    assert.equal(await video.evaluate(element => (element as HTMLVideoElement).playbackRate), 1.5);
+    assert.deepEqual(await video.evaluate(element => ({
+        plays: element.getAttribute('data-play-calls'),
+        pauses: element.getAttribute('data-pause-calls'),
+    })), callsBeforeHold, 'a Space hold must not also toggle playback');
+
+    await page.keyboard.down('Space');
+    await page.waitForTimeout(275);
+    await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+    assert.equal(await video.evaluate(element => (element as HTMLVideoElement).playbackRate), 1.5);
+    await page.keyboard.up('Space');
+    assert.deepEqual(await video.evaluate(element => ({
+        plays: element.getAttribute('data-play-calls'),
+        pauses: element.getAttribute('data-pause-calls'),
+    })), callsBeforeHold, 'blur cleanup must not turn a hold into a tap');
+
+    await video.evaluate(element => {
+        (element as HTMLVideoElement).currentTime = 6.5;
+        element.dispatchEvent(new Event('timeupdate'));
+    });
+    await page.getByRole('button', { name: 'Next slide' }).click();
+    await page.getByRole('button', { name: 'Next slide' }).click();
+    await page.getByRole('button', { name: 'Next slide' }).click();
+    await page.waitForFunction(() => document.querySelector('.reel-stage')?.getAttribute('aria-label') === 'Slide 4 of 4');
+    video = page.locator('.reel-stage video');
+    await video.dispatchEvent('loadedmetadata');
+    assert.equal(await video.getAttribute('data-play-calls'), '1', 'a distinct carousel video should autoplay independently');
+    assert.ok(Math.abs(await video.evaluate(element => (element as HTMLVideoElement).currentTime)) < 0.01);
+    await video.evaluate(element => {
+        (element as HTMLVideoElement).currentTime = 2.75;
+        element.dispatchEvent(new Event('timeupdate'));
+    });
+
+    await page.getByRole('button', { name: 'Previous slide' }).click();
+    await page.getByRole('button', { name: 'Previous slide' }).click();
+    await page.getByRole('button', { name: 'Previous slide' }).click();
+    video = page.locator('.reel-stage video');
+    await video.dispatchEvent('loadedmetadata');
+    assert.ok(Math.abs(await video.evaluate(element => (element as HTMLVideoElement).currentTime) - 6.5) < 0.01);
+    await page.getByRole('button', { name: 'Next slide' }).click();
+    await page.getByRole('button', { name: 'Next slide' }).click();
+    await page.getByRole('button', { name: 'Next slide' }).click();
+    video = page.locator('.reel-stage video');
+    await video.dispatchEvent('loadedmetadata');
+    assert.ok(Math.abs(await video.evaluate(element => (element as HTMLVideoElement).currentTime) - 2.75) < 0.01);
     await page.close();
 });
 
@@ -856,6 +1112,8 @@ test('reply preview supports keyboard activation and rerenders an explicit retry
         });
         return window.historyHarness.mount('reply-navigation-retry');
     });
+    await page.waitForTimeout(50);
+    await page.evaluate(() => window.historyHarness.showReplyPreview());
     await page.getByRole('button', { name: replyName }).press('Enter');
     const failure = page.getByRole('alert').filter({ hasText: 'Harness reply failure' });
     await failure.waitFor();
@@ -902,6 +1160,50 @@ test('visible reply prefetch is reused while click progress and icon return stay
         (await page.evaluate(() => window.historyHarness.historyState('thread'))).replyReturnStack,
         [],
     );
+    await page.close();
+});
+
+test('reply geometry prefetch paints onscreen click progress and resumes after focus', async () => {
+    const page = await openHarness({ width: 900, height: 520 });
+    await page.evaluate(() => {
+        Object.defineProperty(window, 'IntersectionObserver', {
+            configurable: true,
+            value: class {
+                observe() {}
+                unobserve() {}
+                disconnect() {}
+            },
+        });
+        return window.historyHarness.mount('reply-navigation-prefetch-resume');
+    });
+    const reply = page.getByRole('button', {
+        name: 'Go to original message: Original message 65',
+    });
+    await reply.waitFor();
+
+    // The scenario moves the ordinary sentinel out of range and this observer
+    // never calls back, so c1 can only originate in the immediate reply scan.
+    await page.waitForFunction(() => window.historyHarness.calls().includes('c1'));
+    assert.deepEqual(await page.evaluate(() => window.historyHarness.calls()), [undefined, 'c1']);
+    await reply.click();
+
+    const pending = page.getByRole('status').filter({ hasText: 'Loading original message' });
+    await pending.waitFor();
+    assert.equal(await pending.evaluate(element => {
+        const status = element.getBoundingClientRect();
+        const viewport = document.querySelector<HTMLElement>('.messages')!.getBoundingClientRect();
+        return status.width > 0 && status.height > 0 &&
+            status.right > viewport.left && status.left < viewport.right &&
+            status.bottom > viewport.top && status.top < viewport.bottom;
+    }), true);
+    assert.deepEqual(await page.evaluate(() => window.historyHarness.calls()), [undefined, 'c1']);
+
+    await page.evaluate(() => window.historyHarness.resolveVisible());
+    await page.waitForFunction(() => document.activeElement?.getAttribute('data-message-id') === 'm65');
+    await page.waitForFunction(() => window.historyHarness.calls().includes('c2'));
+    assert.ok(await page.locator('[data-message-id]').count() <= 80);
+    assert.deepEqual(await page.evaluate(() => window.historyHarness.calls()), [undefined, 'c1', 'c2']);
+    await page.evaluate(() => window.historyHarness.resolveVisible());
     await page.close();
 });
 
@@ -1073,6 +1375,156 @@ test('Vim keys navigate chats and bounded history, preserve thread focus, and re
     assert.equal(await menu.count(), 1);
     assert.equal(await page.evaluate(() => window.historyHarness.historyState('thread').selected), 'thread');
     await page.keyboard.press('Escape');
+    await page.close();
+});
+
+test('focused message Enter opens only an existing share action and Space leaves one default reaction', async () => {
+    const page = await openHarness();
+    await page.evaluate(() => window.historyHarness.mount('keyboard-actions'));
+    const initialViewport = await page.evaluate(() =>
+        window.historyHarness.historyState('thread').viewportIds);
+
+    const text = page.locator('[data-message-id="keyboard-text"]');
+    await text.focus();
+    await page.evaluate(() => {
+        (window as typeof window & { shareActivations?: string[] }).shareActivations = [];
+        const link = document.querySelector<HTMLAnchorElement>('[data-message-id="keyboard-post"] a');
+        if (link) link.onclick = event => {
+            event.preventDefault();
+            (window as typeof window & { shareActivations: string[] }).shareActivations.push(link.href);
+        };
+    });
+    await page.keyboard.press('j');
+    assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement)?.dataset.messageId), 'keyboard-post');
+    await page.keyboard.press('Enter');
+    assert.deepEqual(
+        await page.evaluate(() => (window as typeof window & { shareActivations: string[] }).shareActivations),
+        ['https://www.instagram.com/p/existing-post/'],
+    );
+    await text.focus();
+    assert.equal(await text.evaluate(row => row.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Enter', bubbles: true, cancelable: true,
+    }))), true);
+    assert.equal(await page.evaluate(() =>
+        (window as typeof window & { shareActivations: string[] }).shareActivations.length), 1);
+
+    const target = page.locator('[data-message-id="keyboard-target"]');
+    await target.focus();
+    const firstSpaceAllowed = await target.evaluate(row => row.dispatchEvent(new KeyboardEvent('keydown', {
+        key: ' ', code: 'Space', bubbles: true, cancelable: true,
+    })));
+    assert.equal(firstSpaceAllowed, false, 'a handled Space must prevent page scrolling');
+    assert.deepEqual(await page.evaluate(() => window.historyHarness.reactionCalls()), [{
+        threadFbid: '1001', messageId: 'keyboard-target', emoji: '❤',
+    }]);
+    assert.equal(await target.evaluate(row => row.dispatchEvent(new KeyboardEvent('keydown', {
+        key: ' ', code: 'Space', bubbles: true, cancelable: true,
+    }))), true, 'a pending duplicate is not handled');
+    assert.equal((await page.evaluate(() => window.historyHarness.reactionCalls())).length, 1);
+    await page.evaluate(() => window.historyHarness.resolveReaction());
+    await page.waitForFunction(() => document.querySelector(
+        '[data-message-id="keyboard-target"] .reaction-chip--viewer',
+    )?.textContent?.includes('❤'));
+    assert.equal(await target.evaluate(row => row.dispatchEvent(new KeyboardEvent('keydown', {
+        key: ' ', code: 'Space', bubbles: true, cancelable: true,
+    }))), true, 'the already-current default is a safe unhandled no-op');
+    assert.equal((await page.evaluate(() => window.historyHarness.reactionCalls())).length, 1);
+
+    const already = page.locator('[data-message-id="keyboard-already"]');
+    assert.equal(await already.evaluate(row => row.dispatchEvent(new KeyboardEvent('keydown', {
+        key: ' ', code: 'Space', bubbles: true, cancelable: true,
+    }))), true);
+    assert.equal((await page.evaluate(() => window.historyHarness.reactionCalls())).length, 1);
+
+    const failure = page.locator('[data-message-id="keyboard-failure"]');
+    await failure.focus();
+    await page.keyboard.press('Space');
+    await failure.getByRole('alert').filter({ hasText: 'Harness reaction failure' }).waitFor();
+    assert.equal(await failure.locator('.reaction-chip--viewer').count(), 0, 'failed optimism must roll back');
+
+    const callsBeforeSuppression = (await page.evaluate(() => window.historyHarness.reactionCalls())).length;
+    assert.equal(await failure.evaluate(row => row.dispatchEvent(new KeyboardEvent('keydown', {
+        key: ' ', code: 'Space', ctrlKey: true, bubbles: true, cancelable: true,
+    }))), true);
+    const composer = page.getByRole('textbox', { name: 'Message' });
+    await composer.focus();
+    await page.keyboard.press('Space');
+    assert.equal(await composer.inputValue(), ' ');
+    assert.equal(await failure.evaluate(row => {
+        const editor = document.createElement('span');
+        editor.contentEditable = 'true';
+        row.append(editor);
+        return editor.dispatchEvent(new KeyboardEvent('keydown', {
+            key: ' ', code: 'Space', bubbles: true, cancelable: true,
+        }));
+    }), true);
+    assert.deepEqual(await failure.evaluate(row => ['input', 'textarea', 'select'].map(tag => {
+        const control = document.createElement(tag);
+        row.append(control);
+        return control.dispatchEvent(new KeyboardEvent('keydown', {
+            key: ' ', code: 'Space', bubbles: true, cancelable: true,
+        }));
+    })), [true, true, true]);
+
+    await failure.focus();
+    await failure.press('Shift+F10');
+    await page.getByRole('menu', { name: 'Message actions' }).waitFor();
+    assert.equal(await failure.evaluate(row => row.dispatchEvent(new KeyboardEvent('keydown', {
+        key: ' ', code: 'Space', bubbles: true, cancelable: true,
+    }))), true);
+    await page.keyboard.press('Escape');
+    assert.equal(await failure.evaluate(row => {
+        const overlay = document.createElement('div');
+        overlay.role = 'dialog';
+        document.body.append(overlay);
+        const allowed = row.dispatchEvent(new KeyboardEvent('keydown', {
+            key: ' ', code: 'Space', bubbles: true, cancelable: true,
+        }));
+        overlay.remove();
+        return allowed;
+    }), true);
+
+    const postLink = page.locator('[data-message-id="keyboard-post"] a');
+    await postLink.evaluate(link => {
+        (link as HTMLAnchorElement).onclick = event => {
+            event.preventDefault();
+            (window as typeof window & { shareActivations: string[] }).shareActivations.push(
+                (link as HTMLAnchorElement).href,
+            );
+        };
+    });
+    await postLink.focus();
+    await postLink.press('Enter');
+    assert.equal(await page.evaluate(() =>
+        (window as typeof window & { shareActivations: string[] }).shareActivations.length), 2,
+    'native nested activation must not be duplicated by the row');
+    const reactionTrigger = failure.getByRole('button', { name: 'Add reaction' });
+    await reactionTrigger.evaluate(button => (button as HTMLButtonElement).click());
+    await page.getByRole('menu', { name: 'Choose a reaction' }).waitFor();
+    assert.equal(await failure.evaluate(row => row.dispatchEvent(new KeyboardEvent('keydown', {
+        key: ' ', code: 'Space', bubbles: true, cancelable: true,
+    }))), true);
+    await page.keyboard.press('Escape');
+
+    await page.evaluate(() => window.historyHarness.select('second-thread'));
+    await page.waitForFunction(() => document.querySelector('.conversation__header h2')?.textContent === 'Second history');
+    await page.evaluate(() => window.historyHarness.select('thread'));
+    await page.waitForFunction(() => document.querySelector('.conversation__header h2')?.textContent === 'History harness');
+    const switchedAlready = page.locator('[data-message-id="keyboard-already"]');
+    await switchedAlready.focus();
+    assert.equal(await switchedAlready.evaluate(row => row.dispatchEvent(new KeyboardEvent('keydown', {
+        key: ' ', code: 'Space', bubbles: true, cancelable: true,
+    }))), true, 'the shortcut must use the switched thread normalized state');
+
+    assert.equal((await page.evaluate(() => window.historyHarness.reactionCalls())).length, callsBeforeSuppression);
+    const finalState = await page.evaluate(() => ({
+        calls: window.historyHarness.calls(),
+        viewportIds: window.historyHarness.historyState('thread').viewportIds,
+    }));
+    assert.equal(finalState.calls.some(cursor => cursor !== undefined), false,
+        'keyboard actions must not paginate history');
+    assert.deepEqual(finalState.viewportIds, initialViewport,
+        'keyboard actions must not replace the bounded window');
     await page.close();
 });
 

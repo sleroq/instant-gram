@@ -21,16 +21,20 @@ import { computeChatWindow } from './virtual-list';
 
 const ROW_HEIGHT = 72;
 const REACTION_EMOJIS = ['❤', '😂', '😮', '😢', '😡', '👍'];
+const DEFAULT_REACTION = REACTION_EMOJIS[0];
 let keyboardScrollSequence = 0;
 let reelReturnFocus: HTMLElement | undefined;
 
 type AppProps = { store: FrontendStore };
 
 type SurfacePoint = { x: number; y: number; align?: 'left' | 'right' };
+type ReelPlaybackState = { currentTime: number; userPaused: boolean };
+type ReelPlaybackMemory = Map<string, ReelPlaybackState>;
 
 export default function App({ store }: AppProps) {
     useStore(store);
     useVimNavigation(store);
+    const reelPlaybackMemory = useRef<ReelPlaybackMemory>(new Map());
     const state = store.state;
     const selected = state.selectedThreadId
         ? state.inbox.byId[state.selectedThreadId]
@@ -71,7 +75,12 @@ export default function App({ store }: AppProps) {
                 )}
             </section>
         </main>
-        {activeReel && <ReelModal key={activeReel.shortcode} store={store} reel={activeReel} />}
+        {activeReel && <ReelModal
+            key={activeReel.shortcode}
+            store={store}
+            reel={activeReel}
+            playbackMemory={reelPlaybackMemory.current}
+        />}
         </>
     );
 }
@@ -603,11 +612,10 @@ function MessagePane({
         };
     }, [thread.key, history?.status]);
 
-    useEffect(() => {
+    useLayoutEffect(() => {
         const root = scrollerRef.current;
         if (!root || !history || history.status !== 'ready') return;
         const previews = [...root.querySelectorAll<HTMLElement>('[data-reply-target-id]')];
-        if (!previews.length) return;
         const prefetchVisible = () => {
             const rootRect = root.getBoundingClientRect();
             store.prefetchReplyTargets(thread.key, previews.filter(element => {
@@ -623,6 +631,9 @@ function MessagePane({
             if (entries.length) prefetchVisible();
         }, { root, rootMargin: '160px 0px' });
         previews.forEach(preview => observer.observe(preview));
+        // Native observers report asynchronously. Scan the committed geometry
+        // now as well so a visible reply starts warming on its first paint.
+        prefetchVisible();
         return () => {
             observer.disconnect();
             store.prefetchReplyTargets(thread.key, []);
@@ -816,34 +827,6 @@ function MessagePane({
                                 </button>
                             </div>
                         )}
-                        {history.replyNavigation?.status === 'loading' && (
-                            <div className="messages__reply-navigation status-surface" role="status">
-                                <span className="spinner spinner--small" aria-hidden="true" />
-                                <span>
-                                    {history.replyNavigation.pagesLoaded
-                                        ? `Loading original message… ${history.replyNavigation.pagesLoaded} older ${history.replyNavigation.pagesLoaded === 1 ? 'page' : 'pages'}, ${history.replyNavigation.messagesLoaded ?? 0} ${(history.replyNavigation.messagesLoaded ?? 0) === 1 ? 'message' : 'messages'} loaded.`
-                                        : 'Loading original message… Searching older history.'}
-                                </span>
-                            </div>
-                        )}
-                        {history.replyNavigation?.status === 'error' && (
-                            <div className="messages__reply-navigation messages__reply-navigation--error status-surface" role="alert">
-                                <span>{history.replyNavigation.error}</span>
-                                <button
-                                    type="button"
-                                    onClick={() => store.navigateToReply(
-                                        thread.key,
-                                        history.replyNavigation!.targetId,
-                                        history.replyNavigation!.returnId,
-                                    )}
-                                >
-                                    Retry
-                                </button>
-                            </div>
-                        )}
-                        {history.replyNavigation?.status === 'ready' && (
-                            <span className="visually-hidden" role="status">Original message loaded</span>
-                        )}
                         <div className="messages__content" ref={contentRef}>
                             <div className="messages__sentinel" ref={sentinelRef} aria-hidden="true" />
                             {!history.hasOlder &&
@@ -878,12 +861,16 @@ function MessagePane({
                                             )}
                                             {group.ids.map((id, index) => {
                                                 const message = history.byId[id];
+                                                const reelItem = message.kind === 'reel_share'
+                                                    ? store.state.reels.byId[message.shortcode]?.media?.items[0]
+                                                    : undefined;
                                                 return (
                                                     <MessageRow
                                                         key={`${thread.key}\u0000${store.messageRowKey(thread.key, id)}`}
                                                         store={store}
                                                         threadId={thread.key}
                                                         message={message}
+                                                        reelItem={reelItem}
                                                         viewerId={history.viewerId}
                                                         pending={history.pendingSends[id]}
                                                         failed={history.failedSends[id]}
@@ -907,6 +894,34 @@ function MessagePane({
                     </>
                 )}
             </div>
+            {history?.replyNavigation?.status === 'loading' && (
+                <div className="messages__reply-navigation status-surface" role="status">
+                    <span className="spinner spinner--small" aria-hidden="true" />
+                    <span>
+                        {history.replyNavigation.pagesLoaded
+                            ? `Loading original message… ${history.replyNavigation.pagesLoaded} older ${history.replyNavigation.pagesLoaded === 1 ? 'page' : 'pages'}, ${history.replyNavigation.messagesLoaded ?? 0} ${(history.replyNavigation.messagesLoaded ?? 0) === 1 ? 'message' : 'messages'} loaded.`
+                            : 'Loading original message… Searching older history.'}
+                    </span>
+                </div>
+            )}
+            {history?.replyNavigation?.status === 'error' && (
+                <div className="messages__reply-navigation messages__reply-navigation--error status-surface" role="alert">
+                    <span>{history.replyNavigation.error}</span>
+                    <button
+                        type="button"
+                        onClick={() => store.navigateToReply(
+                            thread.key,
+                            history.replyNavigation!.targetId,
+                            history.replyNavigation!.returnId,
+                        )}
+                    >
+                        Retry
+                    </button>
+                </div>
+            )}
+            {history?.replyNavigation?.status === 'ready' && (
+                <span className="visually-hidden" role="status">Original message loaded</span>
+            )}
             {showDownNavigation && (
                 <button
                     type="button"
@@ -940,6 +955,7 @@ const MessageRow = memo(function MessageRow({
     store,
     threadId,
     message,
+    reelItem,
     viewerId,
     pending,
     failed,
@@ -955,6 +971,7 @@ const MessageRow = memo(function MessageRow({
     store: FrontendStore;
     threadId: string;
     message: Message;
+    reelItem?: ReelMediaItem;
     viewerId?: string;
     pending?: HistoryState['pendingSends'][string];
     failed?: HistoryState['failedSends'][string];
@@ -977,6 +994,36 @@ const MessageRow = memo(function MessageRow({
     const viewerReaction = message.reactions?.find(reaction => reaction.senderId === viewerId)?.reaction;
     const hasFailedActions = Boolean(failed);
     const ownsContextMenu = eligibleForActions || hasFailedActions;
+
+    const handleRowShortcut = (event: KeyboardEvent<HTMLDivElement>) => {
+        const isSpace = event.key === ' ' || event.code === 'Space';
+        if ((!isSpace && event.key !== 'Enter') ||
+            event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+        const target = event.target;
+        if (!(target instanceof Element) || isEditableTarget(target) ||
+            target.closest('button, a[href]') ||
+            menuPoint || pickerPoint ||
+            document.querySelector('.context-menu, .reaction-picker, [role="dialog"], [aria-modal="true"]')) return;
+
+        if (event.key === 'Enter') {
+            if (!isActionableSharedPost(message)) return;
+            const action = event.currentTarget.querySelector<HTMLElement>('[data-shared-post-action]');
+            if (!action) return;
+            event.preventDefault();
+            action.click();
+            return;
+        }
+
+        const currentHistory = store.state.histories[threadId];
+        const currentMessage = currentHistory?.byId[message.id];
+        const currentViewerReaction = currentMessage?.reactions?.find(
+            reaction => reaction.senderId === currentHistory.viewerId,
+        )?.reaction;
+        if (!eligibleForActions || currentHistory?.reactionMutations[message.id]?.status === 'pending' ||
+            currentViewerReaction === DEFAULT_REACTION) return;
+        event.preventDefault();
+        void store.setReaction(threadId, message.id, DEFAULT_REACTION);
+    };
 
     const chooseReaction = (emoji: string) => {
         setPickerPoint(undefined);
@@ -1030,17 +1077,20 @@ const MessageRow = memo(function MessageRow({
                 }
             }}
             onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
-                if (!ownsContextMenu || (
-                    event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')
-                )) return;
-                event.preventDefault();
-                const bubble = event.currentTarget.querySelector<HTMLElement>('.message__bubble');
-                const rect = (bubble ?? event.currentTarget).getBoundingClientRect();
-                openActionsAt({
-                    x: outgoing ? rect.right : rect.left,
-                    y: rect.top + Math.min(24, rect.height / 2),
-                    align: outgoing ? 'right' : 'left',
-                });
+                if (ownsContextMenu && (
+                    event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')
+                )) {
+                    event.preventDefault();
+                    const bubble = event.currentTarget.querySelector<HTMLElement>('.message__bubble');
+                    const rect = (bubble ?? event.currentTarget).getBoundingClientRect();
+                    openActionsAt({
+                        x: outgoing ? rect.right : rect.left,
+                        y: rect.top + Math.min(24, rect.height / 2),
+                        align: outgoing ? 'right' : 'left',
+                    });
+                    return;
+                }
+                handleRowShortcut(event);
             }}
             onClickCapture={longPress.consumeSyntheticEvent}
             onPointerDown={longPress.onPointerDown}
@@ -1066,7 +1116,7 @@ const MessageRow = memo(function MessageRow({
                         />
                     )}
                     <div className="message__body">
-                        <MessageContent store={store} message={message} />
+                        <MessageContent store={store} message={message} reelItem={reelItem} />
                         <time dateTime={new Date(message.ts).toISOString()}>
                             {formatMessageTime(message.ts)}
                         </time>
@@ -1521,14 +1571,28 @@ function Composer({
     );
 }
 
-function InlineReel({ store, message }: { store: FrontendStore; message: Extract<Message, { kind: 'reel_share' }> }) {
+function InlineReel({
+    store,
+    message,
+    item,
+}: {
+    store: FrontendStore;
+    message: Extract<Message, { kind: 'reel_share' }>;
+    item?: ReelMediaItem;
+}) {
     const rootRef = useRef<HTMLButtonElement>(null as unknown as HTMLButtonElement);
     const videoRef = useRef<HTMLVideoElement>(null as unknown as HTMLVideoElement);
     const [nearViewport, setNearViewport] = useState(false);
     const [canPlay, setCanPlay] = useState(false);
-    const reel = store.state.reels.byId[message.shortcode];
-    const item = reel?.media?.items[0];
     const video = item?.kind === 'video' ? item : undefined;
+    const mediaWidth = item?.width ?? message.previewWidth;
+    const mediaHeight = item?.height ?? message.previewHeight;
+    const mediaStyle = mediaWidth && mediaHeight
+        ? {
+            aspectRatio: `${mediaWidth} / ${mediaHeight}`,
+            maxWidth: `${Math.min(300, 360 * mediaWidth / mediaHeight)}px`,
+        }
+        : undefined;
 
     useEffect(() => {
         const root = rootRef.current;
@@ -1579,14 +1643,16 @@ function InlineReel({ store, message }: { store: FrontendStore; message: Extract
             ref={rootRef}
             type="button"
             className="message-card message-reel-preview"
+            data-shared-post-action="reel"
             aria-label={`Open reel from ${message.author}`}
             onClick={(event: ReactMouseEvent<HTMLButtonElement>) => {
                 reelReturnFocus = event.currentTarget;
                 void store.openReel(message.shortcode, message.mediaId);
             }}
         >
-            {video ? (
-                <video
+            <span className="message-reel-preview__media" style={mediaStyle}>
+                {video ? (
+                    <video
                     key={video.id}
                     ref={videoRef}
                     src={video.videoUrl}
@@ -1595,13 +1661,22 @@ function InlineReel({ store, message }: { store: FrontendStore; message: Extract
                     loop
                     playsInline
                     preload="metadata"
+                    width={video.width}
+                    height={video.height}
                     aria-hidden="true"
                     onCanPlay={markPlayable}
                     onLoadedData={markPlayable}
-                />
-            ) : (
-                <img src={item?.posterUrl || message.thumbUrl} alt="" loading="lazy" />
-            )}
+                    />
+                ) : (
+                    <img
+                        src={item?.posterUrl || message.thumbUrl}
+                        alt=""
+                        width={mediaWidth}
+                        height={mediaHeight}
+                        loading="lazy"
+                    />
+                )}
+            </span>
             <span className="message-reel-preview__badge" aria-hidden="true">▶</span>
             <strong>{message.author}</strong>
             {message.caption && <span>{message.caption}</span>}
@@ -1609,7 +1684,15 @@ function InlineReel({ store, message }: { store: FrontendStore; message: Extract
     );
 }
 
-function ReelModal({ store, reel }: { store: FrontendStore; reel: ReelState }) {
+function ReelModal({
+    store,
+    reel,
+    playbackMemory,
+}: {
+    store: FrontendStore;
+    reel: ReelState;
+    playbackMemory: ReelPlaybackMemory;
+}) {
     const modalRef = useRef<HTMLDivElement>(null as unknown as HTMLDivElement);
     const [slide, setSlide] = useState(0);
     const media = reel.media;
@@ -1703,6 +1786,8 @@ function ReelModal({ store, reel }: { store: FrontendStore; reel: ReelState }) {
                             <ReelMediaPlayer
                                 key={current.id}
                                 item={current}
+                                playbackKey={`${reel.shortcode}:${current.id}`}
+                                playbackMemory={playbackMemory}
                                 refreshing={reel.status === 'loading'}
                                 onRetry={() => { void store.retryReel(reel.shortcode); }}
                             />
@@ -1771,10 +1856,14 @@ function ReelModal({ store, reel }: { store: FrontendStore; reel: ReelState }) {
 
 function ReelMediaPlayer({
     item,
+    playbackKey,
+    playbackMemory,
     refreshing,
     onRetry,
 }: {
     item: ReelMediaItem;
+    playbackKey: string;
+    playbackMemory: ReelPlaybackMemory;
     refreshing: boolean;
     onRetry: () => void;
 }) {
@@ -1787,7 +1876,13 @@ function ReelMediaPlayer({
     const [duration, setDuration] = useState(item.kind === 'video' ? item.durationSec : 0);
     const [quality, setQuality] = useState('auto');
     const [failedSource, setFailedSource] = useState<string>();
-    const fastRef = useRef(false);
+    const spaceRef = useRef<{
+        video: HTMLVideoElement;
+        timer: number;
+        isHold: boolean;
+        wasPaused: boolean;
+        playbackRate: number;
+    }>();
     const sourceSwitchRef = useRef<{
         currentTime: number;
         wasPlaying: boolean;
@@ -1796,10 +1891,16 @@ function ReelMediaPlayer({
         playbackRate: number;
     }>();
 
-    const restoreSpeed = () => {
-        const video = videoRef.current;
-        fastRef.current = false;
-        if (video) video.playbackRate = 1;
+    const finishSpace = (toggleTap = false) => {
+        const interaction = spaceRef.current;
+        if (!interaction) return;
+        spaceRef.current = undefined;
+        window.clearTimeout(interaction.timer);
+        if (interaction.isHold) {
+            interaction.video.playbackRate = interaction.playbackRate;
+        } else if (toggleTap && interaction.video.isConnected) {
+            toggleVideoPlayback(interaction.video, playbackKey, playbackMemory);
+        }
     };
 
     useEffect(() => {
@@ -1807,12 +1908,22 @@ function ReelMediaPlayer({
         const video = videoRef.current;
         const onKeyDown = (event: globalThis.KeyboardEvent) => {
             if (isEditableTarget(event.target as Element)) return;
-            if (event.code === 'Space' && !video.paused) {
+            if (event.code === 'Space') {
                 event.preventDefault();
-                if (!event.repeat) {
-                    fastRef.current = true;
+                if (event.repeat || spaceRef.current) return;
+                const interaction = {
+                    video,
+                    timer: 0,
+                    isHold: false,
+                    wasPaused: video.paused,
+                    playbackRate: video.playbackRate,
+                };
+                interaction.timer = window.setTimeout(() => {
+                    if (spaceRef.current !== interaction || interaction.wasPaused || video.paused) return;
+                    interaction.isHold = true;
                     video.playbackRate = 2;
-                }
+                }, 250);
+                spaceRef.current = interaction;
             } else if ((event.key === ',' || event.key === '.') && video.paused) {
                 event.preventDefault();
                 // Instagram does not expose frame-rate metadata here; 30fps is
@@ -1822,17 +1933,17 @@ function ReelMediaPlayer({
             }
         };
         const onKeyUp = (event: globalThis.KeyboardEvent) => {
-            if (event.code === 'Space' && fastRef.current) {
+            if (event.code === 'Space' && spaceRef.current) {
                 event.preventDefault();
-                restoreSpeed();
+                finishSpace(true);
             }
         };
-        const onBlur = () => restoreSpeed();
+        const onBlur = () => finishSpace();
         document.addEventListener('keydown', onKeyDown, true);
         document.addEventListener('keyup', onKeyUp, true);
         window.addEventListener('blur', onBlur);
         return () => {
-            restoreSpeed();
+            finishSpace();
             document.removeEventListener('keydown', onKeyDown, true);
             document.removeEventListener('keyup', onKeyUp, true);
             window.removeEventListener('blur', onBlur);
@@ -1844,6 +1955,11 @@ function ReelMediaPlayer({
         : quality === 'auto'
             ? item.videoUrl
             : item.variants[Number(quality)]?.url ?? item.videoUrl;
+    const mediaStyle = {
+        aspectRatio: `${item.width} / ${item.height}`,
+        width: `min(100%, calc(100cqh * ${item.width} / ${item.height}))`,
+        height: `min(100%, calc(100cqw * ${item.height} / ${item.width}))`,
+    };
 
     const errorNotice = failedSource === sourceUrl && (
         <div className="reel-media__error" role="alert">
@@ -1858,7 +1974,7 @@ function ReelMediaPlayer({
     );
 
     if (item.kind === 'image') {
-        return <div ref={wrapperRef} className="reel-media">
+        return <div ref={wrapperRef} className="reel-media" style={mediaStyle}>
             <img
                 src={sourceUrl}
                 alt="Reel image"
@@ -1871,8 +1987,7 @@ function ReelMediaPlayer({
     }
 
     const togglePlayback = () => {
-        const video = videoRef.current;
-        if (video.paused) void video.play(); else video.pause();
+        toggleVideoPlayback(videoRef.current, playbackKey, playbackMemory);
     };
     const setVideoVolume = (value: number) => {
         const video = videoRef.current;
@@ -1899,18 +2014,53 @@ function ReelMediaPlayer({
         return () => video.removeEventListener('loadedmetadata', restore);
     }, [sourceUrl]);
 
+    useLayoutEffect(() => {
+        const video = videoRef.current;
+        const remembered = playbackMemory.get(playbackKey);
+        if (!remembered) playbackMemory.set(playbackKey, { currentTime: 0, userPaused: false });
+        const restore = () => {
+            if (remembered && Number.isFinite(remembered.currentTime)) {
+                const knownDuration = Number.isFinite(video.duration) && video.duration > 0
+                    ? video.duration
+                    : item.durationSec;
+                try { video.currentTime = Math.max(0, Math.min(remembered.currentTime, knownDuration)); }
+                catch { /* Seeking is only legal after metadata in some browsers. */ }
+            }
+            if (!remembered?.userPaused) void video.play().catch(() => undefined);
+        };
+        if (video.readyState >= 1) restore();
+        else video.addEventListener('loadedmetadata', restore, { once: true });
+        return () => {
+            video.removeEventListener('loadedmetadata', restore);
+            finishSpace();
+            const state = playbackMemory.get(playbackKey) ?? { currentTime: 0, userPaused: false };
+            playbackMemory.set(playbackKey, {
+                currentTime: Number.isFinite(video.currentTime) ? video.currentTime : state.currentTime,
+                userPaused: state.userPaused,
+            });
+        };
+    }, [item.id, playbackKey]);
+
     return (
-        <div ref={wrapperRef} className="reel-media reel-media--video">
+        <div ref={wrapperRef} className="reel-media reel-media--video" style={mediaStyle}>
             <video
                 ref={videoRef}
                 src={sourceUrl}
                 poster={item.posterUrl}
+                autoPlay={!playbackMemory.get(playbackKey)?.userPaused}
                 playsInline
                 preload="auto"
+                width={item.width}
+                height={item.height}
                 onClick={togglePlayback}
                 onPlay={() => setPlaying(true)}
-                onPause={() => { setPlaying(false); restoreSpeed(); }}
-                onTimeUpdate={() => setCurrentTime(videoRef.current.currentTime)}
+                onPause={() => { setPlaying(false); finishSpace(); }}
+                onTimeUpdate={() => {
+                    const time = videoRef.current.currentTime;
+                    setCurrentTime(time);
+                    const state = playbackMemory.get(playbackKey) ?? { currentTime: 0, userPaused: false };
+                    playbackMemory.set(playbackKey, { ...state, currentTime: time });
+                }}
                 onDurationChange={() => setDuration(videoRef.current.duration || item.durationSec)}
                 onError={() => setFailedSource(sourceUrl)}
             />
@@ -1936,7 +2086,9 @@ function ReelMediaPlayer({
                         const next = !videoRef.current.muted;
                         videoRef.current.muted = next;
                         setMuted(next);
-                    }} aria-label={muted ? 'Unmute reel' : 'Mute reel'}>{muted ? 'Muted' : 'Sound'}</button>
+                    }} aria-label={muted ? 'Unmute reel' : 'Mute reel'} className="reel-player__mute">
+                        <SpeakerIcon muted={muted} />
+                    </button>
                     <input type="range" min="0" max="1" step="0.05" value={muted ? 0 : volume} aria-label="Reel volume" onChange={(event: ChangeEvent<HTMLInputElement>) => setVideoVolume(Number(event.currentTarget.value))} />
                     {item.variants.length > 1 && <label className="reel-player__quality">
                         <span>Quality</span>
@@ -1972,18 +2124,52 @@ function ReelMediaPlayer({
     );
 }
 
+function toggleVideoPlayback(
+    video: HTMLVideoElement,
+    playbackKey: string,
+    playbackMemory: ReelPlaybackMemory,
+) {
+    const state = playbackMemory.get(playbackKey) ?? { currentTime: 0, userPaused: false };
+    if (video.paused) {
+        playbackMemory.set(playbackKey, { ...state, userPaused: false });
+        void video.play().catch(() => undefined);
+    } else {
+        playbackMemory.set(playbackKey, { ...state, userPaused: true });
+        video.pause();
+    }
+}
+
+function SpeakerIcon({ muted }: { muted: boolean }) {
+    return (
+        <svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true">
+            <path d="M4 9v6h4l5 4V5L8 9H4z" />
+            {muted
+                ? <path d="m16 9 5 6m0-6-5 6" />
+                : <path d="M16 9.5c1.4 1.4 1.4 3.6 0 5m2-7c2.5 2.5 2.5 6.5 0 9" />}
+        </svg>
+    );
+}
+
 function formatMediaTime(seconds: number) {
     if (!Number.isFinite(seconds)) return '0:00';
     const whole = Math.max(0, Math.floor(seconds));
     return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`;
 }
 
-function MessageContent({ store, message }: { store: FrontendStore; message: Message }) {
+function MessageContent({
+    store,
+    message,
+    reelItem,
+}: {
+    store: FrontendStore;
+    message: Message;
+    reelItem?: ReelMediaItem;
+}) {
     switch (message.kind) {
         case 'text': return <span>{message.text}</span>;
         case 'reaction_log': return <span>{message.fragment}</span>;
         case 'activity': return <span>{message.text}</span>;
-        case 'reel_share': return <InlineReel store={store} message={message} />;
+        case 'reel_share': return <InlineReel store={store} message={message} item={reelItem} />;
         case 'inline_share': {
             const content = (
                 <>
@@ -1993,7 +2179,13 @@ function MessageContent({ store, message }: { store: FrontendStore; message: Mes
                 </>
             );
             return message.targetUrl ? (
-                <a className="message-card" href={message.targetUrl} target="_blank" rel="noreferrer">
+                <a
+                    className="message-card"
+                    data-shared-post-action="link"
+                    href={message.targetUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                >
                     {content}
                 </a>
             ) : <span className="message-card">{content}</span>;
@@ -2021,6 +2213,11 @@ function MessageContent({ store, message }: { store: FrontendStore; message: Mes
             </span>
         );
     }
+}
+
+function isActionableSharedPost(message: Message) {
+    return (message.kind === 'reel_share' && Boolean(message.targetUrl)) ||
+        (message.kind === 'inline_share' && Boolean(message.targetUrl));
 }
 
 function ReplyPreview({
