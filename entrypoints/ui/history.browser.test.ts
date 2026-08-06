@@ -430,6 +430,22 @@ test('reel preview and modal own playback, carousel, actions, comments, links, a
         document.querySelector('[data-message-id="reel-message"] .message__body > time')!,
     ).opacity === '1');
 
+    const otherReaction = sharedPost.getByRole('button', { name: 'Add 🔥 reaction, 1 reaction' });
+    await otherReaction.click();
+    await page.waitForFunction(() => document.querySelector(
+        '[data-message-id="reel-message"] .reaction-chip--viewer',
+    )?.textContent?.includes('🔥'));
+    assert.deepEqual((await page.evaluate(() => window.historyHarness.reactionCalls())).at(-1), {
+        threadFbid: '1001', messageId: 'reel-message', emoji: '🔥', remove: false,
+    });
+    await sharedPost.getByRole('button', { name: 'Remove your 🔥 reaction, 1 reaction' }).click();
+    await page.waitForFunction(() => !document.querySelector(
+        '[data-message-id="reel-message"] .reaction-chip--viewer',
+    ));
+    assert.deepEqual((await page.evaluate(() => window.historyHarness.reactionCalls())).at(-1), {
+        threadFbid: '1001', messageId: 'reel-message', emoji: '🔥', remove: true,
+    });
+
     const inlinePlayback = await page.locator('.message-reel-preview video').evaluate(async video => {
         const playback = { plays: 0, pauses: 0 };
         Object.defineProperty(HTMLMediaElement.prototype, 'play', { configurable: true, value: () => { playback.plays++; return Promise.resolve(); } });
@@ -1853,6 +1869,7 @@ test('focused message Enter opens only an existing share action and Space leaves
     assert.equal(await page.evaluate(() =>
         (window as typeof window & { shareActivations: string[] }).shareActivations.length), 2,
     'native nested activation must not be duplicated by the row');
+    await failure.getByRole('button', { name: 'React with ❤' }).focus();
     const reactionTrigger = failure.getByRole('button', { name: 'More reactions' });
     await reactionTrigger.evaluate(button => (button as HTMLButtonElement).click());
     await page.getByRole('menu', { name: 'Choose a reaction' }).waitFor();
@@ -2487,7 +2504,7 @@ test('controlled drafts and composer actions remain per-thread and operable at n
         pointerType: 'touch', pointerId: 7, isPrimary: true, clientX: box!.x + 12, clientY: box!.y + 12,
     });
     await page.getByRole('menu', { name: 'Message actions' }).getByRole('menuitem', { name: 'Add reaction' }).click();
-        const picker = page.getByRole('menu', { name: 'Choose a reaction' });
+    const picker = page.getByRole('menu', { name: 'Choose a reaction' });
     await picker.waitFor();
     const pickerFits = await picker.evaluate(element => {
         const buttons = [...element.querySelectorAll('button')];

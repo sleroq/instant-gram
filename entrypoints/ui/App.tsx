@@ -1291,7 +1291,7 @@ const MessageRow = memo(function MessageRow({
                                 ref={reactionRef}
                                 type="button"
                                 className="message__reaction-expander"
-                                    aria-label="More reactions"
+                                aria-label="More reactions"
                                 aria-haspopup="menu"
                                 aria-expanded={Boolean(pickerPoint)}
                                 aria-busy={reactionMutation?.status === 'pending'}
@@ -1477,7 +1477,7 @@ function ReactionPicker({
                 ))}
             </div>
             {current && (
-                <span className="reaction-picker__note">Choose another to change</span>
+                <span className="reaction-picker__note">Choose the current reaction to remove it</span>
             )}
         </div>
     );
