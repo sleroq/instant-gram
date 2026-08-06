@@ -28,7 +28,6 @@
     --shadow-elevated: 0 8px 24px rgba(0, 0, 0, 0.3);
 }
 
-$sidebar-width: 390px;
 $row-height: 72px;
 $radius-control: 16px;
 $radius-island: 24px;
@@ -92,8 +91,9 @@ textarea:focus-visible {
 }
 
 .app-shell {
+    position: relative;
     display: grid;
-    grid-template-columns: $sidebar-width minmax(0, 1fr);
+    grid-template-columns: var(--sidebar-width, 390px) minmax(0, 1fr);
     gap: 16px;
     width: 100%;
     height: 100dvh;
@@ -101,6 +101,47 @@ textarea:focus-visible {
     padding: 16px;
     overflow: hidden;
     background: var(--background-canvas);
+}
+
+.sidebar-resize {
+    position: absolute;
+    z-index: 3;
+    top: 16px;
+    bottom: 16px;
+    left: calc(18px + var(--sidebar-width, 390px));
+    width: 12px;
+    cursor: ew-resize;
+    touch-action: none;
+
+    &::after {
+        position: absolute;
+        top: 50%;
+        left: 5px;
+        width: 2px;
+        height: 48px;
+        background: var(--color-text-muted);
+        border-radius: 999px;
+        content: '';
+        opacity: 0;
+        transform: translateY(-50%);
+        transition: opacity $motion ease;
+    }
+
+    &:hover::after,
+    &:focus-visible::after {
+        opacity: 0.65;
+    }
+
+    &:focus-visible {
+        outline: 2px solid var(--color-focus);
+        outline-offset: -2px;
+    }
+}
+
+body.is-resizing-sidebar,
+body.is-resizing-sidebar * {
+    cursor: ew-resize !important;
+    user-select: none !important;
 }
 
 .sidebar {
@@ -845,11 +886,11 @@ textarea:focus-visible {
 .message__reaction-rail {
     position: absolute;
     z-index: 1;
-    right: -63px;
+    right: auto;
     bottom: 0;
-    display: grid;
-    grid-template-columns: repeat(2, 26px);
-    width: 58px;
+    left: calc(100% + 5px);
+    display: flex;
+    width: max-content;
     padding: 3px;
     gap: 2px;
     background: var(--color-panel-elevated);
@@ -860,8 +901,9 @@ textarea:focus-visible {
     transition: opacity $motion ease, transform $motion ease;
 
     .message--outgoing & {
-        right: auto;
-        left: -63px;
+        right: calc(100% + 5px);
+        left: auto;
+        flex-direction: row-reverse;
     }
 
     .message-row:hover &,
@@ -891,11 +933,21 @@ textarea:focus-visible {
             background: var(--color-selection);
         }
     }
+
+    > button:not(.message__reaction-default) {
+        display: none;
+    }
+
+    &:hover,
+    &:focus-within,
+    &:has([aria-expanded="true"]) {
+        > button:not(.message__reaction-default) {
+            display: grid;
+        }
+    }
 }
 
 .message__reaction-expander {
-    width: 54px !important;
-    grid-column: 1 / -1;
     color: var(--color-text-muted) !important;
     font-size: 22px;
     transform: rotate(90deg);
@@ -918,6 +970,13 @@ textarea:focus-visible {
         place-items: center;
         font-size: 20px;
     }
+}
+
+.reaction-picker__menu {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 5px;
 }
 
 .reaction-picker__category {
@@ -1018,8 +1077,15 @@ textarea:focus-visible {
     padding: 3px 7px;
     color: var(--color-text-muted);
     background: var(--color-panel-raised);
+    border: 0;
     border-radius: 999px;
     font-size: 11px;
+    cursor: pointer;
+
+    &:hover:not(:disabled),
+    &:focus-visible {
+        background: var(--color-hover);
+    }
 }
 
 .reaction-chip--viewer {
@@ -1634,10 +1700,6 @@ textarea:focus-visible {
 }
 
 @media (max-width: 1023px) and (min-width: 641px) {
-    .app-shell {
-        grid-template-columns: clamp(280px, 38vw, 360px) minmax(0, 1fr);
-    }
-
     .messages {
         padding-inline: 20px;
     }
@@ -1665,6 +1727,10 @@ textarea:focus-visible {
         height: 100%;
         border-radius: 0;
         box-shadow: none;
+    }
+
+    .sidebar-resize {
+        display: none;
     }
 
     .conversation {
@@ -1710,6 +1776,7 @@ textarea:focus-visible {
         right: 4px;
         left: auto;
         bottom: 4px;
+        flex-direction: row-reverse;
     }
 
     .composer {
@@ -1745,6 +1812,12 @@ textarea:focus-visible {
     .sidebar {
         border-radius: 0;
         box-shadow: none;
+    }
+
+    .sidebar-resize {
+        top: 0;
+        bottom: 0;
+        left: calc(var(--sidebar-width, 390px) - 6px);
     }
 
     .conversation__header {

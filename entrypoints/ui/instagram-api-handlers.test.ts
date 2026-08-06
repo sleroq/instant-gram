@@ -187,7 +187,7 @@ test('reaction handler returns the authoritative captured reaction state', async
     }, calls));
 
     assert.deepEqual(await handlers.setReaction({
-        threadFbid: 'thread-1', messageId: 'message-1', emoji: '❤',
+        threadFbid: 'thread-1', messageId: 'message-1', emoji: '❤', remove: false,
     }), {
         messageId: 'message-1',
         reactions: [{
@@ -196,7 +196,7 @@ test('reaction handler returns the authoritative captured reaction state', async
     });
     assert.deepEqual(calls, [{
         operation: 'IGDirectReactionSendMutation',
-        input: { threadFbid: 'thread-1', messageId: 'message-1', emoji: '❤' },
+        input: { threadFbid: 'thread-1', messageId: 'message-1', emoji: '❤', remove: false },
     }]);
 });
 

@@ -61,6 +61,7 @@ See [`instagram-har-useful-requests.md`](./instagram-har-useful-requests.md) for
 | [`config.ts`](https://github.com/Ajaxy/telegram-tt/blob/a323b1f29f5b91e9a32b8c14866234e925fb0bfa/src/config.ts#L80-L92) | Chat rows are 72px; message slices are 40/60 and capped at two slices. | Start with 72px chats, 40-message slices, and at most 80 rendered messages. |
 | [`preloadTopChatMessages`](https://github.com/Ajaxy/telegram-tt/blob/a323b1f29f5b91e9a32b8c14866234e925fb0bfa/src/global/actions/api/chats.ts#L160-L181) | Likely chats are warmed in the background at a controlled cadence. | Warm only the first two visible, unopened chats after inbox idle; Telegram's top-20 policy is excessive for Instagram. |
 | [`InfiniteScroll.tsx`](https://github.com/Ajaxy/telegram-tt/blob/a323b1f29f5b91e9a32b8c14866234e925fb0bfa/src/components/ui/InfiniteScroll.tsx#L98-L163) | Short lists preload and prepends retain an element anchor. | Reuse the behavior, not the broad reusable component API. |
+| `useResize.ts`, `MiddleColumn.tsx`, and `Main.scss` at the pinned revision | Desktop left-column resizing uses a gap-aligned horizontal drag target, bounded responsive width, a retained custom width, and a reset gesture. | Independently implement an accessible separator with pointer and keyboard input, a 280–520px preference that preserves a 320px conversation, local preference persistence, and no compact-layout handle. |
 
 ### Complexity to leave behind
 

@@ -62,4 +62,7 @@ Everything else is the same as a normal send. In the HAR, `replied_to_client_con
 }
 ```
 
-Use another emoji value to change/create a reaction. The capture only shows `reaction_status: "created"`; removing reactions still needs a HAR sample.
+Use another emoji value to change/create a reaction. Revocation sends the current
+emoji through the same mutation with `reaction_status: "deleted"`. The local web
+capture proves the creation shape; the deletion value follows Instagram's direct
+reaction contract and is reconciled only from the mutation's authoritative array.

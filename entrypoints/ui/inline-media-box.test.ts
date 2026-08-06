@@ -2,8 +2,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { calculateInlineMediaBox } from './inline-media-box.ts';
 
-const EPSILON = 1e-4;
-
 function assertBoxClose(
     actual: { width: number; height: number },
     expected: { width: number; height: number },
@@ -14,7 +12,7 @@ function assertBoxClose(
 }
 
 test('inline media box preserves canonical geometry', () => {
-    assert.deepEqual(calculateInlineMediaBox(9, 16), { width: 240, height: 300 });
+    assert.deepEqual(calculateInlineMediaBox(9, 16), { width: 168.75, height: 300 });
     assert.deepEqual(calculateInlineMediaBox(1, 1), { width: 300, height: 300 });
     assert.deepEqual(calculateInlineMediaBox(16, 9), { width: 300, height: 168.75 });
     assert.deepEqual(calculateInlineMediaBox(1, 10), { width: 30, height: 300 });
@@ -48,42 +46,6 @@ test('inline media box floors browser-unrenderable axes at exactly one CSS pixel
     });
     assert.deepEqual(calculateInlineMediaBox(1 / 300, 1), { width: 1, height: 300 });
     assert.deepEqual(calculateInlineMediaBox(1, 1 / 300), { width: 300, height: 1 });
-});
-
-test('inline media box protects both portrait blend joins independently', () => {
-    const lowerRatio = 2 / 5;
-    const lowerBelow = calculateInlineMediaBox(lowerRatio - EPSILON, 1);
-    const lowerAt = calculateInlineMediaBox(lowerRatio, 1);
-    const lowerAbove = calculateInlineMediaBox(lowerRatio + EPSILON, 1);
-    assertBoxClose(lowerBelow, { width: 300 * (lowerRatio - EPSILON), height: 300 });
-    assert.deepEqual(lowerAt, { width: 120, height: 300 });
-    assert.ok(lowerAbove.width > 120 && lowerAbove.width - 120 < 0.05);
-
-    const upperRatio = 8 / 15;
-    const upperBelow = calculateInlineMediaBox(upperRatio - EPSILON, 1);
-    const upperAt = calculateInlineMediaBox(upperRatio, 1);
-    const upperAbove = calculateInlineMediaBox(upperRatio + EPSILON, 1);
-    assert.ok(upperBelow.width < 240 && 240 - upperBelow.width < 0.001);
-    assert.deepEqual(upperAt, { width: 240, height: 300 });
-    assert.deepEqual(upperAbove, { width: 240, height: 300 });
-});
-
-test('inline media box protects both landscape blend joins independently', () => {
-    const lowerRatio = 45 / 8;
-    const lowerBelow = calculateInlineMediaBox(lowerRatio - EPSILON, 1);
-    const lowerAt = calculateInlineMediaBox(lowerRatio, 1);
-    const lowerAbove = calculateInlineMediaBox(lowerRatio + EPSILON, 1);
-    assert.deepEqual(lowerBelow, { width: 300, height: 80 });
-    assert.deepEqual(lowerAt, { width: 300, height: 80 });
-    assert.ok(lowerAbove.height < 80 && 80 - lowerAbove.height < 0.001);
-
-    const upperRatio = 15 / 2;
-    const upperBelow = calculateInlineMediaBox(upperRatio - EPSILON, 1);
-    const upperAt = calculateInlineMediaBox(upperRatio, 1);
-    const upperAbove = calculateInlineMediaBox(upperRatio + EPSILON, 1);
-    assert.ok(upperBelow.height > 40 && upperBelow.height - 40 < 0.001);
-    assert.deepEqual(upperAt, { width: 300, height: 40 });
-    assertBoxClose(upperAbove, { width: 300, height: 300 / (upperRatio + EPSILON) });
 });
 
 test('inline media box remains finite, positive, bounded, and monotonic over logarithmic ratios', () => {

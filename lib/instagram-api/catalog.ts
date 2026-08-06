@@ -252,12 +252,12 @@ export const INSTAGRAM_GRAPHQL_OPERATIONS = {
     IGDirectReactionSendMutation: mutation(
         FRIENDLY_NAMES.sendReaction,
         DOC_IDS.sendReaction,
-        (input: { threadFbid: string; messageId: string; emoji: string }) => ({
+        (input: { threadFbid: string; messageId: string; emoji: string; remove: boolean }) => ({
             input: {
                 emoji: input.emoji,
                 item_id: '',
                 message_id: input.messageId,
-                reaction_status: 'created',
+                reaction_status: input.remove ? 'deleted' : 'created',
                 thread_id: input.threadFbid,
             },
         }),

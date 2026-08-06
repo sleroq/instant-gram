@@ -355,6 +355,7 @@ export type InstagramRpcMap = {
         threadFbid: string;
         messageId: string;
         emoji: string;
+        remove: boolean;
     }) => Result<SetReactionResult>;
     togglePin: (payload: {
         threadKey: string;

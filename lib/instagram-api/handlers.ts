@@ -365,11 +365,14 @@ function createInstagramHandlers(
         },
         async setReaction(value: unknown) {
             const payload = record(value);
-            exactKeys(payload, ['threadFbid', 'messageId', 'emoji']);
+            exactKeys(payload, ['threadFbid', 'messageId', 'emoji', 'remove']);
+            if (typeof payload.remove !== 'boolean')
+                throw new Error('Invalid Instagram reaction removal state');
             const input = {
                 threadFbid: requiredString(payload.threadFbid, 'thread FBID'),
                 messageId: requiredString(payload.messageId, 'message ID'),
                 emoji: requiredString(payload.emoji, 'reaction', 32),
+                remove: payload.remove,
             };
             return parseReactionMutationResponse(
                 await execute('IGDirectReactionSendMutation', input),

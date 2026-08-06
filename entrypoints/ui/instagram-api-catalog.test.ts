@@ -90,6 +90,7 @@ test('reaction builder matches the HAR-backed mutation variables exactly', () =>
                 threadFbid: '340282366841710300949128133551876018644',
                 messageId: 'mid.$cAABa-Z8DgqJu9RqQy2iUnYadFQdn',
                 emoji: '❤',
+                remove: false,
             },
             context,
         ),
@@ -102,6 +103,14 @@ test('reaction builder matches the HAR-backed mutation variables exactly', () =>
                 thread_id: '340282366841710300949128133551876018644',
             },
         },
+    );
+    assert.deepEqual(
+        operations.IGDirectReactionSendMutation.buildVariables({
+            threadFbid: 'thread', messageId: 'message', emoji: '❤', remove: true,
+        }, context),
+        { input: {
+            emoji: '❤', item_id: '', message_id: 'message', reaction_status: 'deleted', thread_id: 'thread',
+        } },
     );
 });
 

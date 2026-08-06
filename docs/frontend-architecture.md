@@ -14,7 +14,8 @@ frontend changes.
 | [`entrypoints/ui/store.ts`](../entrypoints/ui/store.ts) | Normalization, bounded history IDs, async actions, retries, generations, selection, pin ordering, warmups | DOM measurement or presentation |
 | [`entrypoints/ui/virtual-list.ts`](../entrypoints/ui/virtual-list.ts) | Pure fixed-row inbox window calculation | History geometry or fetching |
 | [`entrypoints/ui/history-window.ts`](../entrypoints/ui/history-window.ts) | Pure 40/80 history-window calculations | Fetching or DOM measurement |
-| [`entrypoints/ui/App.tsx`](../entrypoints/ui/App.tsx) | Shell, inbox DOM, bounded message pane, anchor measurement, store subscription | Instagram protocol details or a second cache |
+| [`entrypoints/ui/App.tsx`](../entrypoints/ui/App.tsx) | Shell and sidebar-resize interaction, inbox DOM, bounded message pane, anchor measurement, store subscription | Instagram protocol details or a second cache |
+| [`entrypoints/ui/sidebar-resize.ts`](../entrypoints/ui/sidebar-resize.ts) | Pure sidebar width bounds and persisted-value parsing | DOM events or entity state |
 | [`entrypoints/ui/styles.scss`](../entrypoints/ui/styles.scss) | Tokens, layout, presentation, motion/reduced-motion | Data-dependent decisions |
 | [`vendor/teact`](../vendor/teact) | Pinned MIT runtime | Telegram application code |
 
@@ -193,6 +194,15 @@ rejected as a whole so slide cardinality is never silently changed. Author
 profile metadata, caption/counts, liked/saved state, and download eligibility
 are parsed outside UI components.
 
+Reel-author profile images cross one additional trusted-media boundary. After
+the anchor returns normalized reel metadata, the extension background fetches
+only HTTPS `*.cdninstagram.com` image responses covered by its existing host
+permission, caps them at 2 MiB, and replaces the remote author URL with a data
+URL. This avoids CDN CORP failures in the extension page without weakening
+headers or teaching components Instagram host rules. A failed optional avatar
+becomes `null` so the reserved initials fallback remains usable and reel media
+does not fail with it.
+
 Media loading no longer depends on the failing, uncaptured
 `PolarisPostActionLoadPostQueryQuery`. The anchor prefers the validated numeric
 media-ID hint normalized from a DM share; when absent, it decodes the shortcode
@@ -271,10 +281,25 @@ not another media cache.
 
 Inline previews reuse the first cached reel item and reserve its normalized
 source dimensions; while that cache is warming they use the normalized XMA
-preview dimensions when Instagram supplies them. The media box is capped at
-360px high without cropping or changing its ratio. Item dimensions are required
+preview dimensions when Instagram supplies them. Item dimensions are required
 at the reel parser boundary (original media dimensions first, then the selected
-video/poster candidate), including every carousel child. Modal stages remain
+video/poster candidate), including every carousel child. Inline preview geometry
+is calculated from aspect ratio, independent of source resolution, by fitting
+proportionally within 300×300px. A 9:16, square, and 16:9 source therefore
+reserves 168.75×300, 300×300, and 300×168.75 respectively. The wrapper and
+media element share that source ratio, preventing the side bars that resulted
+when portrait media was widened to a comfort minimum.
+Source axes are normalized by their maximum before fitting, avoiding overflow
+across all finite positive dimensions accepted by the parser. Each fitted axis
+is continuously clamped to a CSS-layout-safe minimum of 1px because Chromium
+parses subnormal inline `aspect-ratio` terms as zero. Geometry therefore remains
+finite, positive, and renderable; below that floor the box intentionally stops
+being exactly proportional to the source rather than claiming a ratio the
+browser cannot lay out.
+The reel message card takes the calculated width and `object-fit: contain` keeps
+the source uncropped inside the exact wrapper/media element box through poster,
+loading, image, and video states. On a narrower message column, the complete
+card scales down while retaining that calculated box ratio. Modal stages remain
 fixed to the available viewport; stage container units fit each item's
 dimension-derived box against both available axes before `contain` fitting, so
 portrait, square, and landscape slides preserve ratio without resizing the
@@ -282,14 +307,23 @@ comments column. The first cached item is also an explicit memoized-row prop:
 asynchronous preload completion invalidates only its reel-bearing message row
 instead of leaving the XMA dimensions/source mounted indefinitely.
 Any cache-arrival geometry correction stays under the existing history
-`ResizeObserver` anchor contract rather than media load handlers. A video
-is activated only after a playable media event and while intersecting or within
-160px of the message scrollport; it is muted/looped and pauses when outside that
-range. A direct geometry check backs the observer on playable and scroll events,
-without introducing a component media cache. This behavior is an independent
-small-scope adaptation of the general Telegram Web A principle that expensive
-media should activate only near the viewport; no Telegram player source, styles,
-icons, or assets were used.
+`ResizeObserver` anchor contract rather than media load handlers. Inline history
+video never starts playback. It may preload metadata and display its poster, but
+playback starts only from an explicit action in the modal player. An intersection
+observer plus a direct 160px scrollport geometry check instead reports visible or
+near-visible shortcodes to the store. The bounded two-request/eight-start preload
+queue moves queued targets ahead. A normalized visible target outside the first
+eight candidates displaces an unstarted low-priority candidate without increasing
+the actual-start budget or creating a component cache; an
+explicit open still joins an overlapping request. Comments remain excluded from
+preload and begin only after explicit open and media readiness.
+
+Shared reel and inline-post rows are media surfaces rather than generic message
+bubbles. Their compact author identity is overflow-safe, their bubble background
+and padding are removed, grouped reactions are a sibling beneath content, and
+their absolute bottom-right timestamp is revealed only by row hover or focus.
+Reply context and history-level date grouping remain intact. These behaviors are
+independently implemented; no Telegram source, styles, icons, or assets were used.
 
 ### Pin normalization and displayed order
 
@@ -559,9 +593,9 @@ shared-post action: a `reel_share` uses the same internal reel-preview button,
 while an `inline_share` with its parser-provided `targetUrl` uses the same
 `target="_blank"` link. Plain text, images without an action, activity, and
 unsupported rows do nothing; the UI neither derives nor invents Instagram URLs.
-Plain Space on a reaction-capable server row applies `❤`, the first established
-reaction-picker choice. The row and store both treat an existing viewer `❤` as
-a safe no-op, and a pending mutation remains single-flight. The row reads the
+Plain Space on a reaction-capable server row applies `❤`, the default reaction.
+The row treats an existing viewer `❤` as a safe no-op, and a pending mutation
+remains single-flight. The row reads the
 current normalized mutation and reaction synchronously: only a newly accepted
 reaction prevents Space scrolling, while pending and already-default no-ops do
 not. Editors, modifier chords, nested links/buttons, contextual surfaces, and
@@ -575,20 +609,26 @@ Context Menu/Shift+F10, or movement-cancelled touch hold. Pending actions are
 disabled and mutation failures are announced on the affected row. A
 loaded server message offers reply and create/change reaction;
 and a failed local send offers retry/remove. The reaction picker marks the
-viewer's current choice and serializes through the existing store action. It
-does not offer reaction removal: the routed `setReaction` mutation and captured
-catalog currently prove only `reaction_status: 'created'`, so removal would be
-an invented protocol capability. Reply selection preserves a visible DOM anchor,
+viewer's current choice and serializes through the existing store action.
+Selecting a placed reaction adds it when it belongs only to others and revokes
+it when it includes the viewer; revocation uses the same routed mutation with
+`reaction_status: 'deleted'`. Reply selection preserves a visible DOM anchor,
 focuses the thread composer without browser scrolling, and remains isolated with
 the store-owned per-thread draft/reply target.
 
-Server message rows also expose a small reaction affordance only while the row
-is hovered or contains keyboard focus. It sits beyond the bubble's trailing edge
-for incoming messages and leading edge for outgoing messages, is absolutely
-positioned so message geometry and anchors do not change, and opens the same
-clamped keyboard-operable picker. Context-menu keyboard handling lives on the
-focusable row itself; the browser menu is prevented only for rows whose custom
-menu owns real actions.
+Server message rows expose one compact default-reaction control only while the
+row is hovered or contains keyboard focus. Hovering or focusing that control
+progressively expands a horizontal rail to five additional recent reactions and
+an expander; moving through its children keeps it expanded for pointer and
+keyboard operation. It sits beyond the trailing edge for incoming messages and
+leading edge for outgoing messages, is absolutely positioned so message geometry
+and anchors do not change. The expander and contextual action
+open one categorized, clamped, keyboard-operable full chooser. Its menu owns
+labeled reaction groups containing radio menu items; Left/Right move by item and
+Up/Down move deterministically between category rows. Picker state is
+presentation-only while optimistic single-flight/error state remains normalized.
+Context-menu keyboard handling lives on the focusable row itself; the browser
+menu is prevented only for rows whose custom menu owns real actions.
 
 ### Warmup generations, timers, and budget
 
@@ -815,7 +855,7 @@ properties; data state and theme values do not move into `App.tsx` or the fronte
 There is intentionally no light-theme branch in the current product scope.
 
 The desktop shell uses 16px outer spacing and a 16px inter-panel gap. The
-sidebar is a non-resizable, full-height 24px-radius floating island, while the
+sidebar is a horizontally resizable, full-height 24px-radius floating island, while the
 conversation title is contained by its own 32px-radius floating header. The
 title text is not a separate decorative chip. Interactive rows and status/control surfaces use a
 shared 16px radius, layered dark backgrounds, spacing, and restrained elevation
@@ -825,12 +865,29 @@ Scrollbars remain six pixels wide.
 Chat rows remain exactly 72px high: their eight-pixel horizontal inset and
 rounded fill do not change the spacer or translate geometry.
 
-Responsive shell presentation belongs exclusively to `styles.scss`; selection
-remains in the normalized store and `App.tsx` only derives a shell modifier from
-`selectedThreadId`. At widths of at least 1024px the sidebar is fixed at 390px
-and explicitly `resize: none`. Between 641px and 1023px it is clamped to
-`clamp(280px, 38vw, 360px)`, preserving a flexible conversation column. At
-640px and below, CSS shows the inbox when selection is empty and the
+Responsive shell presentation belongs to `styles.scss`; selection remains in
+the normalized store and `App.tsx` derives the shell modifier from
+`selectedThreadId`. On desktop, an independently implemented 12px separator in
+the existing 16px panel gap adjusts the grid's sidebar track. The preferred
+width defaults to 390px, is clamped to 280–520px while reserving at least 320px
+for the conversation, and may become slightly narrower than 280px at desktop
+viewport widths from 641–647px to preserve that conversation minimum. Pointer updates
+do not alter chat IDs, row height, spacer height, scroll position, or the
+fixed-row virtual window. Arrow keys adjust by 10px (40px with Shift), Home/End
+select the current bounds, and double click restores the default. The semantic
+vertical separator exposes its current/min/max values and visible focus.
+
+The preferred desktop width is a presentation-only local preference under
+`icr:sidebar-width`; it is validated on read and persisted after pointer or
+keyboard changes. Viewport clamping does not overwrite that preference, so a
+temporary narrow window can recover the chosen width when expanded. Preference
+storage is best-effort: denied reads/writes/removals fall back to the default or
+continue the current interaction. Viewport width is independently reactive so
+separator min/max semantics update even when the clamped width itself does not.
+Pointer up, cancellation, lost capture, and component teardown share one
+idempotent cleanup path for capture and the global resize cursor. At 640px
+and below the separator is absent from layout and CSS shows the inbox when
+selection is empty and the
 conversation when selection exists. The compact back button dispatches
 `showInbox`, which clears selection without deleting cached history, bounded
 viewport IDs, or logical anchors. It does not create a second responsive state
@@ -847,7 +904,9 @@ Pressed states reduce opacity, focus remains a visible outline, and danger,
 reply-context, and spinner borders are retained only for their functional cue.
 
 Only transform and opacity are used for interaction motion, with the global
-reduced-motion override retained.
+reduced-motion override retained. Sidebar width follows input directly rather
+than using a layout transition; the separator's opacity cue is covered by that
+override.
 
 - Keep chat DOM at no more than 25 plus six overscan rows and history DOM at no
   more than 80 message rows.

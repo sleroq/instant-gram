@@ -36,7 +36,7 @@ test.after(async () => {
     await server.close();
 });
 
-test('dark desktop shell keeps floating fixed geometry and rounded selection', async () => {
+test('dark desktop shell keeps floating geometry and exposes its resize separator', async () => {
     const page = await openHarness({ width: 1200, height: 700 });
     await page.evaluate(() => window.historyHarness.mount('resize'));
     await page.waitForFunction(() => document.querySelector('.chat-row--selected'));
@@ -46,6 +46,7 @@ test('dark desktop shell keeps floating fixed geometry and rounded selection', a
         const sidebar = document.querySelector<HTMLElement>('.sidebar')!;
         const header = document.querySelector<HTMLElement>('.conversation__header')!;
         const selected = document.querySelector<HTMLElement>('.chat-row--selected')!;
+        const resizeHandle = document.querySelector<HTMLElement>('.sidebar-resize')!;
         const sidebarRect = sidebar.getBoundingClientRect();
         const headerRect = header.getBoundingClientRect();
         return {
@@ -69,6 +70,11 @@ test('dark desktop shell keeps floating fixed geometry and rounded selection', a
             },
             selectedRadius: getComputedStyle(selected).borderRadius,
             selectedBorderWidth: getComputedStyle(selected).borderWidth,
+            resizeHandle: {
+                role: resizeHandle.getAttribute('role'),
+                orientation: resizeHandle.getAttribute('aria-orientation'),
+                value: resizeHandle.getAttribute('aria-valuenow'),
+            },
         };
     });
     assert.equal(result.colorScheme, 'dark');
@@ -87,6 +93,188 @@ test('dark desktop shell keeps floating fixed geometry and rounded selection', a
     assert.ok(result.header.x > result.sidebar.x + result.sidebar.width);
     assert.equal(result.selectedRadius, '16px');
     assert.equal(result.selectedBorderWidth, '0px');
+    assert.deepEqual(result.resizeHandle, { role: 'separator', orientation: 'vertical', value: '390' });
+    await page.close();
+});
+
+test('sidebar resize supports pointer, keyboard, persistence, and compact layout boundaries', async () => {
+    const page = await openHarness({ width: 1200, height: 700 });
+    await page.evaluate(() => {
+        localStorage.removeItem('icr:sidebar-width');
+        return window.historyHarness.mount('resize-virtual');
+    });
+    await page.waitForFunction(() => document.querySelector('.chat-row--selected'));
+    const handle = page.getByRole('separator', { name: 'Resize conversation list' });
+    const handleBox = await handle.boundingBox();
+    assert.ok(handleBox);
+    await page.locator('.chat-list').evaluate(list => {
+        list.scrollTop = 720;
+        list.dispatchEvent(new Event('scroll'));
+    });
+    await page.waitForFunction(() =>
+        document.querySelector<HTMLElement>('[data-thread-id]')?.dataset.threadId === 'resize-thread-7');
+    const before = await page.evaluate(() => ({
+        ids: Array.from(document.querySelectorAll<HTMLElement>('[data-thread-id]'), row => row.dataset.threadId),
+        spacerHeight: document.querySelector<HTMLElement>('.chat-list__spacer')!.style.height,
+        scrollTop: document.querySelector<HTMLElement>('.chat-list')!.scrollTop,
+        rowCount: document.querySelectorAll('[data-thread-id]').length,
+    }));
+    assert.equal(before.rowCount, 31);
+    assert.equal(before.spacerHeight, '4320px');
+    assert.equal(before.scrollTop, 720);
+    assert.deepEqual(before.ids, Array.from({ length: 31 }, (_, index) => `resize-thread-${index + 7}`));
+    await page.evaluate(() => {
+        (window as Window & { resizeIdentityRow?: Element }).resizeIdentityRow =
+            document.querySelector('[data-thread-id="resize-thread-20"]')!;
+    });
+
+    await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + 80);
+    await page.mouse.down();
+    await page.mouse.move(handleBox.x + handleBox.width / 2 + 70, handleBox.y + 80, { steps: 5 });
+    await page.mouse.up();
+    await page.waitForFunction(() => document.querySelector('.sidebar')!.getBoundingClientRect().width === 460);
+    assert.equal(await handle.getAttribute('aria-valuenow'), '460');
+    assert.equal(await page.evaluate(() => localStorage.getItem('icr:sidebar-width')), '460');
+    assert.equal(await page.evaluate(() =>
+        (window as Window & { resizeIdentityRow?: Element }).resizeIdentityRow ===
+            document.querySelector('[data-thread-id="resize-thread-20"]')),
+    true);
+    assert.deepEqual(await page.evaluate(() => ({
+        ids: Array.from(document.querySelectorAll<HTMLElement>('[data-thread-id]'), row => row.dataset.threadId),
+        spacerHeight: document.querySelector<HTMLElement>('.chat-list__spacer')!.style.height,
+        scrollTop: document.querySelector<HTMLElement>('.chat-list')!.scrollTop,
+    })), {
+        ids: before.ids,
+        spacerHeight: before.spacerHeight,
+        scrollTop: before.scrollTop,
+    });
+
+    await page.evaluate(() => window.historyHarness.mount('resize-virtual'));
+    await page.waitForFunction(() => document.querySelector('.sidebar')!.getBoundingClientRect().width === 460);
+    const remountedHandle = page.getByRole('separator', { name: 'Resize conversation list' });
+    assert.equal(await remountedHandle.getAttribute('aria-valuenow'), '460');
+    await page.locator('.chat-list').evaluate(list => {
+        list.scrollTop = 720;
+        list.dispatchEvent(new Event('scroll'));
+    });
+    await page.waitForFunction(() =>
+        document.querySelector<HTMLElement>('[data-thread-id]')?.dataset.threadId === 'resize-thread-7');
+
+    await remountedHandle.focus();
+    await page.keyboard.press('ArrowLeft');
+    await page.waitForFunction(() => document.querySelector('.sidebar')!.getBoundingClientRect().width === 450);
+    assert.equal(await page.evaluate(() => localStorage.getItem('icr:sidebar-width')), '450');
+    assert.deepEqual(await page.evaluate(() => ({
+        ids: Array.from(document.querySelectorAll<HTMLElement>('[data-thread-id]'), row => row.dataset.threadId),
+        spacerHeight: document.querySelector<HTMLElement>('.chat-list__spacer')!.style.height,
+        scrollTop: document.querySelector<HTMLElement>('.chat-list')!.scrollTop,
+        rowCount: document.querySelectorAll('[data-thread-id]').length,
+        conversationWidth: document.querySelector<HTMLElement>('.conversation')!.getBoundingClientRect().width,
+    })), { ...before, conversationWidth: 702 });
+
+    await page.setViewportSize({ width: 850, height: 700 });
+    await page.waitForFunction(() =>
+        document.querySelector('.sidebar')!.getBoundingClientRect().width === 450 &&
+        document.querySelector('.sidebar-resize')!.getAttribute('aria-valuemax') === '482');
+    assert.deepEqual(await page.evaluate(() => {
+        const resizeHandle = document.querySelector('.sidebar-resize')!;
+        return {
+            min: resizeHandle.getAttribute('aria-valuemin'),
+            max: resizeHandle.getAttribute('aria-valuemax'),
+            now: resizeHandle.getAttribute('aria-valuenow'),
+        };
+    }), { min: '280', max: '482', now: '450' });
+
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    const reducedMotion = await page.evaluate(() => ({
+        requested: matchMedia('(prefers-reduced-motion: reduce)').matches,
+        handleTransitionSeconds: Number.parseFloat(
+            getComputedStyle(document.querySelector<HTMLElement>('.sidebar-resize')!, '::after').transitionDuration,
+        ),
+        shellTransition: getComputedStyle(document.querySelector<HTMLElement>('.app-shell')!).transitionProperty,
+    }));
+    assert.equal(reducedMotion.requested, true);
+    assert.ok(reducedMotion.handleTransitionSeconds <= 0.001);
+    assert.ok(!reducedMotion.shellTransition.includes('width'));
+
+    await page.setViewportSize({ width: 600, height: 700 });
+    const compact = await page.evaluate(() => ({
+        handleDisplay: getComputedStyle(document.querySelector<HTMLElement>('.sidebar-resize')!).display,
+        sidebarWidth: document.querySelector<HTMLElement>('.sidebar')!.getBoundingClientRect().width,
+        conversationWidth: document.querySelector<HTMLElement>('.conversation')!.getBoundingClientRect().width,
+        viewportWidth: innerWidth,
+        overflow: document.querySelector<HTMLElement>('.app-shell')!.scrollWidth - innerWidth,
+    }));
+    assert.equal(compact.handleDisplay, 'none');
+    assert.equal(compact.sidebarWidth, 0);
+    assert.ok(compact.conversationWidth >= compact.viewportWidth - 32);
+    assert.equal(compact.overflow, 0);
+    await page.setViewportSize({ width: 1200, height: 700 });
+    await page.waitForFunction(() => document.querySelector('.sidebar')!.getBoundingClientRect().width === 450);
+    assert.equal(await page.evaluate(() => localStorage.getItem('icr:sidebar-width')), '450');
+    await page.evaluate(() => localStorage.removeItem('icr:sidebar-width'));
+    await page.close();
+});
+
+test('sidebar resize cleanup handles lost capture and unmount idempotently', async () => {
+    const page = await openHarness({ width: 1200, height: 700 });
+    await page.evaluate(() => window.historyHarness.mount('resize'));
+    const handle = page.getByRole('separator', { name: 'Resize conversation list' });
+    const box = await handle.boundingBox();
+    assert.ok(box);
+    await handle.evaluate(element => {
+        element.addEventListener('pointerdown', event => {
+            (element as HTMLElement).dataset.activePointerId = String((event as PointerEvent).pointerId);
+        });
+    });
+
+    await page.mouse.move(box.x + box.width / 2, box.y + 80);
+    await page.mouse.down();
+    assert.equal(await page.evaluate(() => document.body.classList.contains('is-resizing-sidebar')), true);
+    await handle.evaluate(element => element.dispatchEvent(new PointerEvent('lostpointercapture', {
+        bubbles: false,
+        pointerId: Number((element as HTMLElement).dataset.activePointerId),
+    })));
+    assert.equal(await page.evaluate(() => document.body.classList.contains('is-resizing-sidebar')), false);
+    await page.mouse.up();
+
+    await page.mouse.move(box.x + box.width / 2, box.y + 100);
+    await page.mouse.down();
+    assert.equal(await page.evaluate(() => document.body.classList.contains('is-resizing-sidebar')), true);
+    await handle.evaluate(element => element.dispatchEvent(new PointerEvent('pointercancel', {
+        bubbles: true,
+        pointerId: Number((element as HTMLElement).dataset.activePointerId),
+    })));
+    assert.equal(await page.evaluate(() => document.body.classList.contains('is-resizing-sidebar')), false);
+    await page.mouse.up();
+
+    await page.mouse.move(box.x + box.width / 2, box.y + 120);
+    await page.mouse.down();
+    assert.equal(await page.evaluate(() => document.body.classList.contains('is-resizing-sidebar')), true);
+    await page.evaluate(() => window.historyHarness.mount('resize'));
+    assert.equal(await page.evaluate(() => document.body.classList.contains('is-resizing-sidebar')), false);
+    await page.mouse.up();
+    await page.close();
+});
+
+test('unavailable preference storage does not block sidebar mount or interaction', async () => {
+    const page = await openHarness({ width: 1200, height: 700 });
+    const pageErrors: string[] = [];
+    page.on('pageerror', error => pageErrors.push(error.message));
+    await page.evaluate(() => {
+        localStorage.clear();
+        Storage.prototype.getItem = () => { throw new Error('storage read denied'); };
+        Storage.prototype.setItem = () => { throw new Error('storage write denied'); };
+        Storage.prototype.removeItem = () => { throw new Error('storage remove denied'); };
+        return window.historyHarness.mount('resize');
+    });
+    const handle = page.getByRole('separator', { name: 'Resize conversation list' });
+    await handle.focus();
+    await page.keyboard.press('ArrowRight');
+    await page.waitForFunction(() => document.querySelector('.sidebar')!.getBoundingClientRect().width === 400);
+    await handle.dblclick();
+    await page.waitForFunction(() => document.querySelector('.sidebar')!.getBoundingClientRect().width === 390);
+    assert.deepEqual(pageErrors, []);
     await page.close();
 });
 
@@ -140,7 +328,7 @@ test('delayed reel metadata updates inline ratio without moving the history anch
             rows: document.querySelectorAll('[data-message-id]').length,
         };
     });
-    assert.ok(before.width > 225 && before.width < 240);
+    assert.ok(Math.abs(before.width - 150) < 0.1);
     assert.ok(Math.abs(before.height - 300) < 0.1);
     assert.deepEqual(before.media, { width: before.width, height: before.height });
     assert.equal(before.objectFit, 'contain');
@@ -208,13 +396,17 @@ test('reel preview and modal own playback, carousel, actions, comments, links, a
             height: video.getAttribute('height'),
         };
     });
-    assert.ok(Math.abs(inlineGeometry.ratio - 240 / 300) < 0.01);
-    assert.deepEqual(inlineGeometry.box, { width: 240, height: 300 });
+    assert.ok(Math.abs(inlineGeometry.ratio - 9 / 16) < 0.01);
+    assert.deepEqual(inlineGeometry.box, { width: 168.75, height: 300 });
     assert.deepEqual(inlineGeometry.media, inlineGeometry.box);
     assert.equal(inlineGeometry.cardWidth, inlineGeometry.box.width);
     assert.deepEqual({ width: inlineGeometry.width, height: inlineGeometry.height }, {
         width: '540', height: '960',
     });
+    assert.match(
+        await page.locator('[data-message-id="reel-message"] .shared-post__author-avatar img').getAttribute('src') ?? '',
+        /^data:image\/gif;base64,/,
+    );
     const sharedPost = page.locator('[data-message-id="reel-message"]');
     const sharedLayout = await sharedPost.evaluate(element => {
         const bubble = element.querySelector<HTMLElement>('.message__bubble')!;
@@ -423,8 +615,8 @@ test('portrait reel preview narrows as one bounded media box on compact screens'
         };
     });
     assert.equal(geometry.viewportWidth, 320);
-    assert.ok(geometry.box.width <= 240 && geometry.box.height <= 300, JSON.stringify(geometry));
-    assert.ok(Math.abs(geometry.box.width / geometry.box.height - 240 / 300) < 0.01, JSON.stringify(geometry));
+    assert.ok(geometry.box.width <= 300 && geometry.box.height <= 300, JSON.stringify(geometry));
+    assert.ok(Math.abs(geometry.box.width / geometry.box.height - 9 / 16) < 0.01, JSON.stringify(geometry));
     assert.deepEqual(geometry.video, geometry.box);
     assert.equal(geometry.cardWidth, geometry.box.width);
     assert.equal(geometry.pageOverflows, false);
@@ -805,7 +997,7 @@ test('group sender names lead runs and incoming avatars stick to the visible gro
     await page.close();
 });
 
-test('intermediate shell clamps the non-resizable sidebar without horizontal overflow', async () => {
+test('intermediate shell keeps the resizable default and a usable conversation without overflow', async () => {
     const page = await openHarness({ width: 800, height: 650 });
     await page.evaluate(() => window.historyHarness.mount('resize'));
     await page.waitForFunction(() => document.querySelector('.conversation__header'));
@@ -816,12 +1008,14 @@ test('intermediate shell clamps the non-resizable sidebar without horizontal ove
             sidebarWidth: sidebar.getBoundingClientRect().width,
             conversationWidth: conversation.getBoundingClientRect().width,
             resize: getComputedStyle(sidebar).resize,
+            handleDisplay: getComputedStyle(document.querySelector<HTMLElement>('.sidebar-resize')!).display,
             overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
         };
     });
-    assert.ok(result.sidebarWidth >= 280 && result.sidebarWidth < 390);
-    assert.ok(result.conversationWidth > 300);
+    assert.equal(result.sidebarWidth, 390);
+    assert.ok(result.conversationWidth >= 320);
     assert.equal(result.resize, 'none');
+    assert.notEqual(result.handleDisplay, 'none');
     assert.ok(result.overflow <= 0);
     await page.close();
 });
@@ -1085,17 +1279,34 @@ test('reply selection, failed-send recovery, and bounded reaction picker are acc
     await page.waitForFunction(() => getComputedStyle(
         document.querySelector('[data-message-id="m0"] .message__reaction-rail')!,
     ).opacity === '1');
+    assert.equal(await reactionRail.locator('button:visible').count(), 1);
+    await page.locator('[data-message-id="m0"] .message__reaction-default').hover();
+    assert.equal(await reactionRail.locator('button:visible').count(), 7);
     const incomingAlignment = await page.locator('[data-message-id="m0"]').evaluate(element => {
         const bubble = element.querySelector('.message__bubble')!.getBoundingClientRect();
-        const trigger = element.querySelector('.message__reaction-rail')!.getBoundingClientRect();
-        return { bubbleRight: bubble.right, triggerLeft: trigger.left };
+        const rail = element.querySelector('.message__reaction-rail')!;
+        const trigger = rail.getBoundingClientRect();
+        return {
+            bubbleRight: bubble.right,
+            triggerLeft: trigger.left,
+            railWidth: trigger.width,
+            railHeight: trigger.height,
+            buttonColumns: new Set([...rail.querySelectorAll('button')].map(button =>
+                Math.round(button.getBoundingClientRect().left))).size,
+        };
     });
     assert.ok(incomingAlignment.triggerLeft >= incomingAlignment.bubbleRight);
+    assert.equal(incomingAlignment.buttonColumns, 7);
+    assert.ok(incomingAlignment.railWidth > incomingAlignment.railHeight);
     await reactionAffordance.click();
     await page.getByRole('menu', { name: 'Choose a reaction' }).waitFor();
     await page.keyboard.press('Escape');
+    await page.mouse.move(0, 0);
     await page.locator('[data-message-id="m0"]').focus();
     assert.equal(await reactionRail.evaluate(element => getComputedStyle(element).opacity), '1');
+    assert.equal(await reactionRail.locator('button:visible').count(), 1);
+    await page.keyboard.press('Tab');
+    assert.equal(await reactionRail.locator('button:visible').count(), 7);
 
     await page.locator('[data-message-id="m0"]').click({ button: 'right' });
     const replyAnchorTop = await page.locator('[data-message-id="m0"]').evaluate(element => element.getBoundingClientRect().top);
@@ -1116,35 +1327,49 @@ test('reply selection, failed-send recovery, and bounded reaction picker are acc
     const picker = page.getByRole('menu', { name: 'Choose a reaction' });
     await picker.waitFor();
     assert.equal(await picker.getByRole('menuitemradio').count(), 18);
+    assert.deepEqual(await picker.getByRole('group').allTextContents(), [
+        'Faces😂😮😢😡🥰😱',
+        'Gestures👍👏🙌🙏💪👎',
+        'Symbols❤🔥✨🎉💯💔',
+    ]);
     await picker.getByRole('menuitemradio', { name: 'React with 😂' }).press('Enter');
     await page.locator('.reaction-chip--viewer').first().waitFor();
     assert.match(
         await page.locator('.reaction-chip--viewer').first().getAttribute('aria-label') ?? '',
-        /including yours/,
+        /Remove your/,
     );
     await page.locator('[data-message-id="m0"]').click({ button: 'right' });
     await page.getByRole('menuitem', { name: 'Change reaction 😂' }).click();
-    const currentReaction = page.getByRole('menuitemradio', { name: '😂, current reaction' });
+    const currentReaction = page.getByRole('menuitemradio', { name: 'Remove reaction 😂' });
     await currentReaction.waitFor();
     assert.equal(await currentReaction.getAttribute('aria-checked'), 'true');
-    assert.equal(await currentReaction.isDisabled(), true);
+    assert.equal(await currentReaction.isDisabled(), false);
     const earlierReaction = page.getByRole('menuitemradio', { name: 'React with 😮' });
     const laterReaction = page.getByRole('menuitemradio', { name: 'React with 😢' });
     await earlierReaction.press('ArrowRight');
     assert.equal(await laterReaction.evaluate(element => element === document.activeElement), true);
     await laterReaction.press('ArrowLeft');
     assert.equal(await earlierReaction.evaluate(element => element === document.activeElement), true);
+    await earlierReaction.press('ArrowDown');
+    assert.equal(await page.getByRole('menuitemradio', { name: 'React with 👏' }).evaluate(
+        element => element === document.activeElement,
+    ), true);
+    await page.keyboard.press('ArrowUp');
+    assert.equal(await earlierReaction.evaluate(element => element === document.activeElement), true);
     await earlierReaction.press('End');
     assert.equal(await page.getByRole('menuitemradio', { name: 'React with 💔' }).evaluate(
         element => element === document.activeElement,
     ), true);
     await page.getByRole('menuitemradio', { name: 'React with 👍' }).press('Home');
+    assert.equal(await currentReaction.evaluate(element => element === document.activeElement), true);
+    await currentReaction.press('ArrowRight');
     assert.equal(await earlierReaction.evaluate(element => element === document.activeElement), true);
     await earlierReaction.press('ArrowRight');
     await laterReaction.press('Enter');
     await page.waitForFunction(() => document.querySelector('.reaction-chip--viewer')?.textContent?.includes('😢'));
     const callsBeforeQuickReaction = (await page.evaluate(() => window.historyHarness.reactionCalls())).length;
     await page.locator('[data-message-id="m0"] .message__bubble').hover();
+    await page.locator('[data-message-id="m0"] .message__reaction-default').hover();
     await page.locator('[data-message-id="m0"]').getByRole('button', { name: 'React with 👍' }).click();
     await page.waitForFunction(() => document.querySelector(
         '[data-message-id="m0"] .reaction-chip--viewer',
@@ -1153,6 +1378,12 @@ test('reply selection, failed-send recovery, and bounded reaction picker are acc
         (await page.evaluate(() => window.historyHarness.reactionCalls())).length,
         callsBeforeQuickReaction + 1,
     );
+    const placedReaction = page.locator('[data-message-id="m0"] .reaction-chip--viewer');
+    await placedReaction.click();
+    await page.waitForFunction(() => !document.querySelector('[data-message-id="m0"] .reaction-chip--viewer'));
+    assert.deepEqual((await page.evaluate(() => window.historyHarness.reactionCalls())).at(-1), {
+        threadFbid: '1001', messageId: 'm0', emoji: '👍', remove: true,
+    });
 
     await page.evaluate(() => {
         const scroller = document.querySelector<HTMLElement>('.messages')!;
@@ -1539,7 +1770,7 @@ test('focused message Enter opens only an existing share action and Space leaves
     })));
     assert.equal(firstSpaceAllowed, false, 'a handled Space must prevent page scrolling');
     assert.deepEqual(await page.evaluate(() => window.historyHarness.reactionCalls()), [{
-        threadFbid: '1001', messageId: 'keyboard-target', emoji: '❤',
+        threadFbid: '1001', messageId: 'keyboard-target', emoji: '❤', remove: false,
     }]);
     assert.equal(await target.evaluate(row => row.dispatchEvent(new KeyboardEvent('keydown', {
         key: ' ', code: 'Space', bubbles: true, cancelable: true,

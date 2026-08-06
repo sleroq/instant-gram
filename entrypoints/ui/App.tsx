@@ -18,6 +18,14 @@ import type { Message, ReelMediaItem, Thread, User } from '../../lib/domain';
 import type { FrontendStore, HistoryState, PinMutation, ReelState } from './store';
 import { hasLocalOlderIds } from './history-window';
 import { calculateInlineMediaBox } from './inline-media-box';
+import {
+    clampSidebarWidth,
+    DEFAULT_SIDEBAR_WIDTH,
+    readSidebarWidthPreference,
+    removeSidebarWidthPreference,
+    sidebarWidthBounds,
+    writeSidebarWidthPreference,
+} from './sidebar-resize';
 import { computeChatWindow } from './virtual-list';
 
 const ROW_HEIGHT = 72;
@@ -42,6 +50,18 @@ export default function App({ store }: AppProps) {
     useStore(store);
     useVimNavigation(store);
     const reelPlaybackMemory = useRef<ReelPlaybackMemory>(new Map());
+    const [initialSidebarPreference] = useState(() =>
+        readSidebarWidthPreference() ?? DEFAULT_SIDEBAR_WIDTH);
+    const sidebarPreferenceRef = useRef(initialSidebarPreference);
+    const sidebarDragRef = useRef<{
+        pointerId: number;
+        startX: number;
+        startWidth: number;
+        target: HTMLDivElement;
+    }>();
+    const [viewportWidth, setViewportWidth] = useState(window.innerWidth);
+    const [sidebarWidth, setSidebarWidth] = useState(() =>
+        clampSidebarWidth(initialSidebarPreference, window.innerWidth));
     const state = store.state;
     const selected = state.selectedThreadId
         ? state.inbox.byId[state.selectedThreadId]
@@ -51,9 +71,43 @@ export default function App({ store }: AppProps) {
         ? state.reels.byId[state.reels.activeId]
         : undefined;
 
+    const finishSidebarResize = (pointerId?: number, persist = false) => {
+        const drag = sidebarDragRef.current;
+        if (pointerId !== undefined && drag?.pointerId !== pointerId) return;
+        sidebarDragRef.current = undefined;
+        document.body.classList.remove('is-resizing-sidebar');
+        if (!drag) return;
+        if (drag.target.hasPointerCapture(drag.pointerId)) {
+            drag.target.releasePointerCapture(drag.pointerId);
+        }
+        if (persist) writeSidebarWidthPreference(sidebarPreferenceRef.current);
+    };
+
+    useEffect(() => {
+        const handleResize = () => {
+            setViewportWidth(window.innerWidth);
+            setSidebarWidth(clampSidebarWidth(sidebarPreferenceRef.current, window.innerWidth));
+        };
+        window.addEventListener('resize', handleResize);
+        return () => {
+            window.removeEventListener('resize', handleResize);
+            finishSidebarResize(undefined, true);
+        };
+    }, []);
+
+    const applySidebarWidth = (width: number) => {
+        const nextWidth = clampSidebarWidth(width, window.innerWidth);
+        sidebarPreferenceRef.current = nextWidth;
+        setSidebarWidth(nextWidth);
+    };
+    const sidebarBounds = sidebarWidthBounds(viewportWidth);
+
     return (
         <>
-        <main className={`app-shell${selected ? ' app-shell--conversation-selected' : ''}`}>
+        <main
+            className={`app-shell${selected ? ' app-shell--conversation-selected' : ''}`}
+            style={`--sidebar-width: ${sidebarWidth}px` as unknown as React.CSSProperties}
+        >
             <aside className="sidebar">
                 <header className="sidebar__header">
                     <span className="brand-mark">IC</span>
@@ -64,6 +118,59 @@ export default function App({ store }: AppProps) {
                 </header>
                 <ChatList store={store} />
             </aside>
+            <div
+                className="sidebar-resize"
+                role="separator"
+                aria-label="Resize conversation list"
+                aria-orientation="vertical"
+                aria-valuemin={sidebarBounds.min}
+                aria-valuemax={sidebarBounds.max}
+                aria-valuenow={sidebarWidth}
+                tabIndex={0}
+                onPointerDown={(event: ReactPointerEvent<HTMLDivElement>) => {
+                    if (event.button !== 0) return;
+                    event.preventDefault();
+                    sidebarDragRef.current = {
+                        pointerId: event.pointerId,
+                        startX: event.clientX,
+                        startWidth: sidebarWidth,
+                        target: event.currentTarget,
+                    };
+                    event.currentTarget.setPointerCapture(event.pointerId);
+                    document.body.classList.add('is-resizing-sidebar');
+                }}
+                onPointerMove={(event: ReactPointerEvent<HTMLDivElement>) => {
+                    const drag = sidebarDragRef.current;
+                    if (!drag || drag.pointerId !== event.pointerId) return;
+                    applySidebarWidth(drag.startWidth + event.clientX - drag.startX);
+                }}
+                onPointerUp={(event: ReactPointerEvent<HTMLDivElement>) => {
+                    finishSidebarResize(event.pointerId, true);
+                }}
+                onPointerCancel={(event: ReactPointerEvent<HTMLDivElement>) => {
+                    finishSidebarResize(event.pointerId, true);
+                }}
+                onLostPointerCaptureCapture={(event: ReactPointerEvent<HTMLDivElement>) => {
+                    finishSidebarResize(event.pointerId, true);
+                }}
+                onDoubleClick={() => {
+                    sidebarPreferenceRef.current = DEFAULT_SIDEBAR_WIDTH;
+                    setSidebarWidth(clampSidebarWidth(DEFAULT_SIDEBAR_WIDTH, window.innerWidth));
+                    removeSidebarWidthPreference();
+                }}
+                onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
+                    let nextWidth: number | undefined;
+                    const step = event.shiftKey ? 40 : 10;
+                    if (event.key === 'ArrowLeft') nextWidth = sidebarWidth - step;
+                    else if (event.key === 'ArrowRight') nextWidth = sidebarWidth + step;
+                    else if (event.key === 'Home') nextWidth = sidebarBounds.min;
+                    else if (event.key === 'End') nextWidth = sidebarBounds.max;
+                    if (nextWidth === undefined) return;
+                    event.preventDefault();
+                    applySidebarWidth(nextWidth);
+                    writeSidebarWidthPreference(clampSidebarWidth(nextWidth, window.innerWidth));
+                }}
+            />
             <section className="conversation">
                 {selected ? (
                     <MessagePane
@@ -1152,14 +1259,18 @@ const MessageRow = memo(function MessageRow({
                     {groupedReactions.length > 0 && (
                         <div className="message__reactions" aria-label="Message reactions">
                             {groupedReactions.map(reaction => (
-                                <span
+                                <button
                                     key={reaction.emoji}
                                     className={`reaction-chip${reaction.byViewer ? ' reaction-chip--viewer' : ''}`}
-                                    aria-label={`${reaction.emoji}, ${reaction.count} ${reaction.count === 1 ? 'reaction' : 'reactions'}${reaction.byViewer ? ', including yours' : ''}`}
+                                    type="button"
+                                    disabled={reactionMutation?.status === 'pending'}
+                                    aria-pressed={reaction.byViewer}
+                                    aria-label={`${reaction.byViewer ? 'Remove your' : 'Add'} ${reaction.emoji} reaction, ${reaction.count} ${reaction.count === 1 ? 'reaction' : 'reactions'}`}
+                                    onClick={() => chooseReaction(reaction.emoji)}
                                 >
                                     <span aria-hidden="true">{reaction.emoji}</span>
                                     <span>{reaction.count}</span>
-                                </span>
+                                </button>
                             ))}
                         </div>
                     )}
@@ -1169,9 +1280,10 @@ const MessageRow = memo(function MessageRow({
                                 <button
                                     key={emoji}
                                     type="button"
-                                    aria-label={`React with ${emoji}`}
+                                    className={emoji === DEFAULT_REACTION ? 'message__reaction-default' : undefined}
+                                    aria-label={viewerReaction === emoji ? `Remove reaction ${emoji}` : `React with ${emoji}`}
                                     aria-pressed={viewerReaction === emoji}
-                                    disabled={reactionMutation?.status === 'pending' || viewerReaction === emoji}
+                                    disabled={reactionMutation?.status === 'pending'}
                                     onClick={() => chooseReaction(emoji)}
                                 ><span aria-hidden="true">{emoji}</span></button>
                             ))}
@@ -1179,7 +1291,7 @@ const MessageRow = memo(function MessageRow({
                                 ref={reactionRef}
                                 type="button"
                                 className="message__reaction-expander"
-                                aria-label={viewerReaction ? `Change reaction ${viewerReaction}` : 'More reactions'}
+                                    aria-label="More reactions"
                                 aria-haspopup="menu"
                                 aria-expanded={Boolean(pickerPoint)}
                                 aria-busy={reactionMutation?.status === 'pending'}
@@ -1304,17 +1416,25 @@ function ReactionPicker({
     useFloatingSurface(surfaceRef, point, returnFocusRef, onClose);
 
     const moveFocus = (event: KeyboardEvent<HTMLDivElement>) => {
-        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-        const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];
-        if (!buttons.length) return;
+        if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
+        const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')];
+        const enabled = buttons.filter(button => !button.disabled);
+        if (!enabled.length) return;
         const currentIndex = buttons.indexOf(document.activeElement as HTMLButtonElement);
-        const next = event.key === 'Home'
-            ? 0
+        let next = event.key === 'Home'
+            ? buttons.indexOf(enabled[0])
             : event.key === 'End'
-                ? buttons.length - 1
-                : event.key === 'ArrowLeft'
-                    ? (currentIndex - 1 + buttons.length) % buttons.length
-                    : (currentIndex + 1) % buttons.length;
+                ? buttons.indexOf(enabled[enabled.length - 1])
+                : currentIndex;
+        const step = event.key === 'ArrowLeft' ? -1
+            : event.key === 'ArrowRight' ? 1
+                : event.key === 'ArrowUp' ? -REACTION_CATEGORIES[0].emojis.length
+                    : event.key === 'ArrowDown' ? REACTION_CATEGORIES[0].emojis.length
+                        : 0;
+        if (step) {
+            do next = (next + step + buttons.length) % buttons.length;
+            while (buttons[next].disabled && next !== currentIndex);
+        }
         event.preventDefault();
         if (currentIndex >= 0) buttons[currentIndex].tabIndex = -1;
         buttons[next].tabIndex = 0;
@@ -1327,31 +1447,35 @@ function ReactionPicker({
         <div
             ref={surfaceRef}
             className="reaction-picker"
-            role="menu"
-            aria-label="Choose a reaction"
-            aria-busy={busy}
-            onKeyDown={moveFocus}
         >
-            {REACTION_CATEGORIES.map(category => (
-                <section key={category.label} className="reaction-picker__category" aria-label={category.label}>
-                    <strong>{category.label}</strong>
-                    <span className="reaction-picker__grid">
-                        {category.emojis.map(emoji => (
-                            <button
-                                key={emoji}
-                                type="button"
-                                role="menuitemradio"
-                                aria-checked={current === emoji}
-                                aria-label={current === emoji ? `${emoji}, current reaction` : `React with ${emoji}`}
-                                className={current === emoji ? 'reaction-picker__current' : ''}
-                                disabled={busy || current === emoji}
-                                tabIndex={emoji === firstEnabled ? 0 : -1}
-                                onClick={() => onChoose(emoji)}
-                            ><span aria-hidden="true">{emoji}</span></button>
-                        ))}
-                    </span>
-                </section>
-            ))}
+            <div
+                className="reaction-picker__menu"
+                role="menu"
+                aria-label="Choose a reaction"
+                aria-busy={busy}
+                onKeyDown={moveFocus}
+            >
+                {REACTION_CATEGORIES.map(category => (
+                    <div key={category.label} className="reaction-picker__category" role="group" aria-label={category.label}>
+                        <strong aria-hidden="true">{category.label}</strong>
+                        <span className="reaction-picker__grid">
+                            {category.emojis.map(emoji => (
+                                <button
+                                    key={emoji}
+                                    type="button"
+                                    role="menuitemradio"
+                                    aria-checked={current === emoji}
+                                    aria-label={current === emoji ? `Remove reaction ${emoji}` : `React with ${emoji}`}
+                                    className={current === emoji ? 'reaction-picker__current' : ''}
+                                    disabled={busy}
+                                    tabIndex={emoji === firstEnabled ? 0 : -1}
+                                    onClick={() => onChoose(emoji)}
+                                ><span aria-hidden="true">{emoji}</span></button>
+                            ))}
+                        </span>
+                    </div>
+                ))}
+            </div>
             {current && (
                 <span className="reaction-picker__note">Choose another to change</span>
             )}

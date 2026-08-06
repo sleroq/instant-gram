@@ -6,7 +6,7 @@ import type { CompleteUiRpc } from '../entrypoints/ui/rpc';
 import { createFrontendStore } from '../entrypoints/ui/store';
 import '../entrypoints/ui/styles.scss';
 
-type Scenario = 'continuous' | 'delayed' | 'resize' | 'selection' | 'image' | 'reel' | 'reel-delayed' | 'mutations' |
+type Scenario = 'continuous' | 'delayed' | 'resize' | 'resize-virtual' | 'selection' | 'image' | 'reel' | 'reel-delayed' | 'mutations' |
     'older-send' | 'thread-state' | 'identity-pm' | 'identity-group' | 'outgoing-prepend' |
     'events' | 'vim-scroll' | 'reply-navigation' | 'reply-navigation-retry' |
     'reply-navigation-delayed' | 'reply-navigation-prefetch-resume' |
@@ -52,6 +52,13 @@ const vimThreads = Array.from({ length: 50 }, (_, index) => ({
     key: index === 0 ? thread.key : `vim-thread-${index}`,
     threadFbid: String(2_000 + index),
     title: `Vim history ${index + 1}`,
+}));
+
+const resizeThreads = Array.from({ length: 60 }, (_, index) => ({
+    ...thread,
+    key: index === 0 ? thread.key : `resize-thread-${index}`,
+    threadFbid: String(3_000 + index),
+    title: `Resize history ${index + 1}`,
 }));
 
 const imageMessage: Message = {
@@ -356,6 +363,8 @@ async function mount(scenario: Scenario) {
                     ? [thread, secondThread]
                     : scenario === 'vim-scroll'
                         ? vimThreads
+                    : scenario === 'resize-virtual'
+                        ? resizeThreads
                     : scenario === 'image'
                         ? [{ ...thread, lastMessage: imageMessage }]
                         : scenario === 'reel'
@@ -432,7 +441,9 @@ async function mount(scenario: Scenario) {
                         ok: true,
                         value: {
                             messageId: payload.messageId,
-                            reactions: [{ senderId: 'viewer', reaction: payload.emoji, timestampMs: Date.now() }],
+                            reactions: payload.remove
+                                ? []
+                                : [{ senderId: 'viewer', reaction: payload.emoji, timestampMs: Date.now() }],
                         },
                     });
                 });
@@ -444,7 +455,9 @@ async function mount(scenario: Scenario) {
                 ok: true,
                 value: {
                     messageId: payload.messageId,
-                    reactions: [{ senderId: 'viewer', reaction: payload.emoji, timestampMs: Date.now() }],
+                    reactions: payload.remove
+                        ? []
+                        : [{ senderId: 'viewer', reaction: payload.emoji, timestampMs: Date.now() }],
                 },
             };
         },
@@ -461,7 +474,7 @@ async function mount(scenario: Scenario) {
                 ok: true,
                 value: {
                 id: '9001', shortcode: 'reel-code',
-                author: { id: 'author-1', username: 'reel_author', fullName: 'Reel Author', picUrl: null, isVerified: true },
+                author: { id: 'author-1', username: 'reel_author', fullName: 'Reel Author', picUrl: 'data:image/gif;base64,R0lGODlhAQABAAAAACw=', isVerified: true },
                 caption: 'Harness reel caption', items: [
                     { id: 'video-slide', kind: 'video', videoUrl: `data:video/mp4;base64,${suffix}`, variants: [
                         { url: `data:video/mp4;base64,${suffix}`, type: 101, width: scenario === 'reel-delayed' ? 1600 : 540, height: scenario === 'reel-delayed' ? 900 : 960 },

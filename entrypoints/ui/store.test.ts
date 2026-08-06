@@ -1143,19 +1143,25 @@ test('reactions are server-only, per-thread single-flight, authoritative, and ro
     store.selectThread('b');
     await settle();
     const order = [...store.state.inbox.orderedIds];
-    assert.equal(await store.setReaction('a', 'same', '❤'), false);
-    assert.equal(reactionCalls.length, 0);
+    const removeFlight = store.setReaction('a', 'same', '❤');
+    assert.deepEqual(store.state.histories.a.byId.same.reactions, []);
+    assert.deepEqual(reactionCalls[0], {
+        threadFbid: '1', messageId: 'same', emoji: '❤', remove: true,
+    });
+    resolvers[0]({ ok: true, value: { messageId: 'same', reactions: [] } });
+    assert.equal(await removeFlight, true);
     const aFlight = store.setReaction('a', 'same', '😂');
     const duplicate = await store.setReaction('a', 'same', '😮');
     const bFlight = store.setReaction('b', 'same', '👍');
     assert.equal(duplicate, false);
-    assert.equal(reactionCalls.length, 2);
-    assert.equal(store.state.histories.a.byId.same.reactions?.[0].reaction, '😂');
-    assert.equal(store.state.histories.b.byId.same.reactions?.[0].reaction, '👍');
+    assert.equal(reactionCalls.length, 3);
+    assert.equal(reactionCalls[1].remove, false);
+    assert.equal(firstReaction(store.state.histories.a.byId.same), '😂');
+    assert.equal(firstReaction(store.state.histories.b.byId.same), '👍');
     assert.deepEqual(store.state.inbox.orderedIds, order);
 
-    resolvers[0]({ ok: false, error: { message: 'reaction failed' } });
-    resolvers[1]({
+    resolvers[1]({ ok: false, error: { message: 'reaction failed' } });
+    resolvers[2]({
         ok: true,
         value: {
             messageId: 'same',
@@ -1164,14 +1170,14 @@ test('reactions are server-only, per-thread single-flight, authoritative, and ro
     });
     assert.equal(await aFlight, false);
     assert.equal(await bFlight, true);
-    assert.equal(store.state.histories.a.byId.same.reactions?.[0].reaction, '❤');
+    assert.deepEqual(store.state.histories.a.byId.same.reactions, []);
     assert.equal(store.state.histories.a.reactionMutations.same.status, 'error');
-    assert.equal(store.state.histories.b.byId.same.reactions?.[0].reaction, 'SERVER');
+    assert.equal(firstReaction(store.state.histories.b.byId.same), 'SERVER');
     assert.equal(store.state.histories.b.reactionMutations.same, undefined);
 
     const retry = store.setReaction('a', 'same', '😮');
-    assert.equal(store.state.histories.a.byId.same.reactions?.[0].reaction, '😮');
-    resolvers[2]({
+    assert.equal(firstReaction(store.state.histories.a.byId.same), '😮');
+    resolvers[3]({
         ok: true,
         value: {
             messageId: 'same',
@@ -1179,12 +1185,12 @@ test('reactions are server-only, per-thread single-flight, authoritative, and ro
         },
     });
     assert.equal(await retry, true);
-    assert.equal(store.state.histories.a.byId.same.reactions?.[0].reaction, 'AUTHORITATIVE');
+    assert.equal(firstReaction(store.state.histories.a.byId.same), 'AUTHORITATIVE');
 
     const localId = store.sendText('a', 'pending', { followNewest: true });
     assert.ok(localId);
     assert.equal(await store.setReaction('a', localId, '❤'), false);
-    assert.equal(reactionCalls.length, 3);
+    assert.equal(reactionCalls.length, 4);
     store.destroy();
 });
 
@@ -1393,7 +1399,7 @@ test('reel shares preload with a bounded deduped cache while comments and mutati
 
 test('visible reel priority moves queued media ahead without duplicating active or open requests', async () => {
     installWindowTimers();
-    const reelMessages = Array.from({ length: 6 }, (_, index): Message => ({
+    const reelMessages = Array.from({ length: 12 }, (_, index): Message => ({
         kind: 'reel_share',
         id: `priority-message-${index}`,
         senderId: 'sender',
@@ -1426,16 +1432,32 @@ test('visible reel priority moves queued media ahead without duplicating active 
     await settle();
     assert.deepEqual(calls, ['P0', 'P1']);
 
-    store.prioritizeReelPreloads(['P5']);
+    store.prioritizeReelPreloads(['P10']);
     resolvers.get('P0')!({ ok: true, value: reelMedia('P0', '2000', 'https://cdn/P0.mp4') });
+    resolvers.delete('P0');
     await settle();
-    assert.deepEqual(calls, ['P0', 'P1', 'P5']);
+    assert.deepEqual(calls, ['P0', 'P1', 'P10']);
 
     const opening = store.openReel('P1', '2001');
     assert.equal(calls.filter(shortcode => shortcode === 'P1').length, 1);
     resolvers.get('P1')!({ ok: true, value: reelMedia('P1', '2001', 'https://cdn/P1.mp4') });
+    resolvers.delete('P1');
     assert.equal(await opening, true);
     assert.equal(calls.filter(shortcode => shortcode === 'P1').length, 1);
+    assert.equal(store.state.reels.byId.P1.comments.status, 'ready');
+    while (calls.length < 8) {
+        const shortcode = calls.find(candidate => resolvers.has(candidate));
+        assert.ok(shortcode);
+        resolvers.get(shortcode)!({
+            ok: true,
+            value: reelMedia(shortcode, String(2000 + Number(shortcode.slice(1))), `https://cdn/${shortcode}.mp4`),
+        });
+        resolvers.delete(shortcode);
+        await settle();
+    }
+    assert.equal(calls.length, 8);
+    assert.ok(calls.includes('P10'));
+    assert.equal(calls.includes('P7'), false, 'visible reel should displace the last unstarted preload');
     store.destroy();
 });
 
@@ -1861,6 +1883,10 @@ function thread(key: string): Thread {
         serverIsPin: false,
         users: [],
     };
+}
+
+function firstReaction(message: Message) {
+    return message.reactions?.[0]?.reaction;
 }
 
 function historyPage(

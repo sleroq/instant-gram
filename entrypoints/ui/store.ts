@@ -371,11 +371,28 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
 
     function prioritizeReelPreloads(shortcodes: string[]) {
         if (!shortcodes.length) return;
-        const priority = new Set(shortcodes);
-        const prioritized = reelPreloadQueue.filter(item => priority.has(item.shortcode));
+        const priority = [...new Set(shortcodes)];
+        const prioritized: { shortcode: string; mediaId?: string }[] = [];
+        for (const shortcode of priority) {
+            const queuedIndex = reelPreloadQueue.findIndex(item => item.shortcode === shortcode);
+            if (queuedIndex >= 0) {
+                prioritized.push(reelPreloadQueue.splice(queuedIndex, 1)[0]);
+                continue;
+            }
+            const reel = state.reels.byId[shortcode];
+            if (
+                !reel || reel.media || reelMediaRequests.has(shortcode) ||
+                reelPreloadsStarted + prioritized.length >= 8
+            ) continue;
+            prioritized.push({ shortcode, mediaId: reel.mediaIdHint });
+            queuedReelPreloads.add(shortcode);
+        }
         if (!prioritized.length) return;
-        const remaining = reelPreloadQueue.filter(item => !priority.has(item.shortcode));
-        reelPreloadQueue.splice(0, reelPreloadQueue.length, ...prioritized, ...remaining);
+        reelPreloadQueue.unshift(...prioritized);
+        const remainingCapacity = Math.max(0, 8 - reelPreloadsStarted);
+        while (reelPreloadQueue.length > remainingCapacity) {
+            queuedReelPreloads.delete(reelPreloadQueue.pop()!.shortcode);
+        }
         drainReelPreloads();
     }
 
@@ -846,13 +863,12 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
         if (history.pendingSends[messageId] || history.failedSends[messageId] || messageId.startsWith('local:')) {
             return false;
         }
-        if (message.reactions?.some(reaction =>
-            reaction.senderId === viewerId && reaction.reaction === emoji)) return false;
+        const remove = message.reactions?.some(reaction =>
+            reaction.senderId === viewerId && reaction.reaction === emoji) ?? false;
         const previous = message.reactions ? [...message.reactions] : undefined;
-        const optimistic: MessageReaction[] = [
-            ...(message.reactions ?? []).filter(reaction => reaction.senderId !== viewerId),
-            { senderId: viewerId, reaction: emoji, timestampMs: Date.now() },
-        ];
+        const optimistic: MessageReaction[] = (message.reactions ?? [])
+            .filter(reaction => reaction.senderId !== viewerId);
+        if (!remove) optimistic.push({ senderId: viewerId, reaction: emoji, timestampMs: Date.now() });
         const request = Symbol(`reaction:${key}`);
         const requestGeneration = generation;
         reactionRequests.set(key, request);
@@ -869,6 +885,7 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
                 threadFbid: thread.threadFbid,
                 messageId,
                 emoji,
+                remove,
             });
             if (
                 generation !== requestGeneration ||
