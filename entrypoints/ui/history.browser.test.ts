@@ -124,15 +124,27 @@ test('delayed reel metadata updates inline ratio without moving the history anch
         const scroller = document.querySelector<HTMLElement>('.messages')!;
         const anchorRow = document.querySelector<HTMLElement>('[data-message-id="m30"]')!;
         const preview = document.querySelector<HTMLElement>('.message-reel-preview__media')!;
+        const media = preview.querySelector<HTMLElement>('img, video')!;
+        const previewRect = preview.getBoundingClientRect();
+        const mediaRect = media.getBoundingClientRect();
         return {
             anchorTop: anchorRow.getBoundingClientRect().top,
-            ratio: preview.getBoundingClientRect().width / preview.getBoundingClientRect().height,
+            ratio: previewRect.width / previewRect.height,
+            width: previewRect.width,
+            height: previewRect.height,
+            media: { width: mediaRect.width, height: mediaRect.height },
+            objectFit: getComputedStyle(media).objectFit,
+            overflows: preview.scrollWidth > preview.clientWidth || preview.scrollHeight > preview.clientHeight,
             viewportIds: window.historyHarness.historyState('thread').viewportIds,
             calls: window.historyHarness.calls(),
             rows: document.querySelectorAll('[data-message-id]').length,
         };
     });
-    assert.ok(Math.abs(before.ratio - 1 / 2) < 0.01);
+    assert.ok(before.width > 225 && before.width < 240);
+    assert.ok(Math.abs(before.height - 300) < 0.1);
+    assert.deepEqual(before.media, { width: before.width, height: before.height });
+    assert.equal(before.objectFit, 'contain');
+    assert.equal(before.overflows, false);
 
     await page.evaluate(() => window.historyHarness.resolveReelMedia());
     await page.waitForFunction(() => {
@@ -143,9 +155,17 @@ test('delayed reel metadata updates inline ratio without moving the history anch
     const after = await page.evaluate(() => {
         const anchorRow = document.querySelector<HTMLElement>('[data-message-id="m30"]')!;
         const preview = document.querySelector<HTMLElement>('.message-reel-preview__media')!;
+        const media = preview.querySelector<HTMLElement>('img, video')!;
+        const previewRect = preview.getBoundingClientRect();
+        const mediaRect = media.getBoundingClientRect();
         return {
             anchorTop: anchorRow.getBoundingClientRect().top,
-            ratio: preview.getBoundingClientRect().width / preview.getBoundingClientRect().height,
+            ratio: previewRect.width / previewRect.height,
+            width: previewRect.width,
+            height: previewRect.height,
+            media: { width: mediaRect.width, height: mediaRect.height },
+            objectFit: getComputedStyle(media).objectFit,
+            overflows: preview.scrollWidth > preview.clientWidth || preview.scrollHeight > preview.clientHeight,
             source: preview.querySelector('video')?.getAttribute('src'),
             focusedId: document.activeElement?.closest<HTMLElement>('[data-message-id]')?.dataset.messageId,
             viewportIds: window.historyHarness.historyState('thread').viewportIds,
@@ -154,6 +174,11 @@ test('delayed reel metadata updates inline ratio without moving the history anch
         };
     });
     assert.ok(Math.abs(after.ratio - 16 / 9) < 0.01);
+    assert.ok(after.width > before.width && after.width <= 300);
+    assert.ok(Math.abs(after.height - after.width * 9 / 16) < 0.1);
+    assert.deepEqual(after.media, { width: after.width, height: after.height });
+    assert.equal(after.objectFit, 'contain');
+    assert.equal(after.overflows, false);
     assert.match(after.source ?? '', /^data:video\/mp4/);
     assert.ok(Math.abs(after.anchorTop - before.anchorTop) < 1);
     assert.equal(after.focusedId, 'm30');
@@ -172,16 +197,46 @@ test('reel preview and modal own playback, carousel, actions, comments, links, a
     const inlineGeometry = await page.locator('.message-reel-preview__media').evaluate(element => {
         const rect = element.getBoundingClientRect();
         const video = element.querySelector('video')!;
+        const mediaRect = video.getBoundingClientRect();
+        const cardRect = element.closest('.message-reel-preview')!.getBoundingClientRect();
         return {
             ratio: rect.width / rect.height,
+            box: { width: rect.width, height: rect.height },
+            media: { width: mediaRect.width, height: mediaRect.height },
+            cardWidth: cardRect.width,
             width: video.getAttribute('width'),
             height: video.getAttribute('height'),
         };
     });
-    assert.ok(Math.abs(inlineGeometry.ratio - 9 / 16) < 0.01);
+    assert.ok(Math.abs(inlineGeometry.ratio - 240 / 300) < 0.01);
+    assert.deepEqual(inlineGeometry.box, { width: 240, height: 300 });
+    assert.deepEqual(inlineGeometry.media, inlineGeometry.box);
+    assert.equal(inlineGeometry.cardWidth, inlineGeometry.box.width);
     assert.deepEqual({ width: inlineGeometry.width, height: inlineGeometry.height }, {
         width: '540', height: '960',
     });
+    const sharedPost = page.locator('[data-message-id="reel-message"]');
+    const sharedLayout = await sharedPost.evaluate(element => {
+        const bubble = element.querySelector<HTMLElement>('.message__bubble')!;
+        const media = element.querySelector<HTMLElement>('.message-reel-preview')!.getBoundingClientRect();
+        const reactions = element.querySelector<HTMLElement>('.message__reactions')!.getBoundingClientRect();
+        const time = element.querySelector<HTMLElement>('.message__body > time')!;
+        const style = getComputedStyle(bubble);
+        return {
+            background: style.backgroundColor,
+            padding: style.padding,
+            reactionBelow: reactions.top >= media.bottom,
+            timeOpacity: getComputedStyle(time).opacity,
+        };
+    });
+    assert.equal(sharedLayout.background, 'rgba(0, 0, 0, 0)');
+    assert.equal(sharedLayout.padding, '0px');
+    assert.equal(sharedLayout.reactionBelow, true);
+    assert.equal(sharedLayout.timeOpacity, '0');
+    await sharedPost.hover();
+    await page.waitForFunction(() => getComputedStyle(
+        document.querySelector('[data-message-id="reel-message"] .message__body > time')!,
+    ).opacity === '1');
 
     const inlinePlayback = await page.locator('.message-reel-preview video').evaluate(async video => {
         const playback = { plays: 0, pauses: 0 };
@@ -216,8 +271,8 @@ test('reel preview and modal own playback, carousel, actions, comments, links, a
     assert.ok(Math.abs(inlinePlayback.afterLoad.scrollTop - inlinePlayback.beforeLoad.scrollTop) < 1);
     assert.ok(Math.abs(inlinePlayback.afterLoad.top - inlinePlayback.beforeLoad.top) < 1);
     assert.ok(Math.abs(inlinePlayback.afterLoad.height - inlinePlayback.beforeLoad.height) < 1);
-    assert.ok(inlinePlayback.afterVisible.plays > 0, `visible loaded preview did not autoplay: ${JSON.stringify(inlinePlayback)}`);
-    assert.ok(inlinePlayback.afterHidden.pauses > inlinePlayback.afterVisible.pauses, 'hidden preview did not pause');
+    assert.equal(inlinePlayback.afterVisible.plays, 0, `history preview autoplayed: ${JSON.stringify(inlinePlayback)}`);
+    assert.equal(inlinePlayback.afterHidden.plays, 0, `hidden history preview autoplayed: ${JSON.stringify(inlinePlayback)}`);
 
     const historyScrollBeforeModal = await page.locator('.messages').evaluate(element => element.scrollTop);
     await preview.click();
@@ -346,6 +401,65 @@ test('reel preview and modal own playback, carousel, actions, comments, links, a
     });
     await dialog.waitFor({ state: 'detached' });
     await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Open reel from reel_author');
+    await page.close();
+});
+
+test('portrait reel preview narrows as one bounded media box on compact screens', async () => {
+    const page = await openHarness({ width: 320, height: 640 });
+    await page.evaluate(() => window.historyHarness.mount('reel'));
+    const media = page.locator('.message-reel-preview__media');
+    await media.waitFor();
+    const geometry = await media.evaluate(element => {
+        const box = element.getBoundingClientRect();
+        const video = element.querySelector('video')!.getBoundingClientRect();
+        return {
+            box: { width: box.width, height: box.height },
+            video: { width: video.width, height: video.height },
+            cardWidth: element.closest('.message-reel-preview')!.getBoundingClientRect().width,
+            viewportWidth: innerWidth,
+            pageOverflows: document.documentElement.scrollWidth > innerWidth,
+            messageOverflows: element.closest<HTMLElement>('.message')!.scrollWidth >
+                element.closest<HTMLElement>('.message')!.clientWidth,
+        };
+    });
+    assert.equal(geometry.viewportWidth, 320);
+    assert.ok(geometry.box.width <= 240 && geometry.box.height <= 300, JSON.stringify(geometry));
+    assert.ok(Math.abs(geometry.box.width / geometry.box.height - 240 / 300) < 0.01, JSON.stringify(geometry));
+    assert.deepEqual(geometry.video, geometry.box);
+    assert.equal(geometry.cardWidth, geometry.box.width);
+    assert.equal(geometry.pageOverflows, false);
+    assert.equal(geometry.messageOverflows, false);
+    await page.close();
+});
+
+test('extreme finite reel ratios keep both production media axes renderable', async () => {
+    const page = await openHarness({ width: 900, height: 700 });
+    await page.evaluate(() => window.historyHarness.mount('reel-extremes'));
+    const previews = page.locator('.message-reel-preview__media');
+    await previews.nth(1).waitFor();
+
+    const geometries = await previews.evaluateAll(elements => elements.map(element => {
+        const wrapper = element.getBoundingClientRect();
+        const mediaElement = element.querySelector<HTMLElement>('img, video')!;
+        const media = mediaElement.getBoundingClientRect();
+        return {
+            wrapper: { width: wrapper.width, height: wrapper.height },
+            media: { width: media.width, height: media.height },
+            aspectRatio: (element as HTMLElement).style.aspectRatio,
+            overflows: element.scrollWidth > element.clientWidth || element.scrollHeight > element.clientHeight,
+        };
+    }));
+
+    assert.equal(geometries.length, 2);
+    assert.ok(geometries[0].wrapper.width < geometries[0].wrapper.height, JSON.stringify(geometries[0]));
+    assert.ok(geometries[1].wrapper.width > geometries[1].wrapper.height, JSON.stringify(geometries[1]));
+    assert.deepEqual(geometries.map(({ aspectRatio }) => aspectRatio), ['1 / 300', '300 / 1']);
+    for (const geometry of geometries) {
+        assert.ok(geometry.wrapper.width > 0 && geometry.wrapper.height > 0, JSON.stringify(geometry));
+        assert.ok(geometry.wrapper.width <= 300 && geometry.wrapper.height <= 300, JSON.stringify(geometry));
+        assert.deepEqual(geometry.media, geometry.wrapper);
+        assert.equal(geometry.overflows, false);
+    }
     await page.close();
 });
 
@@ -564,7 +678,7 @@ test('activity and fallback messages stay friendly, inert, escaped, and free of 
         const historyText = document.querySelector('.messages')?.textContent ?? '';
         return {
             activityCentered: getComputedStyle(activity.querySelector('.message')!).justifyContent,
-            activityAction: Boolean(activity.querySelector('.message__reaction-trigger')),
+            activityAction: Boolean(activity.querySelector('.message__reaction-rail')),
             images: document.querySelectorAll('.messages img').length,
             boldElements: document.querySelectorAll('[data-message-id="ai-fallback"] b').length,
             historyText,
@@ -964,15 +1078,16 @@ test('reply selection, failed-send recovery, and bounded reaction picker are acc
     assert.equal(await page.getByRole('button', { name: 'Message actions' }).count(), 0);
     assert.equal(await page.locator('.chat-row__menu-trigger').count(), 0);
     assert.equal(await page.getByText('•••', { exact: true }).count(), 0);
-    const reactionAffordance = page.locator('[data-message-id="m0"] .message__reaction-trigger');
-    assert.equal(await reactionAffordance.evaluate(element => getComputedStyle(element).opacity), '0');
+    const reactionRail = page.locator('[data-message-id="m0"] .message__reaction-rail');
+    const reactionAffordance = page.locator('[data-message-id="m0"] .message__reaction-expander');
+    assert.equal(await reactionRail.evaluate(element => getComputedStyle(element).opacity), '0');
     await page.locator('[data-message-id="m0"] .message__bubble').hover();
     await page.waitForFunction(() => getComputedStyle(
-        document.querySelector('[data-message-id="m0"] .message__reaction-trigger')!,
+        document.querySelector('[data-message-id="m0"] .message__reaction-rail')!,
     ).opacity === '1');
     const incomingAlignment = await page.locator('[data-message-id="m0"]').evaluate(element => {
         const bubble = element.querySelector('.message__bubble')!.getBoundingClientRect();
-        const trigger = element.querySelector('.message__reaction-trigger')!.getBoundingClientRect();
+        const trigger = element.querySelector('.message__reaction-rail')!.getBoundingClientRect();
         return { bubbleRight: bubble.right, triggerLeft: trigger.left };
     });
     assert.ok(incomingAlignment.triggerLeft >= incomingAlignment.bubbleRight);
@@ -980,7 +1095,7 @@ test('reply selection, failed-send recovery, and bounded reaction picker are acc
     await page.getByRole('menu', { name: 'Choose a reaction' }).waitFor();
     await page.keyboard.press('Escape');
     await page.locator('[data-message-id="m0"]').focus();
-    assert.equal(await reactionAffordance.evaluate(element => getComputedStyle(element).opacity), '1');
+    assert.equal(await reactionRail.evaluate(element => getComputedStyle(element).opacity), '1');
 
     await page.locator('[data-message-id="m0"]').click({ button: 'right' });
     const replyAnchorTop = await page.locator('[data-message-id="m0"]').evaluate(element => element.getBoundingClientRect().top);
@@ -1000,9 +1115,8 @@ test('reply selection, failed-send recovery, and bounded reaction picker are acc
     await page.getByRole('menu', { name: 'Message actions' }).getByRole('menuitem', { name: 'Add reaction' }).click();
     const picker = page.getByRole('menu', { name: 'Choose a reaction' });
     await picker.waitFor();
-    assert.equal(await picker.getByRole('menuitemradio').count(), 6);
-    await picker.getByRole('menuitemradio', { name: 'React with ❤' }).press('ArrowRight');
-    await page.getByRole('menuitemradio', { name: 'React with 😂' }).press('Enter');
+    assert.equal(await picker.getByRole('menuitemradio').count(), 18);
+    await picker.getByRole('menuitemradio', { name: 'React with 😂' }).press('Enter');
     await page.locator('.reaction-chip--viewer').first().waitFor();
     assert.match(
         await page.locator('.reaction-chip--viewer').first().getAttribute('aria-label') ?? '',
@@ -1014,21 +1128,31 @@ test('reply selection, failed-send recovery, and bounded reaction picker are acc
     await currentReaction.waitFor();
     assert.equal(await currentReaction.getAttribute('aria-checked'), 'true');
     assert.equal(await currentReaction.isDisabled(), true);
-    const earlierReaction = page.getByRole('menuitemradio', { name: 'React with ❤' });
-    const laterReaction = page.getByRole('menuitemradio', { name: 'React with 😮' });
+    const earlierReaction = page.getByRole('menuitemradio', { name: 'React with 😮' });
+    const laterReaction = page.getByRole('menuitemradio', { name: 'React with 😢' });
     await earlierReaction.press('ArrowRight');
     assert.equal(await laterReaction.evaluate(element => element === document.activeElement), true);
     await laterReaction.press('ArrowLeft');
     assert.equal(await earlierReaction.evaluate(element => element === document.activeElement), true);
     await earlierReaction.press('End');
-    assert.equal(await page.getByRole('menuitemradio', { name: 'React with 👍' }).evaluate(
+    assert.equal(await page.getByRole('menuitemradio', { name: 'React with 💔' }).evaluate(
         element => element === document.activeElement,
     ), true);
     await page.getByRole('menuitemradio', { name: 'React with 👍' }).press('Home');
     assert.equal(await earlierReaction.evaluate(element => element === document.activeElement), true);
     await earlierReaction.press('ArrowRight');
     await laterReaction.press('Enter');
-    await page.waitForFunction(() => document.querySelector('.reaction-chip--viewer')?.textContent?.includes('😮'));
+    await page.waitForFunction(() => document.querySelector('.reaction-chip--viewer')?.textContent?.includes('😢'));
+    const callsBeforeQuickReaction = (await page.evaluate(() => window.historyHarness.reactionCalls())).length;
+    await page.locator('[data-message-id="m0"] .message__bubble').hover();
+    await page.locator('[data-message-id="m0"]').getByRole('button', { name: 'React with 👍' }).click();
+    await page.waitForFunction(() => document.querySelector(
+        '[data-message-id="m0"] .reaction-chip--viewer',
+    )?.textContent?.includes('👍'));
+    assert.equal(
+        (await page.evaluate(() => window.historyHarness.reactionCalls())).length,
+        callsBeforeQuickReaction + 1,
+    );
 
     await page.evaluate(() => {
         const scroller = document.querySelector<HTMLElement>('.messages')!;
@@ -1498,7 +1622,7 @@ test('focused message Enter opens only an existing share action and Space leaves
     assert.equal(await page.evaluate(() =>
         (window as typeof window & { shareActivations: string[] }).shareActivations.length), 2,
     'native nested activation must not be duplicated by the row');
-    const reactionTrigger = failure.getByRole('button', { name: 'Add reaction' });
+    const reactionTrigger = failure.getByRole('button', { name: 'More reactions' });
     await reactionTrigger.evaluate(button => (button as HTMLButtonElement).click());
     await page.getByRole('menu', { name: 'Choose a reaction' }).waitFor();
     assert.equal(await failure.evaluate(row => row.dispatchEvent(new KeyboardEvent('keydown', {
@@ -2104,10 +2228,18 @@ test('controlled drafts and composer actions remain per-thread and operable at n
     assert.ok(box);
     const outgoingAlignment = await newestMessage.evaluate(element => {
         const bubble = element.querySelector('.message__bubble')!.getBoundingClientRect();
-        const trigger = element.querySelector('.message__reaction-trigger')!.getBoundingClientRect();
-        return { bubbleLeft: bubble.left, triggerRight: trigger.right };
+        const trigger = element.querySelector('.message__reaction-rail')!.getBoundingClientRect();
+        return {
+            bubbleLeft: bubble.left,
+            bubbleRight: bubble.right,
+            triggerLeft: trigger.left,
+            triggerRight: trigger.right,
+            viewportWidth: innerWidth,
+        };
     });
-    assert.ok(outgoingAlignment.triggerRight <= outgoingAlignment.bubbleLeft);
+    assert.ok(outgoingAlignment.triggerLeft >= outgoingAlignment.bubbleLeft);
+    assert.ok(outgoingAlignment.triggerRight <= outgoingAlignment.bubbleRight);
+    assert.ok(outgoingAlignment.triggerRight <= outgoingAlignment.viewportWidth);
     await newestMessage.dispatchEvent('pointerdown', {
         pointerType: 'touch', pointerId: 6, isPrimary: true, clientX: box!.x + 12, clientY: box!.y + 12,
     });
@@ -2124,11 +2256,11 @@ test('controlled drafts and composer actions remain per-thread and operable at n
         pointerType: 'touch', pointerId: 7, isPrimary: true, clientX: box!.x + 12, clientY: box!.y + 12,
     });
     await page.getByRole('menu', { name: 'Message actions' }).getByRole('menuitem', { name: 'Add reaction' }).click();
-    const picker = page.getByRole('menu', { name: 'Choose a reaction' });
+        const picker = page.getByRole('menu', { name: 'Choose a reaction' });
     await picker.waitFor();
     const pickerFits = await picker.evaluate(element => {
         const buttons = [...element.querySelectorAll('button')];
-        return buttons.length === 6 && buttons.every(button => {
+        return buttons.length === 18 && buttons.every(button => {
             const rect = button.getBoundingClientRect();
             return rect.left >= 0 && rect.right <= innerWidth && rect.width > 0 && rect.height > 0;
         });

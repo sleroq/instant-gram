@@ -369,6 +369,16 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
         drainReelPreloads();
     }
 
+    function prioritizeReelPreloads(shortcodes: string[]) {
+        if (!shortcodes.length) return;
+        const priority = new Set(shortcodes);
+        const prioritized = reelPreloadQueue.filter(item => priority.has(item.shortcode));
+        if (!prioritized.length) return;
+        const remaining = reelPreloadQueue.filter(item => !priority.has(item.shortcode));
+        reelPreloadQueue.splice(0, reelPreloadQueue.length, ...prioritized, ...remaining);
+        drainReelPreloads();
+    }
+
     function mergeThreads(items: Thread[], readRevision: number) {
         let added = 0;
         for (const thread of items) {
@@ -1780,6 +1790,7 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
             return runReaction(threadId, messageId, emoji);
         },
         openReel,
+        prioritizeReelPreloads,
         closeReel() {
             if (!state.reels.activeId) return;
             state.reels.activeId = undefined;

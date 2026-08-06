@@ -1391,6 +1391,54 @@ test('reel shares preload with a bounded deduped cache while comments and mutati
     store.destroy();
 });
 
+test('visible reel priority moves queued media ahead without duplicating active or open requests', async () => {
+    installWindowTimers();
+    const reelMessages = Array.from({ length: 6 }, (_, index): Message => ({
+        kind: 'reel_share',
+        id: `priority-message-${index}`,
+        senderId: 'sender',
+        ts: index,
+        shortcode: `P${index}`,
+        mediaId: String(2000 + index),
+        targetUrl: `https://www.instagram.com/reel/P${index}/`,
+        thumbUrl: 'https://cdn.example/thumb.jpg',
+        author: 'alice',
+    }));
+    const rpc = fakeRpc(async () => ({
+        ok: true,
+        value: { items: [thread('a')], hasNextPage: false },
+    }), async () => ({
+        ok: true,
+        value: { items: reelMessages, hasNextPage: false, viewerId: 'viewer' },
+    }));
+    const calls: string[] = [];
+    const resolvers = new Map<string, (value: Awaited<ReturnType<CompleteUiRpc['getReelMedia']>>) => void>();
+    rpc.getReelMedia = async payload => {
+        calls.push(payload.shortcode);
+        return new Promise(resolve => resolvers.set(payload.shortcode, resolve));
+    };
+    rpc.getReelComments = async () => ({ ok: true, value: { items: [], hasNextPage: false } });
+
+    const store = createFrontendStore(rpc);
+    store.start();
+    await settle();
+    store.selectThread('a');
+    await settle();
+    assert.deepEqual(calls, ['P0', 'P1']);
+
+    store.prioritizeReelPreloads(['P5']);
+    resolvers.get('P0')!({ ok: true, value: reelMedia('P0', '2000', 'https://cdn/P0.mp4') });
+    await settle();
+    assert.deepEqual(calls, ['P0', 'P1', 'P5']);
+
+    const opening = store.openReel('P1', '2001');
+    assert.equal(calls.filter(shortcode => shortcode === 'P1').length, 1);
+    resolvers.get('P1')!({ ok: true, value: reelMedia('P1', '2001', 'https://cdn/P1.mp4') });
+    assert.equal(await opening, true);
+    assert.equal(calls.filter(shortcode => shortcode === 'P1').length, 1);
+    store.destroy();
+});
+
 test('reel opens join one deferred media flight and close gates comments without discarding a started page', async () => {
     const rpc = fakeRpc(async () => ({ ok: true, value: { items: [], hasNextPage: false } }));
     let mediaCalls = 0;

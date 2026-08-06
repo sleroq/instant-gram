@@ -10,7 +10,7 @@ type Scenario = 'continuous' | 'delayed' | 'resize' | 'selection' | 'image' | 'r
     'older-send' | 'thread-state' | 'identity-pm' | 'identity-group' | 'outgoing-prepend' |
     'events' | 'vim-scroll' | 'reply-navigation' | 'reply-navigation-retry' |
     'reply-navigation-delayed' | 'reply-navigation-prefetch-resume' |
-    'reply-navigation-chain' | 'keyboard-actions';
+    'reply-navigation-chain' | 'keyboard-actions' | 'reel-extremes';
 
 let activeStore: ReturnType<typeof createFrontendStore> | undefined;
 let resolveVisible: ((result: Result<ThreadMessages>) => void) | undefined;
@@ -79,7 +79,27 @@ const reelMessage: Message = {
     previewHeight: 960,
     author: 'reel_author',
     caption: 'Harness reel caption',
+    reactions: [{ senderId: 'reactor', reaction: '🔥' }],
 };
+
+const extremeReelMessages: Message[] = [
+    {
+        ...reelMessage,
+        id: 'extreme-portrait',
+        shortcode: 'extreme-portrait',
+        mediaId: '9002',
+        previewWidth: Number.MIN_VALUE,
+        previewHeight: Number.MAX_VALUE,
+    },
+    {
+        ...reelMessage,
+        id: 'extreme-landscape',
+        shortcode: 'extreme-landscape',
+        mediaId: '9003',
+        previewWidth: Number.MAX_VALUE,
+        previewHeight: Number.MIN_VALUE,
+    },
+];
 
 const eventMessages: Message[] = [
     {
@@ -274,6 +294,8 @@ async function mount(scenario: Scenario) {
                 ? { ok: true as const, value: { items: [imageMessage], hasNextPage: false, viewerId: 'viewer' } }
                 : scenario === 'reel'
                     ? { ok: true as const, value: { items: [reelMessage], hasNextPage: false, viewerId: 'viewer' } }
+                : scenario === 'reel-extremes'
+                    ? { ok: true as const, value: { items: extremeReelMessages, hasNextPage: false, viewerId: 'viewer' } }
                 : scenario === 'reel-delayed'
                     ? { ok: true as const, value: {
                         items: [{ ...reelMessage, previewWidth: 360, previewHeight: 720 }, ...messages(1, 36, true)],

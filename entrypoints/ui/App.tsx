@@ -17,10 +17,17 @@ import {
 import type { Message, ReelMediaItem, Thread, User } from '../../lib/domain';
 import type { FrontendStore, HistoryState, PinMutation, ReelState } from './store';
 import { hasLocalOlderIds } from './history-window';
+import { calculateInlineMediaBox } from './inline-media-box';
 import { computeChatWindow } from './virtual-list';
 
 const ROW_HEIGHT = 72;
 const REACTION_EMOJIS = ['❤', '😂', '😮', '😢', '😡', '👍'];
+const REACTION_CATEGORIES = [
+    { label: 'Faces', emojis: ['😂', '😮', '😢', '😡', '🥰', '😱'] },
+    { label: 'Gestures', emojis: ['👍', '👏', '🙌', '🙏', '💪', '👎'] },
+    { label: 'Symbols', emojis: ['❤', '🔥', '✨', '🎉', '💯', '💔'] },
+];
+const FULL_REACTION_EMOJIS = REACTION_CATEGORIES.flatMap(category => category.emojis);
 const DEFAULT_REACTION = REACTION_EMOJIS[0];
 let keyboardScrollSequence = 0;
 let reelReturnFocus: HTMLElement | undefined;
@@ -989,6 +996,7 @@ const MessageRow = memo(function MessageRow({
     const rowRef = useRef<HTMLDivElement>(null as unknown as HTMLDivElement);
     const reactionRef = useRef<HTMLButtonElement>(null as unknown as HTMLButtonElement);
     const isServerMessage = !message.id.startsWith('local:');
+    const isSharedPost = message.kind === 'reel_share' || message.kind === 'inline_share';
     const eligibleForActions = isServerMessage && 'senderId' in message;
     const groupedReactions = groupReactions(message, viewerId);
     const viewerReaction = message.reactions?.find(reaction => reaction.senderId === viewerId)?.reaction;
@@ -1103,9 +1111,20 @@ const MessageRow = memo(function MessageRow({
                     <time className="status-surface" dateTime={new Date(message.ts).toISOString()}>{formatMessageDate(message.ts)}</time>
                 </div>
             )}
-            <div className={`message${outgoing ? ' message--outgoing' : ''}${grouped ? ' message--grouped' : ''}${message.kind === 'reaction_log' || message.kind === 'activity' ? ' message--log' : ''}`}>
-                <div className="message__bubble">
+            <div className={`message${outgoing ? ' message--outgoing' : ''}${grouped ? ' message--grouped' : ''}${isSharedPost ? ' message--shared-post' : ''}${message.kind === 'reaction_log' || message.kind === 'activity' ? ' message--log' : ''}`}>
+                <div className="message__stack">
+                <div className={`message__bubble${isSharedPost ? ' message__bubble--shared-post' : ''}`}>
                     {senderName && <strong className="message__sender-name">{senderName}</strong>}
+                    {isSharedPost && (
+                        <span className="shared-post__author">
+                            <span className="shared-post__author-avatar" aria-hidden="true">
+                                {message.kind === 'reel_share' && store.state.reels.byId[message.shortcode]?.media?.author.picUrl
+                                    ? <img src={store.state.reels.byId[message.shortcode]!.media!.author.picUrl!} alt="" width="24" height="24" />
+                                    : <span>{initials(message.kind === 'reel_share' ? message.author : message.title)}</span>}
+                            </span>
+                            <strong>{message.kind === 'reel_share' ? message.author : message.title}</strong>
+                        </span>
+                    )}
                     {'replyPreview' in message && message.replyPreview && (
                         <ReplyPreview
                             preview={message.replyPreview}
@@ -1115,12 +1134,21 @@ const MessageRow = memo(function MessageRow({
                             targetId={'repliedTo' in message ? message.repliedTo : undefined}
                         />
                     )}
-                    <div className="message__body">
+                    <div className={`message__body${isSharedPost ? ' message__body--shared-post' : ''}`}>
                         <MessageContent store={store} message={message} reelItem={reelItem} />
                         <time dateTime={new Date(message.ts).toISOString()}>
                             {formatMessageTime(message.ts)}
                         </time>
                     </div>
+                    {pending && <span className="message__delivery" role="status">Sending…</span>}
+                    {failed && (
+                        <div className="message__failure" role="alert">
+                            <span>Not sent: {failed.error}</span>
+                            <button type="button" onClick={() => store.retrySend(threadId, message.id)}>Retry</button>
+                            <button type="button" onClick={() => store.removeFailedSend(threadId, message.id)}>Remove</button>
+                        </div>
+                    )}
+                </div>
                     {groupedReactions.length > 0 && (
                         <div className="message__reactions" aria-label="Message reactions">
                             {groupedReactions.map(reaction => (
@@ -1135,28 +1163,30 @@ const MessageRow = memo(function MessageRow({
                             ))}
                         </div>
                     )}
-                    {pending && <span className="message__delivery" role="status">Sending…</span>}
-                    {failed && (
-                        <div className="message__failure" role="alert">
-                            <span>Not sent: {failed.error}</span>
-                            <button type="button" onClick={() => store.retrySend(threadId, message.id)}>Retry</button>
-                            <button type="button" onClick={() => store.removeFailedSend(threadId, message.id)}>Remove</button>
-                        </div>
-                    )}
                     {eligibleForActions && (
-                        <button
-                            ref={reactionRef}
-                            type="button"
-                            className="message__reaction-trigger"
-                            aria-label={viewerReaction ? `Change reaction ${viewerReaction}` : 'Add reaction'}
-                            aria-haspopup="menu"
-                            aria-expanded={Boolean(pickerPoint)}
-                            aria-busy={reactionMutation?.status === 'pending'}
-                            disabled={reactionMutation?.status === 'pending'}
-                            onClick={openReactionPicker}
-                        >
-                            <span aria-hidden="true">☺</span>
-                        </button>
+                        <div className="message__reaction-rail" aria-label="Quick reactions">
+                            {REACTION_EMOJIS.map(emoji => (
+                                <button
+                                    key={emoji}
+                                    type="button"
+                                    aria-label={`React with ${emoji}`}
+                                    aria-pressed={viewerReaction === emoji}
+                                    disabled={reactionMutation?.status === 'pending' || viewerReaction === emoji}
+                                    onClick={() => chooseReaction(emoji)}
+                                ><span aria-hidden="true">{emoji}</span></button>
+                            ))}
+                            <button
+                                ref={reactionRef}
+                                type="button"
+                                className="message__reaction-expander"
+                                aria-label={viewerReaction ? `Change reaction ${viewerReaction}` : 'More reactions'}
+                                aria-haspopup="menu"
+                                aria-expanded={Boolean(pickerPoint)}
+                                aria-busy={reactionMutation?.status === 'pending'}
+                                disabled={reactionMutation?.status === 'pending'}
+                                onClick={openReactionPicker}
+                            ><span aria-hidden="true">›</span></button>
+                        </div>
                     )}
                     {menuPoint && (
                         <ContextMenu
@@ -1291,7 +1321,7 @@ function ReactionPicker({
         buttons[next].focus();
     };
 
-    const firstEnabled = busy ? undefined : REACTION_EMOJIS.find(emoji => emoji !== current);
+    const firstEnabled = busy ? undefined : FULL_REACTION_EMOJIS.find(emoji => emoji !== current);
 
     return (
         <div
@@ -1302,20 +1332,25 @@ function ReactionPicker({
             aria-busy={busy}
             onKeyDown={moveFocus}
         >
-            {REACTION_EMOJIS.map(emoji => (
-                <button
-                    key={emoji}
-                    type="button"
-                    role="menuitemradio"
-                    aria-checked={current === emoji}
-                    aria-label={current === emoji ? `${emoji}, current reaction` : `React with ${emoji}`}
-                    className={current === emoji ? 'reaction-picker__current' : ''}
-                    disabled={busy || current === emoji}
-                    tabIndex={emoji === firstEnabled ? 0 : -1}
-                    onClick={() => onChoose(emoji)}
-                >
-                    <span aria-hidden="true">{emoji}</span>
-                </button>
+            {REACTION_CATEGORIES.map(category => (
+                <section key={category.label} className="reaction-picker__category" aria-label={category.label}>
+                    <strong>{category.label}</strong>
+                    <span className="reaction-picker__grid">
+                        {category.emojis.map(emoji => (
+                            <button
+                                key={emoji}
+                                type="button"
+                                role="menuitemradio"
+                                aria-checked={current === emoji}
+                                aria-label={current === emoji ? `${emoji}, current reaction` : `React with ${emoji}`}
+                                className={current === emoji ? 'reaction-picker__current' : ''}
+                                disabled={busy || current === emoji}
+                                tabIndex={emoji === firstEnabled ? 0 : -1}
+                                onClick={() => onChoose(emoji)}
+                            ><span aria-hidden="true">{emoji}</span></button>
+                        ))}
+                    </span>
+                </section>
             ))}
             {current && (
                 <span className="reaction-picker__note">Choose another to change</span>
@@ -1582,17 +1617,20 @@ function InlineReel({
 }) {
     const rootRef = useRef<HTMLButtonElement>(null as unknown as HTMLButtonElement);
     const videoRef = useRef<HTMLVideoElement>(null as unknown as HTMLVideoElement);
-    const [nearViewport, setNearViewport] = useState(false);
-    const [canPlay, setCanPlay] = useState(false);
     const video = item?.kind === 'video' ? item : undefined;
     const mediaWidth = item?.width ?? message.previewWidth;
     const mediaHeight = item?.height ?? message.previewHeight;
-    const mediaStyle = mediaWidth && mediaHeight
-        ? {
-            aspectRatio: `${mediaWidth} / ${mediaHeight}`,
-            maxWidth: `${Math.min(300, 360 * mediaWidth / mediaHeight)}px`,
-        }
+    const mediaBox = mediaWidth && mediaHeight
+        ? calculateInlineMediaBox(mediaWidth, mediaHeight)
         : undefined;
+    const previewStyle = mediaBox ? {
+        width: `${mediaBox.width}px`,
+        maxWidth: '100%',
+    } : undefined;
+    const mediaStyle = mediaBox ? {
+        aspectRatio: `${mediaBox.width} / ${mediaBox.height}`,
+        width: '100%',
+    } : undefined;
 
     useEffect(() => {
         const root = rootRef.current;
@@ -1601,13 +1639,13 @@ function InlineReel({
         const checkPosition = () => {
             const rootRect = root.getBoundingClientRect();
             const historyRect = history.getBoundingClientRect();
-            setNearViewport(
-                rootRect.width > 0 && rootRect.height > 0 &&
-                rootRect.bottom >= historyRect.top - 160 && rootRect.top <= historyRect.bottom + 160,
-            );
+            if (rootRect.width > 0 && rootRect.height > 0 &&
+                rootRect.bottom >= historyRect.top - 160 && rootRect.top <= historyRect.bottom + 160)
+                store.prioritizeReelPreloads([message.shortcode]);
         };
         const observer = new IntersectionObserver(entries => {
-            setNearViewport(entries.some(entry => entry.isIntersecting));
+            if (entries.some(entry => entry.isIntersecting))
+                store.prioritizeReelPreloads([message.shortcode]);
         }, { root: history, rootMargin: '160px 0px', threshold: 0 });
         observer.observe(root);
         history.addEventListener('scroll', checkPosition, { passive: true });
@@ -1616,33 +1654,14 @@ function InlineReel({
             observer.disconnect();
             history.removeEventListener('scroll', checkPosition);
         };
-    }, [message.id]);
-
-    useEffect(() => {
-        const media = videoRef.current;
-        if (!media) return;
-        if (nearViewport && canPlay) void media.play().catch(() => undefined);
-        else media.pause();
-    }, [nearViewport, canPlay, video?.videoUrl]);
-
-    const markPlayable = () => {
-        setCanPlay(true);
-        const media = videoRef.current;
-        const history = rootRef.current?.closest('.messages');
-        if (!media || !history) return;
-        const mediaRect = media.getBoundingClientRect();
-        const historyRect = history.getBoundingClientRect();
-        if (mediaRect.bottom >= historyRect.top - 160 && mediaRect.top <= historyRect.bottom + 160) {
-            setNearViewport(true);
-            void media.play().catch(() => undefined);
-        }
-    };
+    }, [store, message.id, message.shortcode]);
 
     return (
         <button
             ref={rootRef}
             type="button"
             className="message-card message-reel-preview"
+            style={previewStyle}
             data-shared-post-action="reel"
             aria-label={`Open reel from ${message.author}`}
             onClick={(event: ReactMouseEvent<HTMLButtonElement>) => {
@@ -1664,8 +1683,6 @@ function InlineReel({
                     width={video.width}
                     height={video.height}
                     aria-hidden="true"
-                    onCanPlay={markPlayable}
-                    onLoadedData={markPlayable}
                     />
                 ) : (
                     <img
@@ -1678,7 +1695,6 @@ function InlineReel({
                 )}
             </span>
             <span className="message-reel-preview__badge" aria-hidden="true">▶</span>
-            <strong>{message.author}</strong>
             {message.caption && <span>{message.caption}</span>}
         </button>
     );
@@ -2174,7 +2190,6 @@ function MessageContent({
             const content = (
                 <>
                     <img src={message.thumbUrl} alt="" loading="lazy" />
-                    <strong>{message.title}</strong>
                     {message.subtitle && <span>{message.subtitle}</span>}
                 </>
             );
