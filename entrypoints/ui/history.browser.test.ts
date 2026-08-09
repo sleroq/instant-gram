@@ -718,6 +718,7 @@ test('post carousel and soundtrack follow native playback state and clean up on 
                 this.dispatchEvent(new Event('pause'));
             },
         });
+        localStorage.removeItem('icr:reel-volume');
         await window.historyHarness.mount('post');
     });
 
@@ -763,10 +764,15 @@ test('post carousel and soundtrack follow native playback state and clean up on 
     assert.equal(await audio.getAttribute('data-play-calls'), '2', 'recovery should play before changing mute state');
     assert.equal(await audio.evaluate(element => (element as HTMLAudioElement).muted), false);
     assert.equal(await muteMusic.getAttribute('aria-pressed'), 'false');
+    const musicVolume = page.getByRole('slider', { name: 'Post music volume' });
+    await musicVolume.fill('0.45');
+    assert.equal(await audio.evaluate(element => (element as HTMLAudioElement).volume), 0.45);
+    assert.equal(await page.evaluate(() => localStorage.getItem('icr:reel-volume')), '{"volume":0.45,"muted":false}');
     await muteMusic.click();
     const unmuteMusic = page.getByRole('button', { name: 'Unmute post music' });
     await unmuteMusic.waitFor();
     assert.equal(await audio.evaluate(element => (element as HTMLAudioElement).muted), true);
+    assert.equal(await audio.evaluate(element => (element as HTMLAudioElement).volume), 0.45);
     assert.equal(await unmuteMusic.getAttribute('aria-pressed'), 'true');
 
     await audio.evaluate(element => { element.dataset.soundtrackNode = 'original'; });
@@ -791,6 +797,8 @@ test('post carousel and soundtrack follow native playback state and clean up on 
     await page.waitForFunction(() => window.historyHarness.reelMetrics().reelMediaCalls === 2);
     await page.waitForFunction(() => document.querySelector('.reel-stage audio')?.getAttribute('src')?.endsWith('#refresh-2'));
     await audio.dispatchEvent('loadedmetadata');
+    assert.equal(await audio.evaluate(element => (element as HTMLAudioElement).volume), 0.45);
+    assert.equal(await audio.evaluate(element => (element as HTMLAudioElement).muted), true);
     assert.equal(await audio.getAttribute('data-soundtrack-node'), 'original',
         'renewing the soundtrack URL should reinitialize, not remount, its player');
     assert.equal(await audio.getAttribute('data-pause-calls'), '1', 'the replaced source should be paused before reinitializing');
@@ -799,6 +807,133 @@ test('post carousel and soundtrack follow native playback state and clean up on 
     await page.getByRole('button', { name: 'Close post' }).click();
     await dialog.waitFor({ state: 'detached' });
     assert.equal(await audioHandle!.getAttribute('data-pause-calls'), '2');
+    await page.close();
+});
+
+test('post soundtrack ignores deferred play outcomes across source refresh and modal lifetime', async () => {
+    const page = await openHarness({ width: 700, height: 700 });
+    await page.evaluate(async () => {
+        type PlayAttempt = { resolve: () => void; reject: () => void };
+        const controls = { behaviors: ['pending', 'pending', 'resolve', 'pending', 'resolve'], attempts: [] as PlayAttempt[] };
+        (window as typeof window & { postPlayControls: typeof controls }).postPlayControls = controls;
+        Object.defineProperty(HTMLMediaElement.prototype, 'paused', {
+            configurable: true,
+            get() { return (this as HTMLElement).dataset.testPaused !== 'false'; },
+        });
+        Object.defineProperty(HTMLMediaElement.prototype, 'load', {
+            configurable: true,
+            value() { /* Metadata is dispatched after each controlled source update. */ },
+        });
+        Object.defineProperty(HTMLMediaElement.prototype, 'play', {
+            configurable: true,
+            value(this: HTMLMediaElement) {
+                const behavior = controls.behaviors[controls.attempts.length] ?? 'resolve';
+                let resolve!: () => void;
+                let reject!: () => void;
+                const result = new Promise<void>((accept, decline) => {
+                    resolve = accept;
+                    reject = () => decline(new Error('Controlled play rejection'));
+                });
+                controls.attempts.push({ resolve, reject });
+                if (behavior === 'resolve') {
+                    this.dataset.testPaused = 'false';
+                    this.dispatchEvent(new Event('play'));
+                    resolve();
+                }
+                return result;
+            },
+        });
+        Object.defineProperty(HTMLMediaElement.prototype, 'pause', {
+            configurable: true,
+            value(this: HTMLMediaElement) {
+                this.dataset.testPaused = 'true';
+                this.dispatchEvent(new Event('pause'));
+            },
+        });
+        await window.historyHarness.mount('post');
+    });
+
+    const openPost = async () => {
+        await page.locator('[data-message-id="post-message"]').focus();
+        await page.keyboard.press('Enter');
+        await page.getByRole('dialog', { name: 'Post by Post Author' }).waitFor();
+    };
+    await openPost();
+    let audio = page.locator('.reel-stage audio');
+    await audio.dispatchEvent('loadedmetadata');
+    await page.waitForFunction(() => (
+        window as typeof window & { postPlayControls: { attempts: unknown[] } }
+    ).postPlayControls.attempts.length === 1);
+
+    await page.evaluate(() => window.historyHarness.refreshPost());
+    await page.waitForFunction(() => document.querySelector('audio')?.getAttribute('src')?.endsWith('#refresh-2'));
+    await audio.dispatchEvent('loadedmetadata');
+    await page.evaluate(() => (
+        window as typeof window & { postPlayControls: { attempts: Array<{ resolve: () => void }> } }
+    ).postPlayControls.attempts[0].resolve());
+    await page.waitForTimeout(50);
+    assert.equal(await page.getByRole('button', { name: 'Play post music' }).count(), 1,
+        'the old source resolving must not mark the refreshed source playing');
+    assert.equal(await page.getByText('Post music could not be played.').count(), 0);
+    await page.evaluate(() => (
+        window as typeof window & { postPlayControls: { attempts: Array<{ reject: () => void }> } }
+    ).postPlayControls.attempts[1].reject());
+    await page.getByRole('status').filter({ hasText: 'Post music is paused' }).waitFor();
+
+    await audio.dispatchEvent('error');
+    await page.getByText('Post music could not be loaded.').waitFor();
+    await page.evaluate(() => window.historyHarness.refreshPost());
+    await page.waitForFunction(() => document.querySelector('audio')?.getAttribute('src')?.endsWith('#refresh-3'));
+    await audio.dispatchEvent('loadedmetadata');
+    await page.getByRole('button', { name: 'Mute post music' }).waitFor();
+    assert.equal(await page.getByText('Post music could not be loaded.').count(), 0);
+
+    await page.evaluate(() => window.historyHarness.refreshPost());
+    await page.waitForFunction(() => document.querySelector('audio')?.getAttribute('src')?.endsWith('#refresh-4'));
+    await audio.dispatchEvent('loadedmetadata');
+    await page.waitForFunction(() => (
+        window as typeof window & { postPlayControls: { attempts: unknown[] } }
+    ).postPlayControls.attempts.length === 4);
+    await page.getByRole('button', { name: 'Close post' }).click();
+    await page.getByRole('dialog', { name: 'Post by Post Author' }).waitFor({ state: 'detached' });
+    await openPost();
+    audio = page.locator('.reel-stage audio');
+    await audio.dispatchEvent('loadedmetadata');
+    await page.getByRole('button', { name: 'Mute post music' }).waitFor();
+    await page.evaluate(() => (
+        window as typeof window & { postPlayControls: { attempts: Array<{ reject: () => void }> } }
+    ).postPlayControls.attempts[3].reject());
+    await page.waitForTimeout(50);
+    assert.equal(await page.getByRole('button', { name: 'Mute post music' }).count(), 1);
+    assert.equal(await page.getByText('Post music could not be played.').count(), 0);
+    await page.close();
+});
+
+test('same-item soundtrack removal restores the persisted video mute preference coherently', async () => {
+    const page = await openHarness({ width: 700, height: 700 });
+    const persistedPreference = '{"volume":0.35,"muted":false}';
+    await page.evaluate(async preference => {
+        localStorage.setItem('icr:reel-volume', preference);
+        await window.historyHarness.mount('post');
+    }, persistedPreference);
+    await page.locator('[data-message-id="post-message"]').focus();
+    await page.keyboard.press('Enter');
+    await page.getByRole('button', { name: 'Next slide' }).click();
+    await page.waitForFunction(() => document.querySelector('.reel-stage')?.getAttribute('aria-label') === 'Slide 2 of 3');
+
+    const video = page.locator('.reel-stage video');
+    assert.equal(await video.evaluate(element => (element as HTMLVideoElement).muted), true);
+    assert.equal(await page.getByRole('slider', { name: 'Post volume' }).count(), 0);
+
+    await page.evaluate(() => window.historyHarness.refreshPost(true));
+    const mute = page.getByRole('button', { name: 'Mute post' });
+    const volume = page.getByRole('slider', { name: 'Post volume' });
+    await mute.waitFor();
+    await volume.waitFor();
+    assert.equal(await video.evaluate(element => (element as HTMLVideoElement).muted), false);
+    assert.equal(await volume.inputValue(), '0.35');
+    assert.equal(await page.getByRole('button', { name: 'Unmute post' }).count(), 0);
+    assert.equal(await page.evaluate(() => localStorage.getItem('icr:reel-volume')), persistedPreference);
     await page.close();
 });
 

@@ -207,7 +207,9 @@ and overlap duration. The modal keeps this soundtrack mounted across carousel
 slides, pauses it on close, and mutes slide videos while it is active so two
 audio sources cannot overlap. Its bottom-right control follows the native audio
 element's actual paused and mute state: blocked autoplay first presents Play,
-while an already-playing soundtrack presents Mute or Unmute. Replaced signed
+while an already-playing soundtrack presents Mute or Unmute. It also exposes a
+volume slider backed by the same persisted global volume/mute preference as reel
+and post videos. Replaced signed
 URLs and timing metadata reinitialize the same slide-independent player, with
 stale play outcomes ignored.
 
@@ -272,9 +274,10 @@ locked, focus is contained, and close by button, backdrop, or Escape restores th
 invoking preview. The modal owns only presentation state (the stable carousel
 index and native media element state). The application root retains a small
 session-only playback record keyed by shortcode and media-item ID: current time
-plus explicit user-paused intent. Video volume and explicit mute intent are one
-global player preference, shared by every reel/post video and persisted in local
-storage; soundtrack-forced video muting does not overwrite that preference.
+plus explicit user-paused intent. Media volume and explicit mute intent are one
+global player preference, shared by every reel/post video and attached post
+soundtrack and persisted in local storage; soundtrack-forced video muting does
+not overwrite that preference.
 Closing or changing slides snapshots time;
 metadata readiness restores it. A new video autoplays, while a video explicitly
 paused by the user remains paused when revisited. Each carousel video therefore

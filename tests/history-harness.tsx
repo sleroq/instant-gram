@@ -28,6 +28,7 @@ let reelMediaCalls = 0;
 let reelLikeCalls = 0;
 let reelSaveCalls = 0;
 let mountedScenario: Scenario | undefined;
+let postRefreshWithoutSoundtrack = false;
 
 const thread = {
     key: 'thread',
@@ -330,6 +331,7 @@ async function mount(scenario: Scenario) {
     reelMediaCalls = 0;
     reelLikeCalls = 0;
     reelSaveCalls = 0;
+    postRefreshWithoutSoundtrack = false;
     document.querySelector('#history-harness-style')?.remove();
     if (
         scenario === 'continuous' || scenario === 'reply-navigation-prefetch-resume' ||
@@ -536,7 +538,10 @@ async function mount(scenario: Scenario) {
             reelMediaCalls++;
             if (scenario === 'post') return {
                 ok: true,
-                value: reelMediaCalls === 1 ? postMedia : {
+                value: reelMediaCalls === 1 ? postMedia : postRefreshWithoutSoundtrack ? {
+                    ...postMedia,
+                    attachedAudio: undefined,
+                } : {
                     ...postMedia,
                     attachedAudio: {
                         ...postMedia.attachedAudio!,
@@ -680,6 +685,11 @@ window.historyHarness = {
         resolveReelMedia();
         resolveReelMedia = undefined;
     },
+    refreshPost: (withoutSoundtrack = false) => {
+        if (mountedScenario !== 'post' || !activeStore) throw new Error('Post harness is not mounted');
+        postRefreshWithoutSoundtrack = withoutSoundtrack;
+        return activeStore.retryReel('post-code');
+    },
     showReplyPreview: () => document.querySelector('#history-harness-style')?.remove(),
     reactionCalls: () => reactionCalls,
     select: (threadId: string) => activeStore?.selectThread(threadId),
@@ -720,6 +730,7 @@ declare global {
             resolveSend: () => void;
             resolveReaction: () => void;
             resolveReelMedia: () => void;
+            refreshPost: (withoutSoundtrack?: boolean) => Promise<unknown>;
             showReplyPreview: () => void;
             reactionCalls: () => Parameters<CompleteUiRpc['setReaction']>[0][];
             select: (threadId: string) => void;

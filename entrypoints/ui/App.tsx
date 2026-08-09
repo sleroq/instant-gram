@@ -1982,7 +1982,10 @@ function ReelModal({
                                 soundtrackActive={Boolean(media.attachedAudio)}
                                 onRetry={() => { void store.retryReel(reel.shortcode); }}
                             />
-                            {media.attachedAudio && <AttachedAudioPlayer audio={media.attachedAudio} />}
+                            {media.attachedAudio && <AttachedAudioPlayer
+                                audio={media.attachedAudio}
+                                volumePreference={volumePreference}
+                            />}
                             {slide > 0 && (
                                 <button type="button" className="reel-stage__previous" onClick={() => move(-1)} aria-label="Previous slide">‹</button>
                             )}
@@ -2303,6 +2306,15 @@ function ReelMediaPlayer({
         };
     }, [item.id, playbackKey]);
 
+    useLayoutEffect(() => {
+        const video = videoRef.current;
+        const nextMuted = soundtrackActive || volumePreference.current.muted;
+        video.volume = volumePreference.current.volume;
+        video.muted = nextMuted;
+        setMuted(nextMuted);
+        setVolume(volumePreference.current.volume);
+    }, [soundtrackActive]);
+
     return (
         <div ref={wrapperRef} className="reel-media reel-media--video" style={mediaStyle}>
             <video
@@ -2393,12 +2405,19 @@ function ReelMediaPlayer({
     );
 }
 
-function AttachedAudioPlayer({ audio }: { audio: AttachedAudio }) {
+function AttachedAudioPlayer({
+    audio,
+    volumePreference,
+}: {
+    audio: AttachedAudio;
+    volumePreference: ReelVolumePreferenceRef;
+}) {
     const audioRef = useRef<HTMLAudioElement>(null as unknown as HTMLAudioElement);
     const lifecycleRef = useRef(0);
     const playAttemptRef = useRef(0);
     const [playing, setPlaying] = useState(false);
-    const [muted, setMuted] = useState(false);
+    const [muted, setMuted] = useState(volumePreference.current.muted);
+    const [volume, setVolume] = useState(volumePreference.current.volume);
     const [failure, setFailure] = useState<{ message: string; alert: boolean }>();
 
     const attemptPlayback = (element: HTMLAudioElement, lifecycle: number, userInitiated: boolean) => {
@@ -2440,9 +2459,12 @@ function AttachedAudioPlayer({ audio }: { audio: AttachedAudio }) {
             catch { /* Seeking is only legal after metadata in some browsers. */ }
             attemptPlayback(element, lifecycle, false);
         };
+        element.volume = volumePreference.current.volume;
+        element.muted = volumePreference.current.muted;
         element.src = audio.url;
         element.load();
         setPlaying(false);
+        setVolume(element.volume);
         setMuted(element.muted);
         setFailure(undefined);
         if (element.readyState >= 1) begin();
@@ -2464,7 +2486,10 @@ function AttachedAudioPlayer({ audio }: { audio: AttachedAudio }) {
                 setFailure(undefined);
             }}
             onPause={() => setPlaying(false)}
-            onVolumeChange={() => setMuted(audioRef.current.muted)}
+            onVolumeChange={() => {
+                setVolume(audioRef.current.volume);
+                setMuted(audioRef.current.muted);
+            }}
             onError={() => {
                 setPlaying(false);
                 setFailure({ message: 'Post music could not be loaded.', alert: true });
@@ -2477,22 +2502,44 @@ function AttachedAudioPlayer({ audio }: { audio: AttachedAudio }) {
                 }
             }}
         />
-        <button
-            type="button"
-            className="reel-stage__soundtrack"
-            aria-label={!playing ? 'Play post music' : muted ? 'Unmute post music' : 'Mute post music'}
-            aria-pressed={playing ? muted : undefined}
-            title={[audio.title, audio.artist].filter(Boolean).join(' · ') || 'Post music'}
-            onClick={() => {
-                const element = audioRef.current;
-                if (element.paused) {
-                    attemptPlayback(element, lifecycleRef.current, true);
-                    return;
-                }
-                element.muted = !element.muted;
-                setMuted(element.muted);
-            }}
-        ><SpeakerIcon muted={muted} /></button>
+        <div className="reel-stage__soundtrack-controls">
+            <button
+                type="button"
+                className="reel-stage__soundtrack"
+                aria-label={!playing ? 'Play post music' : muted ? 'Unmute post music' : 'Mute post music'}
+                aria-pressed={playing ? muted : undefined}
+                title={[audio.title, audio.artist].filter(Boolean).join(' · ') || 'Post music'}
+                onClick={() => {
+                    const element = audioRef.current;
+                    if (element.paused) {
+                        attemptPlayback(element, lifecycleRef.current, true);
+                        return;
+                    }
+                    element.muted = !element.muted;
+                    setMuted(element.muted);
+                    volumePreference.current = { volume: element.volume, muted: element.muted };
+                    writeReelVolumePreference(volumePreference.current);
+                }}
+            ><SpeakerIcon muted={muted} /></button>
+            <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.05"
+                value={muted ? 0 : volume}
+                aria-label="Post music volume"
+                onChange={(event: ChangeEvent<HTMLInputElement>) => {
+                    const element = audioRef.current;
+                    const value = Number(event.currentTarget.value);
+                    element.volume = value;
+                    element.muted = value === 0;
+                    setVolume(value);
+                    setMuted(element.muted);
+                    volumePreference.current = { volume: value, muted: element.muted };
+                    writeReelVolumePreference(volumePreference.current);
+                }}
+            />
+        </div>
         {failure && <p className="reel-stage__soundtrack-error" role={failure.alert ? 'alert' : 'status'}>{failure.message}</p>}
     </>;
 }
