@@ -1,5 +1,6 @@
 import type {
     ChangeEvent,
+    CSSProperties,
     FormEvent,
     KeyboardEvent,
     MouseEvent as ReactMouseEvent,
@@ -1039,7 +1040,7 @@ function MessagePane({
             {showDownNavigation && (
                 <button
                     type="button"
-                    className="newest-message"
+                    className={`newest-message${history?.replyTargetId ? ' newest-message--replying' : ''}`}
                     onClick={useDownNavigation}
                     aria-label={downNavigationLabel}
                     title={downNavigationLabel}
@@ -1222,16 +1223,6 @@ const MessageRow = memo(function MessageRow({
                 <div className="message__stack">
                 <div className={`message__bubble${isSharedPost ? ' message__bubble--shared-post' : ''}`}>
                     {senderName && <strong className="message__sender-name">{senderName}</strong>}
-                    {isSharedPost && (
-                        <span className="shared-post__author">
-                            <span className="shared-post__author-avatar" aria-hidden="true">
-                                {message.kind === 'reel_share' && store.state.reels.byId[message.shortcode]?.media?.author.picUrl
-                                    ? <img src={store.state.reels.byId[message.shortcode]!.media!.author.picUrl!} alt="" width="24" height="24" />
-                                    : <span>{initials(message.kind === 'reel_share' ? message.author : message.title)}</span>}
-                            </span>
-                            <strong>{message.kind === 'reel_share' ? message.author : message.title}</strong>
-                        </span>
-                    )}
                     {'replyPreview' in message && message.replyPreview && (
                         <ReplyPreview
                             preview={message.replyPreview}
@@ -1817,6 +1808,7 @@ function InlineReel({
                         loading="lazy"
                     />
                 )}
+                <SharedPostAuthor store={store} message={message} />
             </span>
             <span className="message-reel-preview__badge" aria-hidden="true">▶</span>
             {message.caption && <span>{message.caption}</span>}
@@ -1905,7 +1897,10 @@ function ReelModal({
         >
             <div
                 ref={modalRef}
-                className="reel-modal__dialog"
+                className={`reel-modal__dialog${current ? ' reel-modal__dialog--media' : ''}`}
+                style={current
+                    ? `--reel-aspect-width: ${current.width}; --reel-aspect-height: ${current.height}` as unknown as CSSProperties
+                    : undefined}
                 role="dialog"
                 aria-modal="true"
                 aria-label={media ? `Reel by ${media.author.fullName || media.author.username}` : 'Instagram reel'}
@@ -1941,7 +1936,15 @@ function ReelModal({
                                 <div className="reel-stage__position" role="status">{slide + 1} / {items.length}</div>
                             )}
                         </section>
-                        <aside className="reel-details">
+                        <aside
+                            className="reel-details"
+                            onScroll={(event: UIEvent<HTMLElement>) => {
+                                const details = event.currentTarget;
+                                const remaining = details.scrollHeight - details.scrollTop - details.clientHeight;
+                                if (details.scrollTop > 0 && remaining <= 240)
+                                    void store.loadNextReelComments(reel.shortcode);
+                            }}
+                        >
                             <header className="reel-author">
                                 {media.author.picUrl ? <img src={media.author.picUrl} alt="" width="42" height="42" /> : <span className="avatar avatar--small">{initials(media.author.username)}</span>}
                                 <a href={`https://www.instagram.com/${encodeURIComponent(media.author.username)}/`} target="_blank" rel="noreferrer">
@@ -1976,15 +1979,18 @@ function ReelModal({
                             <section className="reel-comments" aria-label="Comments">
                                 <h3>Comments <span>{media.commentCount.toLocaleString()}</span></h3>
                                 {reel.comments.status === 'loading' && <p role="status">Loading comments…</p>}
-                                {reel.comments.status === 'error' && <div role="alert" className="reel-error">
+                                {(reel.comments.status === 'error' || reel.comments.failedCursor) && <div role="alert" className="reel-error">
                                     <span>{reel.comments.error ?? 'Could not load comments'}</span>
-                                    <button type="button" onClick={() => { void store.retryReelComments(reel.shortcode); }}>Retry comments</button>
+                                    <button type="button" onClick={() => { void store.retryReelComments(reel.shortcode); }}>
+                                        {reel.comments.failedCursor ? 'Retry more comments' : 'Retry comments'}
+                                    </button>
                                 </div>}
                                 {reel.comments.status === 'ready' && reel.comments.listedIds.length === 0 && <p>No comments yet</p>}
                                 {reel.comments.listedIds.map(id => {
                                     const comment = reel.comments.byId[id];
                                     return <article key={id} className="reel-comment"><strong>@{comment.author.username}</strong><p>{comment.text}</p></article>;
                                 })}
+                                {reel.comments.isLoadingMore && <p role="status">Loading more comments…</p>}
                             </section>
                         </aside>
                     </>
@@ -2016,6 +2022,7 @@ function ReelMediaPlayer({
     const [duration, setDuration] = useState(item.kind === 'video' ? item.durationSec : 0);
     const [quality, setQuality] = useState('auto');
     const [failedSource, setFailedSource] = useState<string>();
+    const [isFullscreen, setIsFullscreen] = useState(false);
     const spaceRef = useRef<{
         video: HTMLVideoElement;
         timer: number;
@@ -2030,6 +2037,15 @@ function ReelMediaPlayer({
         muted: boolean;
         playbackRate: number;
     }>();
+
+    useEffect(() => {
+        const updateFullscreen = () => {
+            setIsFullscreen(document.fullscreenElement === wrapperRef.current);
+        };
+        document.addEventListener('fullscreenchange', updateFullscreen);
+        updateFullscreen();
+        return () => document.removeEventListener('fullscreenchange', updateFullscreen);
+    }, []);
 
     const finishSpace = (toggleTap = false) => {
         const interaction = spaceRef.current;
@@ -2135,6 +2151,13 @@ function ReelMediaPlayer({
         video.muted = value === 0;
         setVolume(value);
         setMuted(value === 0);
+    };
+    const toggleFullscreen = () => {
+        if (document.fullscreenElement === wrapperRef.current) {
+            void document.exitFullscreen();
+        } else if (!document.fullscreenElement) {
+            void wrapperRef.current.requestFullscreen?.();
+        }
     };
     useEffect(() => {
         const snapshot = sourceSwitchRef.current;
@@ -2257,7 +2280,11 @@ function ReelMediaPlayer({
                         </select>
                     </label>}
                     <time>{formatMediaTime(currentTime)} / {formatMediaTime(duration)}</time>
-                    <button type="button" aria-label="Enter fullscreen" onClick={() => { void wrapperRef.current.requestFullscreen?.(); }}>⛶</button>
+                    <button
+                        type="button"
+                        aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+                        onClick={toggleFullscreen}
+                    >⛶</button>
                 </div>
             </div>
         </div>
@@ -2313,7 +2340,10 @@ function MessageContent({
         case 'inline_share': {
             const content = (
                 <>
-                    <img src={message.thumbUrl} alt="" loading="lazy" />
+                    <span className="message-card__media">
+                        <img src={message.thumbUrl} alt="" loading="lazy" />
+                        <SharedPostAuthor store={store} message={message} />
+                    </span>
                     {message.subtitle && <span>{message.subtitle}</span>}
                 </>
             );
@@ -2352,6 +2382,30 @@ function MessageContent({
             </span>
         );
     }
+}
+
+function SharedPostAuthor({
+    store,
+    message,
+}: {
+    store: FrontendStore;
+    message: Extract<Message, { kind: 'reel_share' | 'inline_share' }>;
+}) {
+    const label = message.kind === 'reel_share' ? message.author : message.title;
+    const picUrl = message.kind === 'reel_share'
+        ? store.state.reels.byId[message.shortcode]?.media?.author.picUrl
+        : undefined;
+
+    return (
+        <span className="shared-post__author">
+            <span className="shared-post__author-avatar" aria-hidden="true">
+                {picUrl
+                    ? <img src={picUrl} alt="" width="20" height="20" />
+                    : <span>{initials(label)}</span>}
+            </span>
+            <strong>{label}</strong>
+        </span>
+    );
 }
 
 function isActionableSharedPost(message: Message) {

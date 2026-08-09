@@ -315,6 +315,7 @@ export type CoreRpcMap = {
     }) => Result<ReelMedia>;
     getReelComments: (payload: {
         mediaId: string;
+        cursor?: string;
     }) => Result<ReelComments>;
     setReelLiked: (payload: {
         mediaId: string;

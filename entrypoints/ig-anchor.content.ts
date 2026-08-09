@@ -224,19 +224,26 @@ async function getReelMedia(value: unknown) {
 
 function validateReelCommentsPayload(value: unknown): ReelCommentsPayload {
     if (!isRecord(value)) throw new Error('Invalid Instagram reel comments payload');
-    if (Object.keys(value).some(key => key !== 'mediaId'))
+    if (Object.keys(value).some(key => key !== 'mediaId' && key !== 'cursor'))
         throw new Error('Invalid Instagram reel comments payload fields');
     if (typeof value.mediaId !== 'string' || !/^\d{1,64}$/.test(value.mediaId))
         throw new Error('Invalid Instagram reel media ID');
+    if (value.cursor !== undefined && (typeof value.cursor !== 'string' || !value.cursor))
+        throw new Error('Invalid Instagram reel comments cursor');
     return value as ReelCommentsPayload;
 }
 
 async function getReelComments(value: unknown) {
     const payload = validateReelCommentsPayload(value);
-    const query = new URLSearchParams({
-        can_support_threading: 'true',
-        permalink_enabled: 'false',
-    });
+    const query = new URLSearchParams({ can_support_threading: 'true' });
+    if (payload.cursor) {
+        // `next_min_id` is an opaque structured string. The captured pagination
+        // request sends it back unchanged rather than decoding its fields.
+        query.set('min_id', payload.cursor);
+        query.set('sort_order', 'popular');
+    } else {
+        query.set('permalink_enabled', 'false');
+    }
     const response = await fetch(
         `https://www.instagram.com/api/v1/media/${payload.mediaId}/comments/?${query}`,
         {

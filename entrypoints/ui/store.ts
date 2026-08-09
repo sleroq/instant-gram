@@ -110,6 +110,8 @@ export type ReelState = {
         cursor?: string;
         hasNextPage: boolean;
         status: Status;
+        isLoadingMore: boolean;
+        failedCursor?: string;
         error?: string;
     };
     likeMutation?: ReelMutation;
@@ -227,6 +229,7 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
                 listedIds: [],
                 hasNextPage: false,
                 status: 'idle',
+                isLoadingMore: false,
             },
         };
     }
@@ -1370,45 +1373,64 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
         queuedReplyPrefetches.clear();
     }
 
-    async function loadReelComments(shortcode: string) {
+    async function loadReelComments(shortcode: string, cursor?: string) {
         const reel = state.reels.byId[shortcode];
         const mediaId = reel?.media?.id ?? reel?.mediaIdHint;
+        const isLoadingMore = cursor !== undefined;
         if (
-            !reel || !mediaId || reelCommentRequests.has(shortcode) ||
-            reel.comments.status === 'ready'
-        ) return reel?.comments.status === 'ready';
+            !reel || !mediaId || reelCommentRequests.has(shortcode) || (
+                isLoadingMore
+                    ? reel.comments.status !== 'ready' || !reel.comments.hasNextPage ||
+                        reel.comments.cursor !== cursor || reel.comments.failedCursor === cursor
+                    : reel.comments.status === 'ready'
+            )
+        ) return !isLoadingMore && reel?.comments.status === 'ready';
         const request = Symbol(`reel-comments:${shortcode}`);
         const requestGeneration = generation;
         reelCommentRequests.set(shortcode, request);
-        reel.comments.status = 'loading';
+        if (isLoadingMore) reel.comments.isLoadingMore = true;
+        else reel.comments.status = 'loading';
         reel.comments.error = undefined;
         emit();
         try {
-            const result = await rpc.getReelComments({ mediaId });
+            const result = await rpc.getReelComments({ mediaId, ...(cursor ? { cursor } : {}) });
             if (generation !== requestGeneration || reelCommentRequests.get(shortcode) !== request)
                 return false;
             if (!result.ok) {
-                reel.comments.status = 'error';
+                if (isLoadingMore) reel.comments.failedCursor = cursor;
+                else reel.comments.status = 'error';
                 reel.comments.error = result.error.message;
                 return false;
             }
+            const beforeCount = reel.comments.listedIds.length;
             for (const comment of result.value.items) {
                 if (!reel.comments.byId[comment.id]) reel.comments.listedIds.push(comment.id);
                 reel.comments.byId[comment.id] = comment;
             }
+            if (
+                isLoadingMore && result.value.hasNextPage &&
+                result.value.cursor === cursor && reel.comments.listedIds.length === beforeCount
+            ) {
+                reel.comments.failedCursor = cursor;
+                reel.comments.error = 'Comment pagination made no progress.';
+                return false;
+            }
             reel.comments.cursor = result.value.cursor;
             reel.comments.hasNextPage = result.value.hasNextPage;
             reel.comments.status = 'ready';
+            reel.comments.failedCursor = undefined;
             return true;
         } catch (error) {
             if (generation === requestGeneration && reelCommentRequests.get(shortcode) === request) {
-                reel.comments.status = 'error';
+                if (isLoadingMore) reel.comments.failedCursor = cursor;
+                else reel.comments.status = 'error';
                 reel.comments.error = errorMessage(error);
             }
             return false;
         } finally {
             if (generation === requestGeneration && reelCommentRequests.get(shortcode) === request) {
                 reelCommentRequests.delete(shortcode);
+                reel.comments.isLoadingMore = false;
                 emit();
             }
         }
@@ -1828,9 +1850,20 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
         retryReelComments(shortcode: string) {
             const reel = state.reels.byId[shortcode];
             if (!reel) return Promise.resolve(false);
+            if (reel.comments.failedCursor) {
+                const cursor = reel.comments.failedCursor;
+                reel.comments.failedCursor = undefined;
+                reel.comments.error = undefined;
+                return loadReelComments(shortcode, cursor);
+            }
             reel.comments.status = 'idle';
             reel.comments.error = undefined;
             return loadReelComments(shortcode);
+        },
+        loadNextReelComments(shortcode: string) {
+            const comments = state.reels.byId[shortcode]?.comments;
+            if (!comments?.cursor) return Promise.resolve(false);
+            return loadReelComments(shortcode, comments.cursor);
         },
         toggleReelLiked: setReelLiked,
         toggleReelSaved: setReelSaved,

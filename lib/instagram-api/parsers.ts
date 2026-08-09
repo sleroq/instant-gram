@@ -1050,11 +1050,13 @@ export function parseReelCommentsResponse(json: unknown): ReelComments {
             author: reelAuthor(comment.user),
         };
     }).filter((comment): comment is ReelComment => Boolean(comment));
+    const cursor = stringProp(root.next_min_id);
     return {
         items,
-        // The captures prove only this initial page. Do not expose an invented
-        // serialization of Instagram's structured next_min_id as a cursor.
-        hasNextPage: false,
+        ...(cursor ? { cursor } : {}),
+        // Captured continuation pages report has_more_comments=false while still
+        // returning a usable next_min_id, so cursor presence is authoritative.
+        hasNextPage: Boolean(cursor),
     };
 }
 

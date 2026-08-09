@@ -933,7 +933,7 @@ test('media-ID shares bypass GraphQL and shortcode fallback decodes the captured
     assert.deepEqual(calls, ['9001', decoded]);
 });
 
-test('reel comments and action receipts normalize only the captured initial REST page', () => {
+test('reel comments retain the captured opaque pagination cursor', () => {
     assert.deepEqual(parseReelCommentsResponse({
         comments: [{
             pk: 'comment-1', text: 'Hello', created_at: 1_700_000_000,
@@ -941,14 +941,15 @@ test('reel comments and action receipts normalize only the captured initial REST
             user: { pk: 'user-1', username: 'bob', full_name: 'Bob', is_verified: false },
         }],
         has_more_comments: true,
-        next_min_id: { cached_comments_cursor: 'next' },
+        next_min_id: '{"cached_comments_cursor":"next","bifilter_token":"token"}',
     }), {
         items: [{
             id: 'comment-1', text: 'Hello', createdAtMs: 1_700_000_000_000,
             likeCount: 2, hasLiked: false, childCommentCount: 1,
             author: { id: 'user-1', username: 'bob', fullName: 'Bob', picUrl: null, isVerified: false },
         }],
-        hasNextPage: false,
+        cursor: '{"cached_comments_cursor":"next","bifilter_token":"token"}',
+        hasNextPage: true,
     });
     assert.deepEqual(parseReelLikeResponse({ data: {
         xig_media_unlike: { media: { id: '3953224267254190889_5654194264', has_liked: true } },

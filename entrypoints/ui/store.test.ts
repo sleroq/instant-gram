@@ -1495,6 +1495,60 @@ test('reel opens join one deferred media flight and close gates comments without
     store.destroy();
 });
 
+test('reel comment pagination merges pages and failure-gates a cursor until retry', async () => {
+    const rpc = fakeRpc(async () => ({ ok: true, value: { items: [], hasNextPage: false } }));
+    rpc.getReelMedia = async payload => ({
+        ok: true,
+        value: reelMedia(payload.shortcode, payload.mediaId!, 'https://cdn/reel.mp4'),
+    });
+    const cursors: Array<string | undefined> = [];
+    let failedPage = true;
+    const comment = (id: string) => ({
+        id,
+        text: id,
+        createdAtMs: 1,
+        likeCount: 0,
+        hasLiked: false,
+        childCommentCount: 0,
+        author: {
+            id: `author-${id}`,
+            username: `author_${id}`,
+            fullName: id,
+            picUrl: null,
+            isVerified: false,
+        },
+    });
+    rpc.getReelComments = async payload => {
+        cursors.push(payload.cursor);
+        if (!payload.cursor) return {
+            ok: true,
+            value: { items: [comment('a')], cursor: 'cursor-1', hasNextPage: true },
+        };
+        if (failedPage) {
+            failedPage = false;
+            return { ok: false, error: { message: 'page failed' } };
+        }
+        return {
+            ok: true,
+            value: { items: [comment('a'), comment('b')], hasNextPage: false },
+        };
+    };
+
+    const store = createFrontendStore(rpc);
+    assert.equal(await store.openReel('ABC', '100'), true);
+    assert.equal(await store.loadNextReelComments('ABC'), false);
+    assert.equal(store.state.reels.byId.ABC.comments.failedCursor, 'cursor-1');
+    assert.equal(await store.loadNextReelComments('ABC'), false);
+    assert.deepEqual(cursors, [undefined, 'cursor-1']);
+
+    assert.equal(await store.retryReelComments('ABC'), true);
+    assert.deepEqual(cursors, [undefined, 'cursor-1', 'cursor-1']);
+    assert.deepEqual(store.state.reels.byId.ABC.comments.listedIds, ['a', 'b']);
+    assert.equal(store.state.reels.byId.ABC.comments.hasNextPage, false);
+    assert.equal(store.state.reels.byId.ABC.comments.error, undefined);
+    store.destroy();
+});
+
 test('successful media retry starts comments only while that reel remains active', async () => {
     const rpc = fakeRpc(async () => ({ ok: true, value: { items: [], hasNextPage: false } }));
     let mediaAttempt = 0;

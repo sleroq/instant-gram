@@ -511,6 +511,21 @@ test('reel preview and modal own playback, carousel, actions, comments, links, a
     const modalVideo = page.locator('.reel-stage video');
     const portraitRect = await page.locator('.reel-media').boundingBox();
     assert.ok(portraitRect && Math.abs(portraitRect.width / portraitRect.height - 9 / 16) < 0.01);
+    await page.getByRole('button', { name: 'Enter fullscreen' }).click();
+    await page.waitForFunction(() => document.fullscreenElement?.classList.contains('reel-media'));
+    const fullscreenGeometry = await modalVideo.evaluate(video => {
+        const wrapper = video.parentElement!.getBoundingClientRect();
+        const style = getComputedStyle(video);
+        return {
+            wrapper: { width: wrapper.width, height: wrapper.height },
+            viewport: { width: innerWidth, height: innerHeight },
+            objectFit: style.objectFit,
+        };
+    });
+    assert.deepEqual(fullscreenGeometry.wrapper, fullscreenGeometry.viewport);
+    assert.equal(fullscreenGeometry.objectFit, 'contain');
+    await page.getByRole('button', { name: 'Exit fullscreen' }).click();
+    await page.waitForFunction(() => document.fullscreenElement === null);
     await modalVideo.evaluate(video => {
         Object.defineProperty(video, 'paused', { configurable: true, get: () => false });
         Object.defineProperty(video, 'duration', { configurable: true, value: 10 });
@@ -703,6 +718,8 @@ test('short landscape reel modal contains every native ratio and keeps controls 
         assert.ok(geometry.mediaRect.right <= geometry.stageRect.right + 0.5);
         assert.ok(geometry.mediaRect.top >= geometry.stageRect.top - 0.5);
         assert.ok(geometry.mediaRect.bottom <= geometry.stageRect.bottom + 0.5);
+        assert.ok(Math.abs(geometry.mediaRect.width - (geometry.stageRect.right - geometry.stageRect.left)) < 1);
+        assert.ok(Math.abs(geometry.mediaRect.height - (geometry.stageRect.bottom - geometry.stageRect.top)) < 1);
         assert.ok(geometry.dialogRect.left >= 0 && geometry.dialogRect.top >= 0);
         assert.ok(geometry.dialogRect.right <= geometry.viewport.width && geometry.dialogRect.bottom <= geometry.viewport.height);
         assert.equal(geometry.pageOverflows, false);
@@ -719,6 +736,35 @@ test('short landscape reel modal contains every native ratio and keeps controls 
     await assertContained(16 / 9);
     await page.getByRole('button', { name: 'Like reel' }).scrollIntoViewIfNeeded();
     assert.equal(await page.getByRole('button', { name: 'Like reel' }).isVisible(), true);
+    await page.close();
+});
+
+test('tall reel modal keeps custom video controls inside the capped stage', async () => {
+    const page = await openHarness({ width: 1200, height: 1000 });
+    await page.evaluate(() => window.historyHarness.mount('reel'));
+    await page.getByRole('button', { name: 'Open reel from reel_author' }).click();
+    await page.getByRole('dialog', { name: 'Reel by Reel Author' }).waitFor();
+    await page.waitForTimeout(220);
+
+    const geometry = await page.evaluate(() => {
+        const dialog = document.querySelector<HTMLElement>('.reel-modal__dialog')!.getBoundingClientRect();
+        const stage = document.querySelector<HTMLElement>('.reel-stage')!.getBoundingClientRect();
+        const player = document.querySelector<HTMLElement>('.reel-player')!.getBoundingClientRect();
+        return {
+            viewport: { width: innerWidth, height: innerHeight },
+            dialog: { top: dialog.top, bottom: dialog.bottom },
+            stage: { top: stage.top, bottom: stage.bottom },
+            player: { top: player.top, bottom: player.bottom, width: player.width, height: player.height },
+        };
+    });
+
+    assert.ok(geometry.player.width > 0 && geometry.player.height > 0, JSON.stringify(geometry));
+    assert.ok(geometry.player.top >= geometry.stage.top, JSON.stringify(geometry));
+    assert.ok(geometry.player.bottom <= geometry.stage.bottom, JSON.stringify(geometry));
+    assert.ok(geometry.stage.top >= geometry.dialog.top, JSON.stringify(geometry));
+    assert.ok(geometry.stage.bottom <= geometry.dialog.bottom, JSON.stringify(geometry));
+    assert.ok(geometry.player.bottom <= geometry.viewport.height, JSON.stringify(geometry));
+    assert.equal(await page.getByRole('slider', { name: 'Seek reel' }).isVisible(), true);
     await page.close();
 });
 
@@ -1141,6 +1187,36 @@ test('short viewport keeps messages scrolling beneath the overlaid header', asyn
     assert.ok(result.messageHeight > 100);
     assert.equal(result.scrollable, true);
     assert.ok(result.overflow <= 0);
+    await page.close();
+});
+
+test('hovered shared posts remain beneath the conversation header', async () => {
+    const page = await openHarness({ width: 900, height: 360 });
+    await page.evaluate(() => window.historyHarness.mount('keyboard-actions'));
+    const post = page.locator('[data-message-id="keyboard-post"]');
+    await post.waitFor();
+    await post.evaluate(row => {
+        const messages = document.querySelector<HTMLElement>('.messages')!;
+        messages.scrollTop = (row as HTMLElement).offsetTop;
+    });
+    await post.hover();
+
+    const result = await page.evaluate(() => {
+        const header = document.querySelector<HTMLElement>('.conversation__header')!;
+        const postRow = document.querySelector<HTMLElement>('[data-message-id="keyboard-post"]')!;
+        const headerRect = header.getBoundingClientRect();
+        const postRect = postRow.getBoundingClientRect();
+        const x = Math.max(headerRect.left, postRect.left) + 8;
+        const y = Math.max(headerRect.top, postRect.top) + 8;
+        return {
+            overlaps: x < Math.min(headerRect.right, postRect.right) &&
+                y < Math.min(headerRect.bottom, postRect.bottom),
+            headerOwnsOverlap: document.elementFromPoint(x, y)?.closest('.conversation__header') === header,
+        };
+    });
+
+    assert.equal(result.overlaps, true);
+    assert.equal(result.headerOwnsOverlap, true);
     await page.close();
 });
 
@@ -2296,7 +2372,8 @@ test('sending while scrolled up preserves the logical viewport and offers newest
     const composer = page.getByRole('textbox', { name: 'Message' });
     await composer.fill('do not jump');
     await composer.press('Enter');
-    await page.getByRole('button', { name: 'Go to newest message' }).waitFor();
+    const newest = page.getByRole('button', { name: 'Go to newest message' });
+    await newest.waitFor();
     assert.equal(await page.locator('[data-message-id="server-1"]').count(), 0);
     const after = await page.locator(`[data-message-id="${before.id}"]`).evaluate(row =>
         row.getBoundingClientRect().top,
@@ -2307,7 +2384,18 @@ test('sending while scrolled up preserves the logical viewport and offers newest
         before.viewportIds,
     );
 
-    await page.getByRole('button', { name: 'Go to newest message' }).click();
+    await page.locator(`[data-message-id="${before.id}"]`).click({ button: 'right' });
+    await page.getByRole('menu', { name: 'Message actions' }).getByRole('menuitem', { name: 'Reply' }).click();
+    const cancelReply = page.getByRole('button', { name: 'Cancel reply' });
+    await cancelReply.waitFor();
+    const controls = await Promise.all([
+        newest.evaluate(element => element.getBoundingClientRect()),
+        cancelReply.evaluate(element => element.getBoundingClientRect()),
+    ]);
+    assert.ok(controls[0].bottom <= controls[1].top, 'newest navigation overlaps reply cancellation');
+    await cancelReply.click();
+
+    await newest.click();
     await page.locator('[data-message-id="server-1"]').waitFor();
     const distance = await page.evaluate(() => {
         const scroller = document.querySelector<HTMLElement>('.messages')!;
