@@ -1502,7 +1502,11 @@ const MessageRow = memo(function MessageRow({
                                 aria-busy={reactionMutation?.status === 'pending'}
                                 disabled={reactionMutation?.status === 'pending'}
                                 onClick={openReactionPicker}
-                            ><span aria-hidden="true">›</span></button>
+                            >
+                                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                                    <path d="m7 9 5 5 5-5" />
+                                </svg>
+                            </button>
                         </div>
                     )}
                     {menuPoint && (

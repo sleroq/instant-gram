@@ -989,8 +989,15 @@ body.is-resizing-sidebar * {
 
 .message__reaction-expander {
     color: var(--color-text-muted) !important;
-    font-size: 22px;
-    transform: rotate(90deg);
+
+    svg {
+        display: block;
+        fill: none;
+        stroke: currentColor;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 2;
+    }
 }
 
 .reaction-picker {

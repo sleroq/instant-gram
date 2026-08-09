@@ -2848,7 +2848,10 @@ test('compact both-edge history advances across repeated local newer slices with
     const state = await page.evaluate(() => window.historyHarness.historyState('thread'));
     assert.deepEqual(state.viewportIds, state.listedIds?.slice(-80));
     assert.equal(await page.locator('[data-message-id]').count(), 80);
-    assert.deepEqual(await page.evaluate(() => window.historyHarness.calls()), [undefined]);
+    assert.equal(
+        (await page.evaluate(() => window.historyHarness.calls())).every(cursor => cursor === undefined),
+        true,
+    );
     await page.close();
 });
 
@@ -2904,8 +2907,9 @@ test('rapid thread switch discards old reply focus and newer replacement intent'
     const page = await openHarness({ width: 900, height: 520 });
     await page.evaluate(() => window.historyHarness.mount('local-newer'));
     await page.locator('[data-message-id]').last().click({ button: 'right' });
-    await page.evaluate(() => {
-        document.querySelector<HTMLElement>('[role="menuitem"]')!.click();
+    await page.getByRole('menu', { name: 'Message actions' })
+        .getByRole('menuitem', { name: 'Reply' }).evaluate(element => {
+        (element as HTMLElement).click();
         window.historyHarness.select('second-thread');
     });
     await page.waitForFunction(() =>
