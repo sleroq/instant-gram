@@ -378,7 +378,10 @@ test('delayed reel metadata updates inline ratio without moving the history anch
 
 test('reel preview and modal own playback, carousel, actions, comments, links, and focus', async () => {
     const page = await openHarness({ width: 1100, height: 760 });
-    await page.evaluate(() => window.historyHarness.mount('reel'));
+    await page.evaluate(() => {
+        localStorage.removeItem('icr:reel-volume');
+        return window.historyHarness.mount('reel');
+    });
     const preview = page.getByRole('button', { name: 'Open reel from reel_author' });
     await preview.waitFor();
     assert.equal(await page.locator('[data-message-id="reel-message"] a[href*="/reel/"]').count(), 0);
@@ -483,6 +486,17 @@ test('reel preview and modal own playback, carousel, actions, comments, links, a
     assert.equal(inlinePlayback.afterHidden.plays, 0, `hidden history preview autoplayed: ${JSON.stringify(inlinePlayback)}`);
 
     const historyScrollBeforeModal = await page.locator('.messages').evaluate(element => element.scrollTop);
+    await page.evaluate(() => {
+        Object.defineProperty(navigator, 'clipboard', {
+            configurable: true,
+            value: {
+                writeText(value: string) {
+                    document.documentElement.dataset.copiedModalPostUrl = value;
+                    return Promise.resolve();
+                },
+            },
+        });
+    });
     await preview.click();
     const dialog = page.getByRole('dialog', { name: 'Reel by Reel Author' });
     await dialog.waitFor();
@@ -497,10 +511,23 @@ test('reel preview and modal own playback, carousel, actions, comments, links, a
     assert.equal(await author.getAttribute('href'), 'https://www.instagram.com/reel_author/');
     const download = page.getByRole('link', { name: 'Download' });
     assert.ok(await download.getAttribute('download') !== null);
+    assert.equal(await download.locator('svg').count(), 1);
+    assert.equal((await download.textContent())?.trim(), '');
     assert.equal(await page.getByRole('slider', { name: 'Seek reel' }).count(), 1);
+    const copyPost = page.getByRole('button', { name: 'Copy post URL' });
+    assert.equal(await copyPost.locator('svg').count(), 1);
+    assert.equal((await copyPost.textContent())?.trim(), '');
+    await copyPost.click();
+    assert.equal(
+        await page.locator('html').getAttribute('data-copied-modal-post-url'),
+        'https://www.instagram.com/reel/reel-code/',
+    );
 
+    const save = page.getByRole('button', { name: 'Save reel' });
+    assert.equal(await save.locator('svg').count(), 1);
+    assert.equal((await save.textContent())?.trim(), '');
     await page.getByRole('button', { name: 'Like reel' }).click();
-    await page.getByRole('button', { name: 'Save reel' }).click();
+    await save.click();
     await page.waitForFunction(() => {
         const metrics = window.historyHarness.reelMetrics();
         return metrics.reelLikeCalls === 1 && metrics.reelSaveCalls === 1;
@@ -600,6 +627,8 @@ test('reel preview and modal own playback, carousel, actions, comments, links, a
     assert.ok(landscapeRect && Math.abs(landscapeRect.width / landscapeRect.height - 16 / 9) < 0.01);
     await page.keyboard.press('ArrowLeft');
     await page.keyboard.press('ArrowLeft');
+    await page.getByRole('slider', { name: 'Reel volume' }).fill('0.35');
+    assert.equal(await page.evaluate(() => localStorage.getItem('icr:reel-volume')), '{"volume":0.35,"muted":false}');
     await page.getByRole('button', { name: 'Close reel' }).click();
     await dialog.waitFor({ state: 'detached' });
     await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Open reel from reel_author');
@@ -609,6 +638,9 @@ test('reel preview and modal own playback, carousel, actions, comments, links, a
     await dialog.waitFor();
     await page.waitForTimeout(100);
     const closingVideo = page.locator('.reel-stage video');
+    assert.equal(await closingVideo.evaluate(video => (video as HTMLVideoElement).volume), 0.35);
+    assert.equal(await closingVideo.evaluate(video => (video as HTMLVideoElement).muted), false);
+    await page.getByRole('button', { name: 'Mute reel' }).click();
     await closingVideo.evaluate(video => Object.defineProperty(video, 'paused', { configurable: true, get: () => false }));
     const closingHandle = await closingVideo.elementHandle();
     await page.keyboard.down('Space');
@@ -619,6 +651,8 @@ test('reel preview and modal own playback, carousel, actions, comments, links, a
 
     await preview.click();
     await dialog.waitFor();
+    assert.equal(await page.locator('.reel-stage video').evaluate(video => (video as HTMLVideoElement).volume), 0.35);
+    assert.equal(await page.locator('.reel-stage video').evaluate(video => (video as HTMLVideoElement).muted), true);
     await page.locator('.reel-modal').evaluate(backdrop => {
         backdrop.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
@@ -652,6 +686,133 @@ test('portrait reel preview narrows as one bounded media box on compact screens'
     assert.equal(geometry.cardWidth, geometry.box.width);
     assert.equal(geometry.pageOverflows, false);
     assert.equal(geometry.messageOverflows, false);
+    await page.close();
+});
+
+test('post carousel and soundtrack follow native playback state and clean up on close', async () => {
+    const page = await openHarness({ width: 600, height: 700 });
+    await page.evaluate(async () => {
+        Object.defineProperty(HTMLMediaElement.prototype, 'paused', {
+            configurable: true,
+            get() { return (this as HTMLElement).dataset.testPaused !== 'false'; },
+        });
+        Object.defineProperty(HTMLMediaElement.prototype, 'load', {
+            configurable: true,
+            value() { /* The test drives metadata readiness explicitly. */ },
+        });
+        Object.defineProperty(HTMLMediaElement.prototype, 'play', {
+            configurable: true,
+            value(this: HTMLMediaElement) {
+                this.dataset.playCalls = String(Number(this.dataset.playCalls ?? 0) + 1);
+                if (this.tagName === 'AUDIO' && this.dataset.playCalls === '1') return Promise.reject(new Error('Autoplay blocked'));
+                this.dataset.testPaused = 'false';
+                this.dispatchEvent(new Event('play'));
+                return Promise.resolve();
+            },
+        });
+        Object.defineProperty(HTMLMediaElement.prototype, 'pause', {
+            configurable: true,
+            value(this: HTMLMediaElement) {
+                this.dataset.testPaused = 'true';
+                this.dataset.pauseCalls = String(Number(this.dataset.pauseCalls ?? 0) + 1);
+                this.dispatchEvent(new Event('pause'));
+            },
+        });
+        await window.historyHarness.mount('post');
+    });
+
+    const row = page.locator('[data-message-id="post-message"]');
+    await row.focus();
+    await page.keyboard.press('Enter');
+    const dialog = page.getByRole('dialog', { name: 'Post by Post Author' });
+    await dialog.waitFor();
+    assert.equal(await page.getByRole('button', { name: 'Previous slide' }).count(), 0);
+    assert.equal(await page.locator('.reel-stage img[alt="Post image"]').getAttribute('src'),
+        'data:image/gif;base64,R0lGODlhAQABAAAAACw=first');
+    assert.equal(await page.getByRole('button', { name: 'Save post' }).count(), 1);
+
+    const compactGeometry = await page.evaluate(() => {
+        const dialogRect = document.querySelector<HTMLElement>('.reel-modal__dialog')!.getBoundingClientRect();
+        const stageRect = document.querySelector<HTMLElement>('.reel-stage')!.getBoundingClientRect();
+        const detailsRect = document.querySelector<HTMLElement>('.reel-details')!.getBoundingClientRect();
+        return {
+            dialog: { top: dialogRect.top, bottom: dialogRect.bottom },
+            stage: { top: stageRect.top, bottom: stageRect.bottom },
+            details: { top: detailsRect.top, bottom: detailsRect.bottom },
+            viewportHeight: innerHeight,
+        };
+    });
+    assert.ok(compactGeometry.stage.top >= compactGeometry.dialog.top - 0.5, JSON.stringify(compactGeometry));
+    assert.ok(compactGeometry.stage.bottom <= compactGeometry.details.top + 0.5, JSON.stringify(compactGeometry));
+    assert.ok(compactGeometry.details.bottom <= compactGeometry.dialog.bottom + 0.5, JSON.stringify(compactGeometry));
+    assert.ok(compactGeometry.dialog.bottom <= compactGeometry.viewportHeight + 0.5, JSON.stringify(compactGeometry));
+
+    const audio = page.locator('.reel-stage audio');
+    await audio.dispatchEvent('loadedmetadata');
+    const playMusic = page.getByRole('button', { name: 'Play post music' });
+    await playMusic.waitFor();
+    const pausedStatus = page.getByRole('status').filter({ hasText: 'Post music is paused' });
+    await pausedStatus.waitFor();
+    assert.equal(await pausedStatus.count(), 1);
+    assert.equal(await audio.getAttribute('data-play-calls'), '1');
+    assert.equal(await audio.evaluate(element => (element as HTMLAudioElement).muted), false);
+
+    await playMusic.click();
+    const muteMusic = page.getByRole('button', { name: 'Mute post music' });
+    await muteMusic.waitFor();
+    assert.equal(await audio.getAttribute('data-play-calls'), '2', 'recovery should play before changing mute state');
+    assert.equal(await audio.evaluate(element => (element as HTMLAudioElement).muted), false);
+    assert.equal(await muteMusic.getAttribute('aria-pressed'), 'false');
+    await muteMusic.click();
+    const unmuteMusic = page.getByRole('button', { name: 'Unmute post music' });
+    await unmuteMusic.waitFor();
+    assert.equal(await audio.evaluate(element => (element as HTMLAudioElement).muted), true);
+    assert.equal(await unmuteMusic.getAttribute('aria-pressed'), 'true');
+
+    await audio.evaluate(element => { element.dataset.soundtrackNode = 'original'; });
+    const audioHandle = await audio.elementHandle();
+    await page.getByRole('button', { name: 'Next slide' }).click();
+    await page.waitForFunction(() => document.querySelector('.reel-stage')?.getAttribute('aria-label') === 'Slide 2 of 3');
+    assert.equal(await page.locator('.reel-stage video').getAttribute('src'), 'data:video/mp4;base64,AAAA');
+    assert.equal(await page.locator('.reel-stage video').evaluate(element => (element as HTMLVideoElement).muted), true);
+    assert.equal(await page.getByRole('slider', { name: 'Seek post' }).count(), 1);
+    assert.equal(await page.getByRole('button', { name: 'Play post' }).count(), 1);
+    assert.equal(await page.getByRole('slider', { name: 'Post volume' }).count(), 0);
+    assert.equal(await audio.getAttribute('data-soundtrack-node'), 'original',
+        'soundtrack should remain mounted across carousel slides');
+    await page.getByRole('button', { name: 'Next slide' }).click();
+    await page.waitForFunction(() => document.querySelector('.reel-stage')?.getAttribute('aria-label') === 'Slide 3 of 3');
+    assert.equal(await page.locator('.reel-stage img[alt="Post image"]').getAttribute('src'),
+        'data:image/gif;base64,R0lGODlhAQABAAAAACw=third');
+    assert.equal(await page.getByRole('button', { name: 'Next slide' }).count(), 0);
+
+    await page.locator('.reel-stage img[alt="Post image"]').dispatchEvent('error');
+    await page.getByRole('button', { name: 'Retry post media' }).click();
+    await page.waitForFunction(() => window.historyHarness.reelMetrics().reelMediaCalls === 2);
+    await page.waitForFunction(() => document.querySelector('.reel-stage audio')?.getAttribute('src')?.endsWith('#refresh-2'));
+    await audio.dispatchEvent('loadedmetadata');
+    assert.equal(await audio.getAttribute('data-soundtrack-node'), 'original',
+        'renewing the soundtrack URL should reinitialize, not remount, its player');
+    assert.equal(await audio.getAttribute('data-pause-calls'), '1', 'the replaced source should be paused before reinitializing');
+    assert.equal(await audio.getAttribute('data-play-calls'), '3', 'the replacement source should start once');
+
+    await page.getByRole('button', { name: 'Close post' }).click();
+    await dialog.waitFor({ state: 'detached' });
+    assert.equal(await audioHandle!.getAttribute('data-pause-calls'), '2');
+    await page.close();
+});
+
+test('compact reel modal resets aspect-derived stage height', async () => {
+    const page = await openHarness({ width: 600, height: 700 });
+    await page.evaluate(() => window.historyHarness.mount('reel'));
+    await page.getByRole('button', { name: 'Open reel from reel_author' }).click();
+    await page.getByRole('dialog', { name: 'Reel by Reel Author' }).waitFor();
+    const geometry = await page.evaluate(() => {
+        const stage = document.querySelector<HTMLElement>('.reel-stage')!.getBoundingClientRect();
+        const details = document.querySelector<HTMLElement>('.reel-details')!.getBoundingClientRect();
+        return { stageBottom: stage.bottom, detailsTop: details.top, stageHeight: stage.height };
+    });
+    assert.ok(geometry.stageHeight > 0 && geometry.stageBottom <= geometry.detailsTop + 0.5, JSON.stringify(geometry));
     await page.close();
 });
 
@@ -1414,8 +1575,7 @@ test('reply selection, failed-send recovery, and bounded reaction picker are acc
     await page.getByRole('button', { name: 'Cancel reply' }).click();
     assert.equal((await page.evaluate(() => window.historyHarness.historyState('thread'))).replyTargetId, undefined);
 
-    await page.locator('[data-message-id="m0"]').click({ button: 'right' });
-    await page.getByRole('menu', { name: 'Message actions' }).getByRole('menuitem', { name: 'Add reaction' }).click();
+    await reactionAffordance.evaluate(element => (element as HTMLElement).click());
     const picker = page.getByRole('menu', { name: 'Choose a reaction' });
     await picker.waitFor();
     assert.equal(await picker.getByRole('menuitemradio').count(), 18);
@@ -1430,8 +1590,7 @@ test('reply selection, failed-send recovery, and bounded reaction picker are acc
         await page.locator('.reaction-chip--viewer').first().getAttribute('aria-label') ?? '',
         /Remove your/,
     );
-    await page.locator('[data-message-id="m0"]').click({ button: 'right' });
-    await page.getByRole('menuitem', { name: 'Change reaction 😂' }).click();
+    await reactionAffordance.evaluate(element => (element as HTMLElement).click());
     const currentReaction = page.getByRole('menuitemradio', { name: 'Remove reaction 😂' });
     await currentReaction.waitFor();
     assert.equal(await currentReaction.getAttribute('aria-checked'), 'true');
@@ -1835,6 +1994,15 @@ test('focused message Enter opens only an existing share action and Space leaves
     await text.focus();
     await page.evaluate(() => {
         (window as typeof window & { shareActivations?: string[] }).shareActivations = [];
+        Object.defineProperty(navigator, 'clipboard', {
+            configurable: true,
+            value: {
+                writeText(value: string) {
+                    document.documentElement.dataset.copiedPostUrl = value;
+                    return Promise.resolve();
+                },
+            },
+        });
         const link = document.querySelector<HTMLAnchorElement>('[data-message-id="keyboard-post"] a');
         if (link) link.onclick = event => {
             event.preventDefault();
@@ -1847,6 +2015,17 @@ test('focused message Enter opens only an existing share action and Space leaves
     assert.deepEqual(
         await page.evaluate(() => (window as typeof window & { shareActivations: string[] }).shareActivations),
         ['https://www.instagram.com/p/existing-post/'],
+    );
+    const post = page.locator('[data-message-id="keyboard-post"]');
+    await post.click({ button: 'right' });
+    const postMenu = page.getByRole('menu', { name: 'Message actions' });
+    await postMenu.waitFor();
+    assert.deepEqual(await postMenu.getByRole('menuitem').allTextContents(), ['Reply', 'Copy post URL']);
+    await postMenu.getByRole('menuitem', { name: 'Copy post URL' }).click();
+    await postMenu.waitFor({ state: 'detached' });
+    assert.equal(
+        await page.locator('html').getAttribute('data-copied-post-url'),
+        'https://www.instagram.com/p/existing-post/',
     );
     await text.focus();
     assert.equal(await text.evaluate(row => row.dispatchEvent(new KeyboardEvent('keydown', {
@@ -2698,7 +2877,15 @@ test('controlled drafts and composer actions remain per-thread and operable at n
     await newestMessage.dispatchEvent('pointerup', {
         pointerType: 'touch', pointerId: 7, isPrimary: true, clientX: box!.x + 12, clientY: box!.y + 12,
     });
-    await page.getByRole('menu', { name: 'Message actions' }).getByRole('menuitem', { name: 'Add reaction' }).click();
+    const messageMenu = page.getByRole('menu', { name: 'Message actions' });
+    assert.deepEqual(await messageMenu.getByRole('menuitem').allTextContents(), ['Reply']);
+    await page.keyboard.press('Escape');
+    await messageMenu.waitFor({ state: 'detached' });
+    await page.waitForTimeout(850);
+    await newestMessage.focus();
+    await newestMessage.hover();
+    await newestMessage.locator('.message__reaction-default').hover();
+    await newestMessage.locator('.message__reaction-expander').click();
     const picker = page.getByRole('menu', { name: 'Choose a reaction' });
     await picker.waitFor();
     const pickerFits = await picker.evaluate(element => {

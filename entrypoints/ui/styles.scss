@@ -1350,6 +1350,7 @@ body.is-resizing-sidebar * {
         align-self: center;
         padding: 0;
         overflow: hidden;
+        container: inline-preview / size;
         background: #08070b;
         border-radius: 12px;
     }
@@ -1371,7 +1372,7 @@ body.is-resizing-sidebar * {
 
 .message-reel-preview__badge {
     position: absolute;
-    top: min(160px, 40%);
+    top: 50%;
     left: 50%;
     display: grid;
     width: 48px;
@@ -1384,6 +1385,16 @@ body.is-resizing-sidebar * {
     opacity: 0.85;
     transform: translate(-50%, -50%);
     transition: opacity $motion ease, transform $motion ease;
+}
+
+@container inline-preview (max-width: 39px) {
+    .shared-post__author,
+    .message-reel-preview__badge { display: none; }
+}
+
+@container inline-preview (max-height: 39px) {
+    .shared-post__author,
+    .message-reel-preview__badge { display: none; }
 }
 
 .reel-modal {
@@ -1420,20 +1431,26 @@ body.is-resizing-sidebar * {
 
 .reel-modal__dialog--media {
     --reel-details-width: clamp(280px, 35vw, 360px);
-    --reel-dialog-height: min(780px, calc(100dvh - 48px));
-    --reel-stage-height: calc(var(--reel-dialog-height) - 2px);
+    --reel-dialog-max-height: min(780px, calc(100dvh - 48px));
+    --reel-stage-max-height: calc(var(--reel-dialog-max-height) - 2px);
+    --reel-stage-width: min(
+        660px,
+        calc(var(--reel-stage-max-height) * var(--reel-aspect-width) / var(--reel-aspect-height)),
+        calc(100vw - 48px - var(--reel-details-width))
+    );
+    --reel-stage-height: calc(var(--reel-stage-width) * var(--reel-aspect-height) / var(--reel-aspect-width));
+    // Keep unusually wide media usable without letting it turn the details pane
+    // into a sliver. Ordinary landscape media retains its natural stage height.
+    --reel-dialog-height: min(var(--reel-dialog-max-height), max(360px, calc(var(--reel-stage-height) + 2px)));
 
     grid-template-columns: auto var(--reel-details-width);
     width: auto;
     height: var(--reel-dialog-height);
 
     .reel-stage {
-        width: min(
-            660px,
-            calc(var(--reel-stage-height) * var(--reel-aspect-width) / var(--reel-aspect-height)),
-            calc(100vw - 48px - var(--reel-details-width))
-        );
-        aspect-ratio: var(--reel-aspect-width) / var(--reel-aspect-height);
+        width: var(--reel-stage-width);
+        height: var(--reel-stage-height);
+        align-self: center;
     }
 }
 
@@ -1557,6 +1574,42 @@ body.is-resizing-sidebar * {
     font-size: 12px;
     transform: translateX(-50%);
 }
+
+.reel-stage__soundtrack {
+    position: absolute;
+    z-index: 7;
+    right: 14px;
+    bottom: 12px;
+    display: grid;
+    width: 36px;
+    height: 34px;
+    place-items: center;
+    padding: 0;
+    color: #fff;
+    background: rgba(12, 10, 18, 0.72);
+    border: 0;
+    border-radius: 10px;
+    cursor: pointer;
+
+    svg { fill: currentColor; stroke: currentColor; stroke-width: 1.8; }
+    svg path:first-child { stroke: none; }
+}
+
+.reel-stage__soundtrack-error {
+    position: absolute;
+    z-index: 7;
+    right: 14px;
+    bottom: 54px;
+    max-width: min(280px, calc(100% - 28px));
+    margin: 0;
+    padding: 7px 10px;
+    color: #fff;
+    background: rgba(12, 10, 18, 0.82);
+    border-radius: 8px;
+    font-size: 12px;
+}
+
+.reel-stage--soundtrack .reel-player__row { padding-right: 46px; }
 
 .reel-player {
     position: absolute;
@@ -1684,6 +1737,22 @@ body.is-resizing-sidebar * {
     }
 
     [aria-pressed="true"] { color: #ff8aa1; background: var(--color-danger-surface); }
+}
+
+.reel-actions__icon {
+    display: grid !important;
+    width: 36px;
+    height: 36px;
+    padding: 0 !important;
+    place-items: center;
+
+    svg {
+        fill: none;
+        stroke: currentColor;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 1.8;
+    }
 }
 
 .reel-comments {
@@ -1857,6 +1926,8 @@ body.is-resizing-sidebar * {
 
     .reel-modal__dialog--media .reel-stage {
         width: auto;
+        height: auto;
+        align-self: stretch;
         aspect-ratio: auto;
     }
 

@@ -1370,6 +1370,7 @@ test('reel shares preload with a bounded deduped cache while comments and mutati
     let commentCalls = 0;
     const reelMessages = Array.from({ length: 10 }, (_, index): Message => ({
         kind: 'reel_share',
+        mediaType: 'reel',
         id: `message-${index}`,
         senderId: 'sender',
         ts: index,
@@ -1394,6 +1395,7 @@ test('reel shares preload with a bounded deduped cache while comments and mutati
             value: {
                 id: payload.mediaId!,
                 shortcode: payload.shortcode,
+                mediaType: 'reel',
                 author: {
                     id: 'owner', username: 'alice', fullName: 'Alice', picUrl: null,
                     isVerified: false,
@@ -1465,6 +1467,7 @@ test('visible reel priority moves queued media ahead without duplicating active 
     installWindowTimers();
     const reelMessages = Array.from({ length: 12 }, (_, index): Message => ({
         kind: 'reel_share',
+        mediaType: 'reel',
         id: `priority-message-${index}`,
         senderId: 'sender',
         ts: index,
@@ -2577,6 +2580,7 @@ function reelMedia(shortcode: string, id: string, url: string) {
     return {
         id,
         shortcode,
+        mediaType: 'reel' as const,
         author: { id: 'owner', username: 'alice', fullName: 'Alice', picUrl: null, isVerified: false },
         items: [{
             id,

@@ -148,6 +148,7 @@ export type FrontendState = {
     histories: Record<string, HistoryState>;
     reels: {
         activeId?: string;
+        activeUrl?: string;
         byId: Record<string, ReelState>;
     };
 };
@@ -1701,9 +1702,10 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
         }
     }
 
-    async function openReel(shortcode: string, mediaId?: string) {
+    async function openReel(shortcode: string, mediaId?: string, targetUrl?: string) {
         const requestGeneration = generation;
         state.reels.activeId = shortcode;
+        state.reels.activeUrl = targetUrl;
         reelState(shortcode, mediaId);
         emit();
         let media: ReelMedia | undefined;
@@ -2124,6 +2126,7 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
         closeReel() {
             if (!state.reels.activeId) return;
             state.reels.activeId = undefined;
+            state.reels.activeUrl = undefined;
             emit();
         },
         async retryReel(shortcode: string) {

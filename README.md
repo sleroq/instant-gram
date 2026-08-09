@@ -1,4 +1,4 @@
-# Instagram Client Reels
+# Instagram Client
 
 A Chromium extension for using Instagram direct messages and reels in a
 focused client.

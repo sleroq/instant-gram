@@ -182,8 +182,13 @@ function replyPreview(value: JsonObject | undefined): ReplyPreview | undefined {
     return { kind: 'unavailable', label: 'Original message unavailable' };
 }
 
-function reelShortcode(url: string): string | undefined {
-    return /\/reel\/([^/?#]+)/.exec(url)?.[1];
+function sharedMediaReference(url: string): { shortcode: string; mediaType: 'reel' | 'post' } | undefined {
+    const match = /\/(reels?|p)\/([^/?#]+)/.exec(url);
+    if (!match) return undefined;
+    return {
+        shortcode: match[2],
+        mediaType: match[1] === 'p' ? 'post' : 'reel',
+    };
 }
 
 function reelMediaId(
@@ -332,13 +337,14 @@ export function parseMessage(value: unknown): Message | undefined {
         const thumbUrl = xmaThumb(xma);
         const title = xmaTitle(xma) ?? 'Instagram share';
         const subtitle = xmaSubtitle(xma, content);
-        const shortcode = targetUrl ? reelShortcode(targetUrl) : undefined;
-        if (targetUrl && shortcode && thumbUrl) {
+        const mediaReference = targetUrl ? sharedMediaReference(targetUrl) : undefined;
+        if (targetUrl && mediaReference && thumbUrl) {
             const previewDimensions = xmaPreviewDimensions(xma);
             return {
                 ...common,
                 kind: 'reel_share',
-                shortcode,
+                mediaType: mediaReference.mediaType,
+                shortcode: mediaReference.shortcode,
                 mediaId: reelMediaId(xma, targetUrl),
                 targetUrl,
                 thumbUrl,
@@ -1013,9 +1019,30 @@ export function parseReelInfoResponse(
     if (!items.length || items.some(child => !child))
         throw new Error('Instagram reel carousel contained unavailable media');
     const caption = objectProp(item.caption);
+    const musicMetadata = objectProp(item.music_metadata);
+    const musicInfo = objectProp(musicMetadata?.music_info);
+    const musicAsset = objectProp(musicInfo?.music_asset_info);
+    const musicConsumption = objectProp(musicInfo?.music_consumption_info);
+    const attachedAudioUrl = stringProp(musicAsset?.progressive_download_url) ??
+        stringProp(musicAsset?.fast_start_progressive_download_url) ??
+        stringProp(musicAsset?.web_30s_preview_download_url);
+    const attachedAudioId = stringProp(musicAsset?.audio_asset_id) ?? stringProp(musicAsset?.id);
+    const mediaType = stringProp(item.product_type) === 'clips' ? 'reel' : 'post';
+    const attachedAudio = mediaType === 'post' && attachedAudioUrl && attachedAudioId ? {
+        id: attachedAudioId,
+        url: attachedAudioUrl,
+        title: stringProp(musicAsset?.title),
+        artist: stringProp(musicAsset?.display_artist),
+        durationSec: (numberProp(musicAsset?.duration_in_ms) ?? 0) / 1_000,
+        startTimeSec: (numberProp(musicConsumption?.audio_asset_start_time_in_ms) ?? 0) / 1_000,
+        playDurationSec: numberProp(musicConsumption?.overlap_duration_in_ms) === undefined
+            ? undefined
+            : numberProp(musicConsumption?.overlap_duration_in_ms)! / 1_000,
+    } : undefined;
     return {
         id: mediaId,
         shortcode: payload.shortcode,
+        mediaType,
         author: reelAuthor(item.user),
         caption: stringProp(caption?.text),
         takenAtMs: numberProp(item.taken_at) === undefined
@@ -1029,6 +1056,7 @@ export function parseReelInfoResponse(
             false,
         canSave: booleanProp(item.can_viewer_save) ?? true,
         canDownload,
+        attachedAudio,
     };
 }
 

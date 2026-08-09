@@ -1,6 +1,7 @@
 import { createElement } from '../vendor/teact/src/teact/teact';
 import TeactDOM from '../vendor/teact/src/teact/teact-dom';
 import type { Message, Result, ThreadMessages } from '../lib/domain';
+import { parseMessage, parseReelInfoResponse } from '../lib/instagram-api/parsers';
 import App from '../entrypoints/ui/App';
 import type { CompleteUiRpc } from '../entrypoints/ui/rpc';
 import { createFrontendStore } from '../entrypoints/ui/store';
@@ -10,7 +11,7 @@ type Scenario = 'continuous' | 'delayed' | 'resize' | 'resize-virtual' | 'select
     'older-send' | 'thread-state' | 'identity-pm' | 'identity-group' | 'outgoing-prepend' |
     'events' | 'vim-scroll' | 'reply-navigation' | 'reply-navigation-retry' |
     'reply-navigation-delayed' | 'reply-navigation-prefetch-resume' |
-    'reply-navigation-chain' | 'keyboard-actions' | 'reel-extremes';
+    'reply-navigation-chain' | 'keyboard-actions' | 'reel-extremes' | 'post';
 
 let activeStore: ReturnType<typeof createFrontendStore> | undefined;
 let resolveVisible: ((result: Result<ThreadMessages>) => void) | undefined;
@@ -75,6 +76,7 @@ const imageMessage: Message = {
 
 const reelMessage: Message = {
     kind: 'reel_share',
+    mediaType: 'reel',
     id: 'reel-message',
     senderId: 'sender',
     ts: 1_000,
@@ -88,6 +90,70 @@ const reelMessage: Message = {
     caption: 'Harness reel caption',
     reactions: [{ senderId: 'reactor', reaction: '🔥' }],
 };
+
+const parsedPostMessage = parseMessage({
+    message_id: 'post-message',
+    sender_fbid: 'sender',
+    timestamp_ms: '1000',
+    content_type: 'MESSAGE_INLINE_SHARE',
+    content: { xma: {
+        target_url: 'https://www.instagram.com/p/post-code/',
+        target_id: '9101',
+        header_title_text: 'post_author',
+        preview_image: {
+            url: 'data:image/gif;base64,R0lGODlhAQABAAAAACw=', width: 1080, height: 1080,
+        },
+    } },
+});
+if (!parsedPostMessage || parsedPostMessage.kind !== 'reel_share') throw new Error('Post harness message did not normalize');
+const postMessage: Message = parsedPostMessage;
+
+const postMedia = parseReelInfoResponse({ items: [{
+    pk: '9101',
+    code: 'post-code',
+    media_type: 8,
+    product_type: 'carousel_container',
+    user: { pk: 'post-author', username: 'post_author', full_name: 'Post Author' },
+    caption: { text: 'Harness post caption' },
+    like_count: 4,
+    comment_count: 0,
+    can_viewer_save: true,
+    carousel_media: [
+        {
+            pk: 'post-image-first', original_width: 1080, original_height: 1080,
+            image_versions2: { candidates: [{
+                url: 'data:image/gif;base64,R0lGODlhAQABAAAAACw=first', width: 1080, height: 1080,
+            }] },
+        },
+        {
+            pk: 'post-video-second', original_width: 720, original_height: 1280,
+            video_versions: [{ url: 'data:video/mp4;base64,AAAA', width: 720, height: 1280 }],
+            image_versions2: { candidates: [{
+                url: 'data:image/gif;base64,R0lGODlhAQABAAAAACw=poster', width: 720, height: 1280,
+            }] },
+            video_duration: 8,
+        },
+        {
+            pk: 'post-image-third', original_width: 1600, original_height: 900,
+            image_versions2: { candidates: [{
+                url: 'data:image/gif;base64,R0lGODlhAQABAAAAACw=third', width: 1600, height: 900,
+            }] },
+        },
+    ],
+    music_metadata: { music_info: {
+        music_asset_info: {
+            audio_asset_id: 'post-audio',
+            progressive_download_url: 'data:audio/mp4;base64,AAAA',
+            duration_in_ms: 60_000,
+            title: 'Harness song',
+            display_artist: 'Harness artist',
+        },
+        music_consumption_info: {
+            audio_asset_start_time_in_ms: 3_000,
+            overlap_duration_in_ms: 20_000,
+        },
+    } },
+}] }, { shortcode: 'post-code', mediaId: '9101' });
 
 const extremeReelMessages: Message[] = [
     {
@@ -301,6 +367,8 @@ async function mount(scenario: Scenario) {
                 ? { ok: true as const, value: { items: [imageMessage], hasNextPage: false, viewerId: 'viewer' } }
                 : scenario === 'reel'
                     ? { ok: true as const, value: { items: [reelMessage], hasNextPage: false, viewerId: 'viewer' } }
+                : scenario === 'post'
+                    ? { ok: true as const, value: { items: [postMessage], hasNextPage: false, viewerId: 'viewer' } }
                 : scenario === 'reel-extremes'
                     ? { ok: true as const, value: { items: extremeReelMessages, hasNextPage: false, viewerId: 'viewer' } }
                 : scenario === 'reel-delayed'
@@ -369,6 +437,8 @@ async function mount(scenario: Scenario) {
                         ? [{ ...thread, lastMessage: imageMessage }]
                         : scenario === 'reel'
                             ? [{ ...thread, lastMessage: reelMessage }]
+                        : scenario === 'post'
+                            ? [{ ...thread, lastMessage: postMessage }]
                         : scenario === 'identity-pm' || scenario === 'identity-group'
                             ? [{
                                 ...thread,
@@ -462,8 +532,18 @@ async function mount(scenario: Scenario) {
             };
         },
         getReelMedia: async () => {
-            if (scenario !== 'reel' && scenario !== 'reel-delayed') return { ok: false, error: { message: 'not used' } };
+            if (scenario !== 'reel' && scenario !== 'reel-delayed' && scenario !== 'post') return { ok: false, error: { message: 'not used' } };
             reelMediaCalls++;
+            if (scenario === 'post') return {
+                ok: true,
+                value: reelMediaCalls === 1 ? postMedia : {
+                    ...postMedia,
+                    attachedAudio: {
+                        ...postMedia.attachedAudio!,
+                        url: `${postMedia.attachedAudio!.url}#refresh-${reelMediaCalls}`,
+                    },
+                },
+            };
             const revision = reelMediaCalls;
             if (scenario === 'reel-delayed') {
                 await new Promise<void>(resolve => { resolveReelMedia = resolve; });
@@ -473,7 +553,7 @@ async function mount(scenario: Scenario) {
             return {
                 ok: true,
                 value: {
-                id: '9001', shortcode: 'reel-code',
+                id: '9001', shortcode: 'reel-code', mediaType: 'reel',
                 author: { id: 'author-1', username: 'reel_author', fullName: 'Reel Author', picUrl: 'data:image/gif;base64,R0lGODlhAQABAAAAACw=', isVerified: true },
                 caption: 'Harness reel caption', items: [
                     { id: 'video-slide', kind: 'video', videoUrl: `data:video/mp4;base64,${suffix}`, variants: [
@@ -491,6 +571,7 @@ async function mount(scenario: Scenario) {
         },
         getReelComments: async () => {
             reelCommentCalls++;
+            if (scenario === 'post') return { ok: true, value: { items: [], hasNextPage: false } };
             if (scenario === 'reel' && reelCommentCalls === 1) return { ok: false, error: { message: 'Harness comments failure' } };
             return { ok: true, value: { items: [{ id: 'comment-1', text: 'Great reel', createdAtMs: 2_000, likeCount: 0, hasLiked: false, childCommentCount: 0, author: { id: 'commenter', username: 'commenter', fullName: 'Commenter', picUrl: null, isVerified: false } }], hasNextPage: false } };
         },

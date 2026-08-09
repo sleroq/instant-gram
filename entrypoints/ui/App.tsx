@@ -15,10 +15,15 @@ import {
     useRef,
     useState,
 } from '../../vendor/teact/src/teact/teact';
-import type { Message, ReelMediaItem, Thread, User } from '../../lib/domain';
+import type { AttachedAudio, Message, ReelMediaItem, Thread, User } from '../../lib/domain';
 import type { FrontendStore, HistoryState, PinMutation, ReelState } from './store';
 import { hasLocalOlderIds } from './history-window';
 import { calculateInlineMediaBox } from './inline-media-box';
+import {
+    readReelVolumePreference,
+    type ReelVolumePreference,
+    writeReelVolumePreference,
+} from './reel-volume';
 import {
     clampSidebarWidth,
     DEFAULT_SIDEBAR_WIDTH,
@@ -46,11 +51,14 @@ type AppProps = { store: FrontendStore };
 type SurfacePoint = { x: number; y: number; align?: 'left' | 'right' };
 type ReelPlaybackState = { currentTime: number; userPaused: boolean };
 type ReelPlaybackMemory = Map<string, ReelPlaybackState>;
+type ReelVolumePreferenceRef = { current: ReelVolumePreference };
 
 export default function App({ store }: AppProps) {
     useStore(store);
     useVimNavigation(store);
     const reelPlaybackMemory = useRef<ReelPlaybackMemory>(new Map());
+    const [initialReelVolumePreference] = useState(readReelVolumePreference);
+    const reelVolumePreference = useRef<ReelVolumePreference>(initialReelVolumePreference);
     const [initialSidebarPreference] = useState(() =>
         readSidebarWidthPreference() ?? DEFAULT_SIDEBAR_WIDTH);
     const sidebarPreferenceRef = useRef(initialSidebarPreference);
@@ -194,7 +202,9 @@ export default function App({ store }: AppProps) {
             key={activeReel.shortcode}
             store={store}
             reel={activeReel}
+            targetUrl={state.reels.activeUrl}
             playbackMemory={reelPlaybackMemory.current}
+            volumePreference={reelVolumePreference}
         />}
         </>
     );
@@ -1146,6 +1156,7 @@ const MessageRow = memo(function MessageRow({
     const eligibleForActions = isServerMessage && 'senderId' in message;
     const groupedReactions = groupReactions(message, viewerId);
     const viewerReaction = message.reactions?.find(reaction => reaction.senderId === viewerId)?.reaction;
+    const sharedPostUrl = isSharedPost ? message.targetUrl : undefined;
     const hasFailedActions = Boolean(failed);
     const ownsContextMenu = eligibleForActions || hasFailedActions;
 
@@ -1204,11 +1215,10 @@ const MessageRow = memo(function MessageRow({
 
     const menuItems: ContextMenuItem[] = eligibleForActions ? [
         { label: 'Reply', action: () => onReply(message.id) },
-        {
-            label: viewerReaction ? `Change reaction ${viewerReaction}` : 'Add reaction',
-            action: openReactionPicker,
-            disabled: reactionMutation?.status === 'pending',
-        },
+        ...(sharedPostUrl ? [{
+            label: 'Copy post URL',
+            action: () => { void navigator.clipboard.writeText(sharedPostUrl); },
+        }] : []),
     ] : failed ? [
         { label: 'Retry send', action: () => store.retrySend(threadId, message.id) },
         { label: 'Remove failed message', action: () => store.removeFailedSend(threadId, message.id), danger: true },
@@ -1816,10 +1826,10 @@ function InlineReel({
             className="message-card message-reel-preview"
             style={previewStyle}
             data-shared-post-action="reel"
-            aria-label={`Open reel from ${message.author}`}
+            aria-label={`Open ${message.mediaType} from ${message.author}`}
             onClick={(event: ReactMouseEvent<HTMLButtonElement>) => {
                 reelReturnFocus = event.currentTarget;
-                void store.openReel(message.shortcode, message.mediaId);
+                void store.openReel(message.shortcode, message.mediaId, message.targetUrl);
             }}
         >
             <span className="message-reel-preview__media" style={mediaStyle}>
@@ -1847,8 +1857,8 @@ function InlineReel({
                     />
                 )}
                 <SharedPostAuthor store={store} message={message} />
+                <span className="message-reel-preview__badge" aria-hidden="true">{message.mediaType === 'reel' ? '▶' : '▣'}</span>
             </span>
-            <span className="message-reel-preview__badge" aria-hidden="true">▶</span>
             {message.caption && <span>{message.caption}</span>}
         </button>
     );
@@ -1857,17 +1867,22 @@ function InlineReel({
 function ReelModal({
     store,
     reel,
+    targetUrl,
     playbackMemory,
+    volumePreference,
 }: {
     store: FrontendStore;
     reel: ReelState;
+    targetUrl?: string;
     playbackMemory: ReelPlaybackMemory;
+    volumePreference: ReelVolumePreferenceRef;
 }) {
     const modalRef = useRef<HTMLDivElement>(null as unknown as HTMLDivElement);
     const [slide, setSlide] = useState(0);
     const media = reel.media;
     const items = media?.items ?? [];
     const current = items[Math.min(slide, Math.max(0, items.length - 1))];
+    const mediaLabel = media?.mediaType ?? 'reel';
     const close = () => store.closeReel();
     const move = (delta: number) => setSlide(index => Math.max(0, Math.min(items.length - 1, index + delta)));
 
@@ -1941,13 +1956,13 @@ function ReelModal({
                     : undefined}
                 role="dialog"
                 aria-modal="true"
-                aria-label={media ? `Reel by ${media.author.fullName || media.author.username}` : 'Instagram reel'}
+                aria-label={media ? `${mediaLabel === 'reel' ? 'Reel' : 'Post'} by ${media.author.fullName || media.author.username}` : 'Instagram media'}
             >
-                <button type="button" className="reel-modal__close" onClick={close} aria-label="Close reel">×</button>
-                {!media && reel.status === 'loading' && <ListState label="Loading reel…" spinner />}
+                <button type="button" className="reel-modal__close" onClick={close} aria-label={`Close ${mediaLabel}`}>×</button>
+                {!media && reel.status === 'loading' && <ListState label="Loading Instagram media…" spinner />}
                 {!media && reel.status === 'error' && (
                     <ListState
-                        label={reel.error ?? 'Could not load reel'}
+                        label={reel.error ?? 'Could not load Instagram media'}
                         error
                         actionLabel="Retry"
                         onAction={() => { void store.retryReel(reel.shortcode); }}
@@ -1955,15 +1970,19 @@ function ReelModal({
                 )}
                 {media && current && (
                     <>
-                        <section className="reel-stage" aria-label={`Slide ${slide + 1} of ${items.length}`}>
+                        <section className={`reel-stage${media.attachedAudio ? ' reel-stage--soundtrack' : ''}`} aria-label={`Slide ${slide + 1} of ${items.length}`}>
                             <ReelMediaPlayer
                                 key={current.id}
                                 item={current}
+                                mediaLabel={mediaLabel}
                                 playbackKey={`${reel.shortcode}:${current.id}`}
                                 playbackMemory={playbackMemory}
+                                volumePreference={volumePreference}
                                 refreshing={reel.status === 'loading'}
+                                soundtrackActive={Boolean(media.attachedAudio)}
                                 onRetry={() => { void store.retryReel(reel.shortcode); }}
                             />
+                            {media.attachedAudio && <AttachedAudioPlayer audio={media.attachedAudio} />}
                             {slide > 0 && (
                                 <button type="button" className="reel-stage__previous" onClick={() => move(-1)} aria-label="Previous slide">‹</button>
                             )}
@@ -1994,7 +2013,7 @@ function ReelModal({
                             <div className="reel-actions">
                                 <button
                                     type="button"
-                                    aria-label={media.hasLiked ? 'Unlike reel' : 'Like reel'}
+                                    aria-label={media.hasLiked ? `Unlike ${mediaLabel}` : `Like ${mediaLabel}`}
                                     aria-pressed={media.hasLiked}
                                     aria-busy={reel.likeMutation?.status === 'pending'}
                                     disabled={reel.likeMutation?.status === 'pending'}
@@ -2002,14 +2021,44 @@ function ReelModal({
                                 >{media.hasLiked ? '♥' : '♡'} {media.likeCount.toLocaleString()}</button>
                                 {media.canSave && <button
                                     type="button"
-                                    aria-label={media.hasSaved ? 'Unsave reel' : 'Save reel'}
+                                    className="reel-actions__icon"
+                                    aria-label={media.hasSaved ? `Unsave ${mediaLabel}` : `Save ${mediaLabel}`}
+                                    title={media.hasSaved ? `Unsave ${mediaLabel}` : `Save ${mediaLabel}`}
                                     aria-pressed={media.hasSaved}
                                     aria-busy={reel.saveMutation?.status === 'pending'}
                                     disabled={reel.saveMutation?.status === 'pending'}
                                     onClick={() => { void store.toggleReelSaved(reel.shortcode); }}
-                                >{media.hasSaved ? 'Saved' : 'Save'}</button>}
+                                >
+                                    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                                        <path d="M6 4.75A1.75 1.75 0 0 1 7.75 3h8.5A1.75 1.75 0 0 1 18 4.75V21l-6-3.75L6 21V4.75z" />
+                                    </svg>
+                                </button>}
+                                {targetUrl && <button
+                                    type="button"
+                                    className="reel-actions__icon"
+                                    aria-label="Copy post URL"
+                                    title="Copy post URL"
+                                    onClick={() => { void navigator.clipboard.writeText(targetUrl); }}
+                                >
+                                    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                                        <rect x="8" y="8" width="11" height="11" rx="2" />
+                                        <path d="M16 8V7a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h1" />
+                                    </svg>
+                                </button>}
                                 {current.canDownload && current.downloadUrl && (
-                                    <a className="reel-actions__download" href={current.downloadUrl} download target="_blank" rel="noreferrer">Download</a>
+                                    <a
+                                        className="reel-actions__icon"
+                                        href={current.downloadUrl}
+                                        download
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        aria-label="Download"
+                                        title="Download"
+                                    >
+                                        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                                            <path d="M12 3v12m0 0 4.5-4.5M12 15l-4.5-4.5M5 20h14" />
+                                        </svg>
+                                    </a>
                                 )}
                             </div>
                             {reel.likeMutation?.status === 'error' && <p role="alert" className="reel-error">Like failed: {reel.likeMutation.error}</p>}
@@ -2040,22 +2089,28 @@ function ReelModal({
 
 function ReelMediaPlayer({
     item,
+    mediaLabel,
     playbackKey,
     playbackMemory,
+    volumePreference,
     refreshing,
+    soundtrackActive,
     onRetry,
 }: {
     item: ReelMediaItem;
+    mediaLabel: 'reel' | 'post';
     playbackKey: string;
     playbackMemory: ReelPlaybackMemory;
+    volumePreference: ReelVolumePreferenceRef;
     refreshing: boolean;
+    soundtrackActive: boolean;
     onRetry: () => void;
 }) {
     const wrapperRef = useRef<HTMLDivElement>(null as unknown as HTMLDivElement);
     const videoRef = useRef<HTMLVideoElement>(null as unknown as HTMLVideoElement);
     const [playing, setPlaying] = useState(false);
-    const [muted, setMuted] = useState(false);
-    const [volume, setVolume] = useState(1);
+    const [muted, setMuted] = useState(soundtrackActive || volumePreference.current.muted);
+    const [volume, setVolume] = useState(volumePreference.current.volume);
     const [currentTime, setCurrentTime] = useState(0);
     const [duration, setDuration] = useState(item.kind === 'video' ? item.durationSec : 0);
     const [quality, setQuality] = useState('auto');
@@ -2157,13 +2212,13 @@ function ReelMediaPlayer({
 
     const errorNotice = failedSource === sourceUrl && (
         <div className="reel-media__error" role="alert">
-            <span>This reel media could not be loaded.</span>
+            <span>This {mediaLabel} media could not be loaded.</span>
             <button
                 type="button"
                 aria-busy={refreshing}
                 disabled={refreshing}
                 onClick={onRetry}
-            >{refreshing ? 'Refreshing…' : 'Retry reel media'}</button>
+            >{refreshing ? 'Refreshing…' : `Retry ${mediaLabel} media`}</button>
         </div>
     );
 
@@ -2171,7 +2226,7 @@ function ReelMediaPlayer({
         return <div ref={wrapperRef} className="reel-media" style={mediaStyle}>
             <img
                 src={sourceUrl}
-                alt="Reel image"
+                alt={`${mediaLabel === 'reel' ? 'Reel' : 'Post'} image`}
                 width={item.width}
                 height={item.height}
                 onError={() => setFailedSource(sourceUrl)}
@@ -2189,6 +2244,8 @@ function ReelMediaPlayer({
         video.muted = value === 0;
         setVolume(value);
         setMuted(value === 0);
+        volumePreference.current = { volume: value, muted: value === 0 };
+        writeReelVolumePreference(volumePreference.current);
     };
     const toggleFullscreen = () => {
         if (document.fullscreenElement === wrapperRef.current) {
@@ -2217,6 +2274,10 @@ function ReelMediaPlayer({
 
     useLayoutEffect(() => {
         const video = videoRef.current;
+        video.volume = volumePreference.current.volume;
+        video.muted = soundtrackActive || volumePreference.current.muted;
+        setVolume(video.volume);
+        setMuted(video.muted);
         const remembered = playbackMemory.get(playbackKey);
         if (!remembered) playbackMemory.set(playbackKey, { currentTime: 0, userPaused: false });
         const restore = () => {
@@ -2249,6 +2310,7 @@ function ReelMediaPlayer({
                 src={sourceUrl}
                 poster={item.posterUrl}
                 autoPlay={!playbackMemory.get(playbackKey)?.userPaused}
+                muted={soundtrackActive || volumePreference.current.muted}
                 playsInline
                 preload="auto"
                 width={item.width}
@@ -2274,7 +2336,7 @@ function ReelMediaPlayer({
                     max={duration || 0.01}
                     step="0.01"
                     value={Math.min(currentTime, duration || 0)}
-                    aria-label="Seek reel"
+                    aria-label={`Seek ${mediaLabel}`}
                     onChange={(event: ChangeEvent<HTMLInputElement>) => {
                         const value = Number(event.currentTarget.value);
                         videoRef.current.currentTime = value;
@@ -2282,20 +2344,22 @@ function ReelMediaPlayer({
                     }}
                 />
                 <div className="reel-player__row">
-                    <button type="button" onClick={togglePlayback} aria-label={playing ? 'Pause reel' : 'Play reel'}>{playing ? 'Ⅱ' : '▶'}</button>
-                    <button type="button" onClick={() => {
+                    <button type="button" onClick={togglePlayback} aria-label={playing ? `Pause ${mediaLabel}` : `Play ${mediaLabel}`}>{playing ? 'Ⅱ' : '▶'}</button>
+                    {!soundtrackActive && <button type="button" onClick={() => {
                         const next = !videoRef.current.muted;
                         videoRef.current.muted = next;
                         setMuted(next);
-                    }} aria-label={muted ? 'Unmute reel' : 'Mute reel'} className="reel-player__mute">
+                        volumePreference.current = { volume: videoRef.current.volume, muted: next };
+                        writeReelVolumePreference(volumePreference.current);
+                    }} aria-label={muted ? `Unmute ${mediaLabel}` : `Mute ${mediaLabel}`} className="reel-player__mute">
                         <SpeakerIcon muted={muted} />
-                    </button>
-                    <input type="range" min="0" max="1" step="0.05" value={muted ? 0 : volume} aria-label="Reel volume" onChange={(event: ChangeEvent<HTMLInputElement>) => setVideoVolume(Number(event.currentTarget.value))} />
+                    </button>}
+                    {!soundtrackActive && <input type="range" min="0" max="1" step="0.05" value={muted ? 0 : volume} aria-label={`${mediaLabel === 'reel' ? 'Reel' : 'Post'} volume`} onChange={(event: ChangeEvent<HTMLInputElement>) => setVideoVolume(Number(event.currentTarget.value))} />}
                     {item.variants.length > 1 && <label className="reel-player__quality">
                         <span>Quality</span>
                         <select
                             value={quality}
-                            aria-label="Reel quality"
+                            aria-label={`${mediaLabel === 'reel' ? 'Reel' : 'Post'} quality`}
                             onChange={(event: ChangeEvent<HTMLSelectElement>) => {
                                 const video = videoRef.current;
                                 sourceSwitchRef.current = {
@@ -2327,6 +2391,110 @@ function ReelMediaPlayer({
             </div>
         </div>
     );
+}
+
+function AttachedAudioPlayer({ audio }: { audio: AttachedAudio }) {
+    const audioRef = useRef<HTMLAudioElement>(null as unknown as HTMLAudioElement);
+    const lifecycleRef = useRef(0);
+    const playAttemptRef = useRef(0);
+    const [playing, setPlaying] = useState(false);
+    const [muted, setMuted] = useState(false);
+    const [failure, setFailure] = useState<{ message: string; alert: boolean }>();
+
+    const attemptPlayback = (element: HTMLAudioElement, lifecycle: number, userInitiated: boolean) => {
+        const attempt = ++playAttemptRef.current;
+        setFailure(undefined);
+        let result: Promise<void>;
+        try {
+            result = element.play();
+        } catch {
+            if (lifecycleRef.current === lifecycle && audioRef.current === element) {
+                setPlaying(false);
+                setFailure({ message: 'Post music could not be played.', alert: userInitiated });
+            }
+            return;
+        }
+        void result.then(() => {
+            if (
+                lifecycleRef.current === lifecycle && playAttemptRef.current === attempt &&
+                audioRef.current === element && !element.paused
+            ) setPlaying(true);
+        }, () => {
+            if (
+                lifecycleRef.current !== lifecycle || playAttemptRef.current !== attempt ||
+                audioRef.current !== element
+            ) return;
+            setPlaying(false);
+            setFailure(userInitiated
+                ? { message: 'Post music could not be played.', alert: true }
+                : { message: 'Post music is paused. Select Play post music to start it.', alert: false });
+        });
+    };
+
+    useLayoutEffect(() => {
+        const element = audioRef.current;
+        const lifecycle = ++lifecycleRef.current;
+        const start = audio.startTimeSec;
+        const begin = () => {
+            try { element.currentTime = start; }
+            catch { /* Seeking is only legal after metadata in some browsers. */ }
+            attemptPlayback(element, lifecycle, false);
+        };
+        element.src = audio.url;
+        element.load();
+        setPlaying(false);
+        setMuted(element.muted);
+        setFailure(undefined);
+        if (element.readyState >= 1) begin();
+        else element.addEventListener('loadedmetadata', begin, { once: true });
+        return () => {
+            lifecycleRef.current++;
+            playAttemptRef.current++;
+            element.removeEventListener('loadedmetadata', begin);
+            element.pause();
+        };
+    }, [audio.id, audio.url, audio.startTimeSec, audio.playDurationSec, audio.durationSec]);
+
+    return <>
+        <audio
+            ref={audioRef}
+            preload="auto"
+            onPlay={() => {
+                setPlaying(true);
+                setFailure(undefined);
+            }}
+            onPause={() => setPlaying(false)}
+            onVolumeChange={() => setMuted(audioRef.current.muted)}
+            onError={() => {
+                setPlaying(false);
+                setFailure({ message: 'Post music could not be loaded.', alert: true });
+            }}
+            onTimeUpdate={() => {
+                const element = audioRef.current;
+                if (audio.playDurationSec && element.currentTime >= audio.startTimeSec + audio.playDurationSec) {
+                    element.currentTime = audio.startTimeSec;
+                    attemptPlayback(element, lifecycleRef.current, false);
+                }
+            }}
+        />
+        <button
+            type="button"
+            className="reel-stage__soundtrack"
+            aria-label={!playing ? 'Play post music' : muted ? 'Unmute post music' : 'Mute post music'}
+            aria-pressed={playing ? muted : undefined}
+            title={[audio.title, audio.artist].filter(Boolean).join(' · ') || 'Post music'}
+            onClick={() => {
+                const element = audioRef.current;
+                if (element.paused) {
+                    attemptPlayback(element, lifecycleRef.current, true);
+                    return;
+                }
+                element.muted = !element.muted;
+                setMuted(element.muted);
+            }}
+        ><SpeakerIcon muted={muted} /></button>
+        {failure && <p className="reel-stage__soundtrack-error" role={failure.alert ? 'alert' : 'status'}>{failure.message}</p>}
+    </>;
 }
 
 function toggleVideoPlayback(

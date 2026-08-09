@@ -411,6 +411,64 @@ test('reel shares normalize captured XMA preview geometry before reel media load
     });
 });
 
+test('feed post shares use the modal media path and normalize attached music', () => {
+    const message = parseMessage({
+        message_id: 'post-share',
+        sender_fbid: 'sender',
+        timestamp_ms: '1000',
+        content_type: 'MESSAGE_INLINE_SHARE',
+        content: { xma: {
+            target_url: 'https://www.instagram.com/p/Dbcvq9_MYOc/',
+            target_id: '3953244233886958492',
+            header_title_text: 'alice',
+            preview_image: { url: 'https://cdn.example/post.jpg', width: 1080, height: 1080 },
+        } },
+    });
+    assert.deepEqual(message?.kind === 'reel_share' ? {
+        mediaType: message.mediaType,
+        shortcode: message.shortcode,
+        mediaId: message.mediaId,
+    } : undefined, {
+        mediaType: 'post',
+        shortcode: 'Dbcvq9_MYOc',
+        mediaId: '3953244233886958492',
+    });
+
+    const media = parseReelInfoResponse({ items: [{
+        pk: '3953244233886958492',
+        code: 'Dbcvq9_MYOc',
+        media_type: 1,
+        product_type: 'feed',
+        original_width: 1080,
+        original_height: 1080,
+        image_versions2: { candidates: [{ url: 'https://cdn.example/post.jpg', width: 1080, height: 1080 }] },
+        user: { pk: 'owner', username: 'alice' },
+        music_metadata: { music_info: {
+            music_asset_info: {
+                audio_asset_id: '1525098932292312',
+                progressive_download_url: 'https://cdn.example/music.mp4',
+                duration_in_ms: 138275,
+                title: 'cloud city',
+                display_artist: 'frutiger pm',
+            },
+            music_consumption_info: {
+                audio_asset_start_time_in_ms: 3000,
+                overlap_duration_in_ms: 30000,
+            },
+        } },
+    }] }, { shortcode: 'Dbcvq9_MYOc', mediaId: '3953244233886958492' });
+    assert.equal(media.mediaType, 'post');
+    assert.deepEqual(media.attachedAudio, {
+        id: '1525098932292312',
+        url: 'https://cdn.example/music.mp4',
+        title: 'cloud city',
+        artist: 'frutiger pm',
+        durationSec: 138.275,
+        startTimeSec: 3,
+        playDurationSec: 30,
+    });
+});
+
 test('attachment-less photos and future types retain safe normalized diagnostics', () => {
     const photo = parseMessage({ message_id: 'photo', content_type: 'IMAGES', content: {} });
     assert.equal(photo?.kind, 'unsupported');

@@ -148,7 +148,7 @@ type FrontendState = {
     }>;
     selectedThreadId?: string;
     histories: Record<string, HistoryState>;
-    reels: { activeId?: string; byId: Record<string, ReelState> };
+    reels: { activeId?: string; activeUrl?: string; byId: Record<string, ReelState> };
 };
 ```
 
@@ -181,9 +181,14 @@ optimistic DOM row survives ID reconciliation. The viewport remains capped at 80
 Components must iterate ordered IDs and look up entities. Do not duplicate
 thread/message objects into pinned, selected, or viewport arrays.
 
-### Reel cache and open intent
+### Shared reel/post cache and open intent
 
-Reels use `shortcode` as the stable normalized key. Each `ReelState` holds one
+The legacy-named reel cache is the shared modal-media cache for both `/reel/`
+and `/p/` DM shares. The message parser records an explicit media type, while
+the REST info parser independently derives reel versus feed-post presentation
+from `product_type`; UI components do not interpret Instagram URLs or response
+fields. Both media types use `shortcode` as the stable normalized key. Each
+`ReelState` holds one
 `ReelMedia` entity plus normalized comment `listedIds`/`byId`, independent media
 and comment status/error state, and visible like/save mutation state. Media IDs
 remain operation identifiers and do not replace the stable shortcode key.
@@ -195,6 +200,16 @@ poster, dimensions when available, and video duration. A malformed carousel is
 rejected as a whole so slide cardinality is never silently changed. Author
 profile metadata, caption/counts, liked/saved state, and download eligibility
 are parsed outside UI components.
+
+Feed-post `music_metadata` is normalized at that same boundary into one optional
+attached-audio entity: source, identity, title/artist, duration, asset offset,
+and overlap duration. The modal keeps this soundtrack mounted across carousel
+slides, pauses it on close, and mutes slide videos while it is active so two
+audio sources cannot overlap. Its bottom-right control follows the native audio
+element's actual paused and mute state: blocked autoplay first presents Play,
+while an already-playing soundtrack presents Mute or Unmute. Replaced signed
+URLs and timing metadata reinitialize the same slide-independent player, with
+stale play outcomes ignored.
 
 Reel-author profile images cross one additional trusted-media boundary. After
 the anchor returns normalized reel metadata, the extension background fetches
@@ -257,7 +272,10 @@ locked, focus is contained, and close by button, backdrop, or Escape restores th
 invoking preview. The modal owns only presentation state (the stable carousel
 index and native media element state). The application root retains a small
 session-only playback record keyed by shortcode and media-item ID: current time
-plus explicit user-paused intent. Closing or changing slides snapshots time;
+plus explicit user-paused intent. Video volume and explicit mute intent are one
+global player preference, shared by every reel/post video and persisted in local
+storage; soundtrack-forced video muting does not overwrite that preference.
+Closing or changing slides snapshots time;
 metadata readiness restores it. A new video autoplays, while a video explicitly
 paused by the user remains paused when revisited. Each carousel video therefore
 has independent progress without becoming a second media/entity cache. Author,
@@ -623,9 +641,14 @@ Menus expose only capabilities already owned by this frontend. Selected and
 unselected chat rows offer Pin conversation or Unpin conversation by right click,
 Context Menu/Shift+F10, or movement-cancelled touch hold. Pending actions are
 disabled and mutation failures are announced on the affected row. A
-loaded server message offers reply and create/change reaction;
-and a failed local send offers retry/remove. The reaction picker marks the
+loaded server message offers reply, and shared reel/post messages with a
+parser-provided target URL additionally offer Copy post URL. Reactions remain
+available through the row's hover/focus reaction rail and full chooser, not the
+context menu. A failed local send offers retry/remove. The reaction picker marks the
 viewer's current choice and serializes through the existing store action.
+The same parser-provided URL follows the explicit open intent into the shared
+reel/post modal, where an accessible icon-only Copy post action writes it to the
+clipboard without reconstructing an Instagram URL in the component.
 Selecting a placed reaction adds it when it belongs only to others and revokes
 it when it includes the viewer; revocation uses the same routed mutation with
 `reaction_status: 'deleted'`. Reply selection preserves a visible DOM anchor,

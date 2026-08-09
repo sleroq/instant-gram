@@ -51,6 +51,7 @@ export type Message = MessageMetadata &
         | { kind: 'activity'; text: string }
         | (SentMessageMetadata & {
               kind: 'reel_share';
+              mediaType: 'reel' | 'post';
               shortcode: string;
               mediaId?: string;
               targetUrl: string;
@@ -123,9 +124,19 @@ export type ReelMediaItem = {
     }
 );
 export type ReelAuthor = User & { isVerified: boolean };
+export type AttachedAudio = {
+    id: string;
+    url: string;
+    title?: string;
+    artist?: string;
+    durationSec: number;
+    startTimeSec: number;
+    playDurationSec?: number;
+};
 export type ReelMedia = {
     id: string;
     shortcode: string;
+    mediaType: 'reel' | 'post';
     author: ReelAuthor;
     caption?: string;
     takenAtMs?: number;
@@ -136,6 +147,7 @@ export type ReelMedia = {
     hasSaved: boolean;
     canSave: boolean;
     canDownload: boolean;
+    attachedAudio?: AttachedAudio;
 };
 export type ReelComment = {
     id: string;
