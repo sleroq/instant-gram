@@ -192,6 +192,12 @@ chronological order, `viewportIds` is the bounded 40–80 ID DOM window, and
 `byId` is message lookup. Older pages prepend only unseen IDs and replace every
 received entity, so overlaps update content without duplicating rows.
 
+The bounded window moves in both directions through `listedIds`. Near the lower
+edge, downward user scrolling advances by one 40-ID slice before newest
+navigation is needed. Instagram exposes only the older network cursor, so this
+newer direction is deliberately local; fresh tail messages continue to enter
+through incoming synchronization.
+
 Accepted outgoing sends append one optimistic `local:<offlineThreadingId>` entity
 to `byId`/`listedIds`. They append to `viewportIds` only when the component's
 immediate pre-dispatch bottom measurement permits following newest; otherwise
@@ -637,8 +643,10 @@ older local window leaves `viewportIds` and the logical anchor intact and shows
 the accessible down-arrow control. Reply-return entries take precedence; once
 none remain, its “Go to newest message” action switches to the newest 40 loaded
 IDs before scrolling. Follow intent is cleared on thread changes so it cannot
-affect a restored chat. Enter submits, Shift+Enter inserts a newline, and drafts
-remain store-owned per thread.
+affect a restored chat. Opening the reply composer preserves an already pinned
+newest viewport at its DOM bottom as composer geometry changes; a reader who was
+not pinned keeps the existing message anchor instead. Enter submits, Shift+Enter
+inserts a newline, and drafts remain store-owned per thread.
 
 Message and conversation-row action surfaces are component-owned transient DOM
 state, not another entity cache. Desktop rows expose no permanent ellipsis or

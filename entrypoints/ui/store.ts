@@ -11,8 +11,10 @@ import type {
 import type { CompleteUiRpc, UiRpc } from './rpc';
 import {
     hasLocalOlderIds,
+    hasLocalNewerIds,
     initialHistoryWindow,
     moveHistoryWindowOlder,
+    moveHistoryWindowNewer,
     appendToHistoryWindow,
     historyWindowAroundTarget,
 } from './history-window.ts';
@@ -2325,6 +2327,20 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
             void loadInitialHistory(threadId);
         },
         revealOlderHistory,
+        revealNewerHistory(threadId: string) {
+            const history = state.histories[threadId];
+            if (
+                !history || history.status !== 'ready' || history.isReplacingViewport ||
+                history.replyNavigation?.status === 'loading' ||
+                (history.replyNavigation?.status === 'ready' &&
+                    !history.replyNavigation.isPositioned) ||
+                !hasLocalNewerIds(history.listedIds, history.viewportIds)
+            ) return false;
+            history.viewportIds = moveHistoryWindowNewer(history.listedIds, history.viewportIds);
+            history.isReplacingViewport = true;
+            emit();
+            return true;
+        },
         revealNewestHistory(threadId: string) {
             const history = state.histories[threadId];
             if (!history || history.status !== 'ready') return false;

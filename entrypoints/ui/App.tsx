@@ -19,7 +19,7 @@ import type { AttachedAudio, Message, ReelMediaItem, Thread, User } from '../../
 import type {
     FrontendStore, GlobalNotification, HistoryState, PinMutation, ReadMutation, ReelState,
 } from './store';
-import { hasLocalOlderIds } from './history-window';
+import { hasLocalNewerIds, hasLocalOlderIds } from './history-window';
 import { calculateInlineMediaBox } from './inline-media-box';
 import {
     readReelVolumePreference,
@@ -572,6 +572,7 @@ function MessagePane({
     const sentinelRef = useRef<HTMLDivElement>(null as unknown as HTMLDivElement);
     const contentRef = useRef<HTMLDivElement>(null as unknown as HTMLDivElement);
     const pendingAnchorRef = useRef<{ id: string; top: number }>();
+    const pendingViewportDirectionRef = useRef<'older' | 'newer'>();
     const resizeAnchorRef = useRef<{ id: string; top: number }>();
     const sentinelIntersectingRef = useRef(false);
     const revealTimerRef = useRef<number>();
@@ -585,6 +586,7 @@ function MessagePane({
     });
     const handledReplyNavigationRef = useRef(0);
     const [isViewportAtBottom, setIsViewportAtBottom] = useState(false);
+    const lastScrollTopRef = useRef(0);
     const viewportKey = history?.viewportIds.join('\u0000') ?? '';
 
     activeThreadRef.current = thread.key;
@@ -732,9 +734,11 @@ function MessagePane({
                 scroller.scrollTop = scroller.scrollHeight;
             }
             updateBottomState(scroller);
+            lastScrollTopRef.current = scroller.scrollTop;
         }
         const pending = pendingAnchorRef.current;
         if (history.isReplacingViewport) {
+            const replacementDirection = pendingViewportDirectionRef.current;
             if (pending) {
                 const row = scroller.querySelector<HTMLElement>(
                     `[data-message-id="${cssEscape(pending.id)}"]`,
@@ -743,13 +747,16 @@ function MessagePane({
                 pendingAnchorRef.current = undefined;
             }
             store.completeHistoryReplacement(thread.key);
-            if (isSentinelInRange()) {
+            pendingViewportDirectionRef.current = undefined;
+            if (replacementDirection !== 'newer' && isSentinelInRange()) {
                 clearRevealTimer();
                 captureAnchor();
                 store.revealOlderHistory(thread.key, true);
             }
-            reevaluateOlderReveal();
-            scheduleThreadContinuation(thread.key, reevaluateOlderReveal, 50);
+            if (replacementDirection !== 'newer') {
+                reevaluateOlderReveal();
+                scheduleThreadContinuation(thread.key, reevaluateOlderReveal, 50);
+            }
         }
         updateResizeAnchor(scroller, resizeAnchorRef);
         updateBottomState(scroller);
@@ -925,6 +932,8 @@ function MessagePane({
     const onScroll = () => {
         const scroller = scrollerRef.current;
         if (!scroller) return;
+        const isMovingDown = scroller.scrollTop > lastScrollTopRef.current;
+        lastScrollTopRef.current = scroller.scrollTop;
         const row = [...scroller.querySelectorAll<HTMLElement>('[data-message-id]')]
             .find(item => item.getBoundingClientRect().bottom > scroller.getBoundingClientRect().top);
         if (row?.dataset.messageId) {
@@ -935,6 +944,19 @@ function MessagePane({
         }
         updateResizeAnchor(scroller, resizeAnchorRef);
         updateBottomState(scroller);
+        const currentHistory = store.state.histories[thread.key];
+        if (
+            isMovingDown && !scroller.dataset.keyboardNavigationScroll && currentHistory &&
+            hasLocalNewerIds(currentHistory.listedIds, currentHistory.viewportIds) &&
+            scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= 750
+        ) {
+            captureAnchor();
+            pendingViewportDirectionRef.current = 'newer';
+            if (!store.revealNewerHistory(thread.key)) {
+                pendingViewportDirectionRef.current = undefined;
+                pendingAnchorRef.current = undefined;
+            }
+        }
     };
 
     const submitDraft = () => {
@@ -984,6 +1006,12 @@ function MessagePane({
     const hasNewerMessages = Boolean(history && (!isNewestWindow || !isViewportAtBottom));
     const selectReply = useCallback((messageId: string) => {
         const scroller = scrollerRef.current;
+        const currentHistory = store.state.histories[thread.key];
+        const latestId = currentHistory?.listedIds.at(-1);
+        const wasFollowingNewest = Boolean(
+            scroller && latestId && currentHistory?.viewportIds.includes(latestId) &&
+            isAtBottom(scroller),
+        );
         const visible = scroller
             ? [...scroller.querySelectorAll<HTMLElement>('[data-message-id]')]
                 .filter(row => row.getBoundingClientRect().bottom > scroller.getBoundingClientRect().top)
@@ -992,7 +1020,11 @@ function MessagePane({
         const anchorTop = anchor?.getBoundingClientRect().top;
         if (!store.setReplyTarget(thread.key, messageId)) return;
         requestAnimationFrame(() => {
-            if (scroller && anchor && anchorTop !== undefined) {
+            if (scroller && wasFollowingNewest) {
+                scroller.scrollTop = scroller.scrollHeight;
+                updateResizeAnchor(scroller, resizeAnchorRef);
+                updateBottomState(scroller);
+            } else if (scroller && anchor && anchorTop !== undefined) {
                 scroller.scrollTop += anchor.getBoundingClientRect().top - anchorTop;
             }
             document.querySelector<HTMLTextAreaElement>('.composer textarea')

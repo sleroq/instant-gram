@@ -2701,6 +2701,58 @@ test('sending at bottom follows the outgoing message', async () => {
     await page.close();
 });
 
+test('sending a reply while pinned keeps the reconciled outgoing message visible', async () => {
+    const page = await openHarness({ width: 900, height: 520 });
+    await page.evaluate(() => window.historyHarness.mount('mutations'));
+    await page.locator('[data-message-id]').first().waitFor();
+    await page.evaluate(() => {
+        const scroller = document.querySelector<HTMLElement>('.messages')!;
+        scroller.scrollTop = scroller.scrollHeight;
+        scroller.dispatchEvent(new Event('scroll'));
+    });
+    await page.locator('[data-message-id]').last().click({ button: 'right' });
+    await page.getByRole('menu', { name: 'Message actions' })
+        .getByRole('menuitem', { name: 'Reply' }).click();
+    const composer = page.getByRole('textbox', { name: 'Message' });
+    await composer.fill('bottom reply');
+    await composer.press('Enter');
+    await page.locator('[data-message-id="server-1"]').waitFor();
+    const distance = await page.evaluate(() => {
+        const scroller = document.querySelector<HTMLElement>('.messages')!;
+        return scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+    });
+    assert.ok(distance <= 2, `bottom reply ended ${distance}px from newest`);
+    await page.close();
+});
+
+test('downward scrolling after deep reply navigation reveals normalized newer IDs', async () => {
+    const page = await openHarness({ width: 900, height: 520 });
+    await page.evaluate(() => window.historyHarness.mount('reply-navigation'));
+    await page.locator('[data-message-id="m119"]')
+        .getByRole('button', { name: 'Go to original message: Original message 10' }).click();
+    await page.locator('[data-message-id="m10"]').waitFor();
+    await page.waitForFunction(() =>
+        window.historyHarness.historyState('thread').viewportIds?.at(-1) === 'm79' &&
+        !window.historyHarness.historyState('thread').isReplacingViewport);
+
+    await page.evaluate(() => {
+        const scroller = document.querySelector<HTMLElement>('.messages')!;
+        scroller.scrollTop = 0;
+        scroller.dispatchEvent(new Event('scroll'));
+        scroller.scrollTop = scroller.scrollHeight;
+        scroller.dispatchEvent(new Event('scroll'));
+    });
+    await page.waitForFunction(() =>
+        window.historyHarness.historyState('thread').viewportIds?.at(-1) === 'm119' &&
+        !window.historyHarness.historyState('thread').isReplacingViewport);
+    const state = await page.evaluate(() => window.historyHarness.historyState('thread'));
+    assert.deepEqual(state.viewportIds, state.listedIds?.slice(-80));
+    assert.equal(await page.locator('[data-message-id="m119"]').count(), 1);
+    assert.deepEqual(await page.evaluate(() => window.historyHarness.calls()),
+        [undefined, 'c1', 'c2', 'c3', 'c4']);
+    await page.close();
+});
+
 test('incoming messages follow at bottom and preserve a scrolled-up reader', async () => {
     const page = await openHarness({ width: 900, height: 520 });
     await page.evaluate(() => window.historyHarness.mount('mutations'));

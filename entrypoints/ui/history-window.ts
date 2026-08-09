@@ -17,6 +17,24 @@ export function hasLocalOlderIds(listedIds: string[], viewportIds: string[]) {
     return Boolean(viewportIds.length && listedIds.indexOf(viewportIds[0]) > 0);
 }
 
+export function moveHistoryWindowNewer(listedIds: string[], viewportIds: string[]) {
+    if (!viewportIds.length) return initialHistoryWindow(listedIds);
+    const currentStart = listedIds.indexOf(viewportIds[0]);
+    const currentEnd = listedIds.indexOf(viewportIds.at(-1)!);
+    if (currentStart < 0 || currentEnd >= listedIds.length - 1) return viewportIds;
+    const start = Math.min(
+        currentStart + HISTORY_SLICE_SIZE,
+        Math.max(0, listedIds.length - MAX_HISTORY_ROWS),
+    );
+    return listedIds.slice(start, Math.min(listedIds.length, start + MAX_HISTORY_ROWS));
+}
+
+export function hasLocalNewerIds(listedIds: string[], viewportIds: string[]) {
+    return Boolean(
+        viewportIds.length && listedIds.indexOf(viewportIds.at(-1)!) < listedIds.length - 1,
+    );
+}
+
 export function appendToHistoryWindow(viewportIds: string[], id: string) {
     if (viewportIds.includes(id)) return viewportIds;
     return [...viewportIds, id].slice(-MAX_HISTORY_ROWS);

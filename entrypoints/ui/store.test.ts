@@ -873,6 +873,29 @@ test('reply return stack unwinds a chain before newest and failures do not corru
     store.destroy();
 });
 
+test('an older reply window advances through locally normalized newer history', async () => {
+    installWindowTimers();
+    const store = createFrontendStore(fakeRpc(async () => ({
+        ok: true, value: { items: [thread('a')], hasNextPage: false },
+    }), async () => historyPage(0, 160, undefined, false)));
+    store.start();
+    await settle();
+    store.selectThread('a');
+    await settle();
+
+    assert.equal(await store.navigateToReply('a', 'm20'), true);
+    assert.deepEqual(store.state.histories.a.viewportIds, messageIds(0, 80));
+    store.completeReplyNavigationPosition('a', 1);
+    assert.equal(store.revealNewerHistory('a'), true);
+    assert.deepEqual(store.state.histories.a.viewportIds, messageIds(40, 120));
+    store.completeHistoryReplacement('a');
+    assert.equal(store.revealNewerHistory('a'), true);
+    assert.deepEqual(store.state.histories.a.viewportIds, messageIds(80, 160));
+    store.completeHistoryReplacement('a');
+    assert.equal(store.revealNewerHistory('a'), false);
+    store.destroy();
+});
+
 test('rapid reply navigation is latest-wins while sharing older history work', async () => {
     installWindowTimers();
     const calls: Array<string | undefined> = [];
