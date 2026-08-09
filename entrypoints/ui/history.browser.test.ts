@@ -406,6 +406,15 @@ test('reel preview and modal own playback, carousel, actions, comments, links, a
     assert.deepEqual({ width: inlineGeometry.width, height: inlineGeometry.height }, {
         width: '540', height: '960',
     });
+    const inlinePlayAlignment = await page.locator('.message-reel-preview__badge').evaluate(badge => {
+        const badgeRect = badge.getBoundingClientRect();
+        const iconRect = badge.querySelector('svg')!.getBoundingClientRect();
+        return {
+            x: Math.abs((badgeRect.left + badgeRect.width / 2) - (iconRect.left + iconRect.width / 2)),
+            y: Math.abs((badgeRect.top + badgeRect.height / 2) - (iconRect.top + iconRect.height / 2)),
+        };
+    });
+    assert.ok(inlinePlayAlignment.x < 0.1 && inlinePlayAlignment.y < 0.1, JSON.stringify(inlinePlayAlignment));
     assert.match(
         await page.locator('[data-message-id="reel-message"] .shared-post__author-avatar img').getAttribute('src') ?? '',
         /^data:image\/gif;base64,/,
@@ -536,6 +545,15 @@ test('reel preview and modal own playback, carousel, actions, comments, links, a
     assert.equal(await page.getByRole('button', { name: 'Unsave reel' }).getAttribute('aria-pressed'), 'true');
 
     const modalVideo = page.locator('.reel-stage video');
+    const playerPlayAlignment = await page.locator('.reel-player__playback').evaluate(button => {
+        const buttonRect = button.getBoundingClientRect();
+        const iconRect = button.querySelector('svg')!.getBoundingClientRect();
+        return {
+            x: Math.abs((buttonRect.left + buttonRect.width / 2) - (iconRect.left + iconRect.width / 2)),
+            y: Math.abs((buttonRect.top + buttonRect.height / 2) - (iconRect.top + iconRect.height / 2)),
+        };
+    });
+    assert.ok(playerPlayAlignment.x < 0.1 && playerPlayAlignment.y < 0.1, JSON.stringify(playerPlayAlignment));
     const portraitRect = await page.locator('.reel-media').boundingBox();
     assert.ok(portraitRect && Math.abs(portraitRect.width / portraitRect.height - 9 / 16) < 0.01);
     await page.getByRole('button', { name: 'Enter fullscreen' }).click();

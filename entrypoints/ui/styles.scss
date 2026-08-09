@@ -1378,13 +1378,18 @@ body.is-resizing-sidebar * {
     width: 48px;
     height: 48px;
     place-items: center;
-    padding-left: 3px;
+    padding: 0;
     color: #fff;
     background: rgba(12, 10, 18, 0.66);
     border-radius: 50%;
     opacity: 0.85;
     transform: translate(-50%, -50%);
     transition: opacity $motion ease, transform $motion ease;
+}
+
+.playback-icon {
+    display: block;
+    fill: currentColor;
 }
 
 @container inline-preview (max-width: 39px) {
@@ -1676,6 +1681,14 @@ body.is-resizing-sidebar * {
     }
 
     svg path:first-child { stroke: none; }
+}
+
+.reel-player__row .reel-player__playback {
+    display: grid;
+    width: 36px;
+    min-width: 36px;
+    place-items: center;
+    padding: 0;
 }
 
 .reel-player__quality {

@@ -1857,7 +1857,9 @@ function InlineReel({
                     />
                 )}
                 <SharedPostAuthor store={store} message={message} />
-                <span className="message-reel-preview__badge" aria-hidden="true">{message.mediaType === 'reel' ? '▶' : '▣'}</span>
+                <span className="message-reel-preview__badge" aria-hidden="true">
+                    {message.mediaType === 'reel' || item?.kind === 'video' ? <PlayIcon /> : <PostIcon />}
+                </span>
             </span>
             {message.caption && <span>{message.caption}</span>}
         </button>
@@ -2356,7 +2358,12 @@ function ReelMediaPlayer({
                     }}
                 />
                 <div className="reel-player__row">
-                    <button type="button" onClick={togglePlayback} aria-label={playing ? `Pause ${mediaLabel}` : `Play ${mediaLabel}`}>{playing ? 'Ⅱ' : '▶'}</button>
+                    <button
+                        type="button"
+                        className="reel-player__playback"
+                        onClick={togglePlayback}
+                        aria-label={playing ? `Pause ${mediaLabel}` : `Play ${mediaLabel}`}
+                    >{playing ? <PauseIcon /> : <PlayIcon />}</button>
                     {!soundtrackActive && <button type="button" onClick={() => {
                         const next = !videoRef.current.muted;
                         videoRef.current.muted = next;
@@ -2566,6 +2573,30 @@ function SpeakerIcon({ muted }: { muted: boolean }) {
             {muted
                 ? <path d="m16 9 5 6m0-6-5 6" />
                 : <path d="M16 9.5c1.4 1.4 1.4 3.6 0 5m2-7c2.5 2.5 2.5 6.5 0 9" />}
+        </svg>
+    );
+}
+
+function PlayIcon() {
+    return (
+        <svg className="playback-icon" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+            <path d="M8 5v14l11-7z" />
+        </svg>
+    );
+}
+
+function PauseIcon() {
+    return (
+        <svg className="playback-icon" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+            <path d="M7 5h4v14H7zm6 0h4v14h-4z" />
+        </svg>
+    );
+}
+
+function PostIcon() {
+    return (
+        <svg className="playback-icon" viewBox="0 0 24 24" width="21" height="21" aria-hidden="true">
+            <rect x="6" y="6" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" />
         </svg>
     );
 }
