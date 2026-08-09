@@ -42,6 +42,7 @@ getPins(): { pinned: string[] }
 togglePin({ threadKey, threadFbid, pin }): Result<{ pinned, receipt }>
 sendText({ threadFbid, text, replyToMessageId?, offlineThreadingId }): Result<SentTextMessage>
 setReaction({ threadFbid, messageId, emoji }): Result<SetReactionResult>
+forwardMessage({ targetThreadFbid, sourceThreadIgId, sourceIsViewer, offlineThreadingId, content }): Result<SentMessage>
 ```
 
 `CompleteUiRpc` mechanically maps those signatures to promises. The read-only
@@ -59,6 +60,23 @@ to `Result` failures. Text success requires both server message ID and timestamp
 reaction success requires the matching target ID and the complete authoritative
 reaction array. Document IDs and exact request variables remain solely in
 `lib/config.ts` and `lib/instagram-api/catalog.ts`.
+
+Message forwarding is one store-owned modal intent over normalized inbox and
+history entities. It never selects or loads a target history. Up to five loaded
+threads with an operation identifier can be selected; UI fuzzy
+filtering only ranks those normalized entities. For each target, the store sends
+an optional non-whitespace comment through the ordinary text RPC and awaits its
+receipt before issuing the content-specific forward request. Per-target progress
+stores a stable offline threading ID for each stage and records whether that
+stage completed, so retry resumes incomplete work without duplicating requests
+whose server response was lost. Source content and protocol metadata, target
+operation IDs, and the optional comment become immutable once their associated
+request IDs are allocated, keeping every retried payload idempotent.
+The whole operation is single-flight and generation-guarded. Success is announced
+inside the focus-contained modal; partial failures retain their selected targets
+and actionable retry state without changing `selectedThreadId` or target caches.
+The currently captured forward protocol covers text and reel-share messages
+with a numeric media ID; unsupported message content does not expose Forward.
 
 Cursor names are easy to confuse:
 

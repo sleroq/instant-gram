@@ -33,6 +33,7 @@ import {
     writeSidebarWidthPreference,
 } from './sidebar-resize';
 import { computeChatWindow } from './virtual-list';
+import { fuzzyMatchScore } from './fuzzy-match';
 
 const ROW_HEIGHT = 72;
 const REACTION_EMOJIS = ['❤', '😂', '😮', '😢', '😡', '👍'];
@@ -45,6 +46,7 @@ const FULL_REACTION_EMOJIS = REACTION_CATEGORIES.flatMap(category => category.em
 const DEFAULT_REACTION = REACTION_EMOJIS[0];
 let keyboardScrollSequence = 0;
 let reelReturnFocus: HTMLElement | undefined;
+let forwardingReturnFocus: HTMLElement | undefined;
 
 type AppProps = { store: FrontendStore };
 
@@ -206,6 +208,7 @@ export default function App({ store }: AppProps) {
             playbackMemory={reelPlaybackMemory.current}
             volumePreference={reelVolumePreference}
         />}
+        {state.forwarding && <ForwardModal key={`${state.forwarding.sourceThreadId}\u0000${state.forwarding.sourceMessageId}`} store={store} />}
         </>
     );
 }
@@ -1215,6 +1218,14 @@ const MessageRow = memo(function MessageRow({
 
     const menuItems: ContextMenuItem[] = eligibleForActions ? [
         { label: 'Reply', action: () => onReply(message.id) },
+        ...((store.state.inbox.byId[threadId]?.threadIgId &&
+            (message.kind === 'text' || (message.kind === 'reel_share' && message.mediaType === 'reel' && message.mediaId))) ? [{
+            label: 'Forward',
+            action: () => {
+                forwardingReturnFocus = rowRef.current;
+                store.openForwarding(threadId, message.id);
+            },
+        }] : []),
         ...(sharedPostUrl ? [{
             label: 'Copy post URL',
             action: () => { void navigator.clipboard.writeText(sharedPostUrl); },
@@ -1866,6 +1877,171 @@ function InlineReel({
     );
 }
 
+function ForwardModal({ store }: AppProps) {
+    const forwarding = store.state.forwarding!;
+    const modalRef = useRef<HTMLDivElement>(null as unknown as HTMLDivElement);
+    const searchRef = useRef<HTMLInputElement>(null as unknown as HTMLInputElement);
+    const [query, setQuery] = useState('');
+    const close = () => store.closeForwarding();
+    const selected = new Set(forwarding.selectedTargetIds);
+    const targets = store.orderedThreadIds()
+        .map(id => store.state.inbox.byId[id])
+        .filter(thread => Boolean(thread?.threadFbid))
+        .map(thread => ({
+            thread,
+            score: fuzzyMatchScore(
+                `${thread.title} ${thread.users.map(user => `${user.fullName} ${user.username}`).join(' ')}`,
+                query,
+            ),
+        }))
+        .filter(item => item.score !== undefined)
+        .sort((left, right) => query.trim()
+            ? right.score! - left.score!
+            : Number(selected.has(right.thread.key)) - Number(selected.has(left.thread.key)));
+    const commentLocked = Object.values(forwarding.progress)
+        .some(progress => Boolean(progress.commentOfflineThreadingId));
+
+    useLayoutEffect(() => {
+        const shell = document.querySelector<HTMLElement>('.app-shell');
+        if (!shell) return;
+        shell.setAttribute('inert', '');
+        shell.setAttribute('aria-hidden', 'true');
+        const previousOverflow = document.documentElement.style.overflow;
+        document.documentElement.style.overflow = 'hidden';
+        searchRef.current?.focus({ preventScroll: true });
+        return () => {
+            shell.removeAttribute('inert');
+            shell.removeAttribute('aria-hidden');
+            document.documentElement.style.overflow = previousOverflow;
+            const target = forwardingReturnFocus;
+            forwardingReturnFocus = undefined;
+            requestAnimationFrame(() => target?.isConnected && target.focus({ preventScroll: true }));
+        };
+    }, []);
+
+    useEffect(() => {
+        const onKey = (event: globalThis.KeyboardEvent) => {
+            if (event.key === 'Escape' && forwarding.status !== 'submitting') {
+                event.preventDefault();
+                close();
+                return;
+            }
+            if (event.key !== 'Tab') return;
+            const focusable = [...modalRef.current.querySelectorAll<HTMLElement>(
+                'button:not(:disabled), input:not(:disabled), textarea:not(:disabled)',
+            )];
+            if (!focusable.length) return;
+            const current = focusable.indexOf(document.activeElement as HTMLElement);
+            const next = event.shiftKey
+                ? (current <= 0 ? focusable.length - 1 : current - 1)
+                : (current === focusable.length - 1 ? 0 : current + 1);
+            if (current < 0 || next !== current + (event.shiftKey ? -1 : 1)) {
+                event.preventDefault();
+                focusable[next].focus();
+            }
+        };
+        document.addEventListener('keydown', onKey, true);
+        return () => document.removeEventListener('keydown', onKey, true);
+    }, [forwarding.status]);
+
+    return (
+        <div
+            className="forward-modal"
+            role="presentation"
+            onClick={(event: ReactMouseEvent<HTMLDivElement>) => {
+                if (event.target === event.currentTarget && forwarding.status !== 'submitting') close();
+            }}
+        >
+            <section
+                ref={modalRef}
+                className="forward-modal__dialog"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="forward-title"
+                aria-describedby="forward-description"
+                aria-busy={forwarding.status === 'submitting'}
+            >
+                <header className="forward-modal__header">
+                    <div>
+                        <h2 id="forward-title">Forward message</h2>
+                        <p id="forward-description">Choose up to 5 conversations.</p>
+                    </div>
+                    <button type="button" aria-label="Close forwarding" disabled={forwarding.status === 'submitting'} onClick={close}>×</button>
+                </header>
+                {forwarding.status === 'success' ? (
+                    <div className="forward-modal__success" role="status">
+                        <strong>Message forwarded</strong>
+                        <span>Sent to {forwarding.selectedTargetIds.length} {forwarding.selectedTargetIds.length === 1 ? 'conversation' : 'conversations'}.</span>
+                        <button type="button" onClick={close}>Done</button>
+                    </div>
+                ) : (
+                    <>
+                        <label className="forward-modal__search">
+                            <span className="visually-hidden">Search conversations</span>
+                            <input
+                                ref={searchRef}
+                                type="search"
+                                value={query}
+                                placeholder="Search chats and people"
+                                onChange={(event: ChangeEvent<HTMLInputElement>) => setQuery(event.currentTarget.value)}
+                            />
+                        </label>
+                        <div className="forward-modal__targets" role="group" aria-label="Forwarding targets">
+                            {targets.length ? targets.map(({ thread }) => {
+                                const isSelected = selected.has(thread.key);
+                                const progress = forwarding.progress[thread.key];
+                                return (
+                                    <button
+                                        key={thread.key}
+                                        type="button"
+                                        className={isSelected ? 'forward-target forward-target--selected' : 'forward-target'}
+                                        aria-pressed={isSelected}
+                                        disabled={forwarding.status === 'submitting' || progress?.complete}
+                                        onClick={() => store.toggleForwardTarget(thread.key)}
+                                    >
+                                        <span className="avatar avatar--small" aria-hidden="true">
+                                            {thread.users[0]?.picUrl
+                                                ? <img src={thread.users[0].picUrl} alt="" width="40" height="40" />
+                                                : <span>{initials(thread.title)}</span>}
+                                        </span>
+                                        <span className="forward-target__label">
+                                            <strong>{thread.title}</strong>
+                                            <small>{thread.isGroup ? `${thread.users.length} members` : thread.users[0]?.username || 'Instagram'}</small>
+                                            {progress?.error && <span role="alert">{progress.error}</span>}
+                                        </span>
+                                        <span className="forward-target__check" aria-hidden="true">{progress?.complete ? '✓' : isSelected ? '✓' : ''}</span>
+                                    </button>
+                                );
+                            }) : <p className="forward-modal__empty">No matching conversations</p>}
+                        </div>
+                        <label className="forward-modal__comment">
+                            <span>Optional message</span>
+                            <textarea
+                                rows={2}
+                                value={forwarding.comment}
+                                placeholder="Sent before the forwarded message"
+                                disabled={forwarding.status === 'submitting' || commentLocked}
+                                onChange={(event: ChangeEvent<HTMLTextAreaElement>) => store.setForwardComment(event.currentTarget.value)}
+                            />
+                        </label>
+                        {forwarding.error && <p className="forward-modal__error" role="alert">{forwarding.error}</p>}
+                        <footer className="forward-modal__footer">
+                            <span aria-live="polite">{forwarding.selectedTargetIds.length} selected</span>
+                            <button
+                                type="button"
+                                disabled={!forwarding.selectedTargetIds.length || forwarding.status === 'submitting'}
+                                onClick={() => { void store.submitForwarding(); }}
+                            >
+                                {forwarding.status === 'submitting' ? 'Forwarding…' : forwarding.status === 'error' ? 'Retry' : 'Forward'}
+                            </button>
+                        </footer>
+                    </>
+                )}
+            </section>
+        </div>
+    );
+}
+
 function ReelModal({
     store,
     reel,
@@ -2045,7 +2221,7 @@ function ReelModal({
                                     title="Copy post URL"
                                     onClick={() => { void navigator.clipboard.writeText(targetUrl); }}
                                 >
-                                    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                                    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
                                         <rect x="8" y="8" width="11" height="11" rx="2" />
                                         <path d="M16 8V7a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h1" />
                                     </svg>

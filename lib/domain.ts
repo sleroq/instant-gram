@@ -213,6 +213,9 @@ export type SentMessage = {
     clientRequestId: string;
 };
 export type SentTextMessage = SentMessage & { timestampMs: number };
+export type ForwardMessageContent =
+    | { kind: 'text'; text: string }
+    | { kind: 'reel'; mediaId: string };
 export type SetReactionResult = {
     messageId: string;
     reactions: MessageReaction[];
@@ -375,6 +378,13 @@ export type InstagramRpcMap = {
         replyToMessageId?: string;
         offlineThreadingId: string;
     }) => Result<SentTextMessage>;
+    forwardMessage: (payload: {
+        targetThreadFbid: string;
+        sourceThreadIgId: string;
+        sourceIsViewer: boolean;
+        offlineThreadingId: string;
+        content: ForwardMessageContent;
+    }) => Result<SentMessage>;
     setReaction: (payload: {
         threadFbid: string;
         messageId: string;
@@ -409,4 +419,4 @@ export type InstagramRpcMap = {
 
 /** Capabilities exposed to the extension UI and routed through the background. */
 export type RpcMap = CoreRpcMap &
-    Pick<InstagramRpcMap, 'sendText' | 'setReaction'>;
+    Pick<InstagramRpcMap, 'sendText' | 'forwardMessage' | 'setReaction'>;

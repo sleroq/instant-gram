@@ -71,6 +71,29 @@ test('markThreadRead accepts captured false validation after a successful receip
     ]);
 });
 
+test('forwardMessage validates and parses the captured reel receipt', async () => {
+    const calls: Call[] = [];
+    const handlers = createInstagramRpcHandlers(executor({
+        IGDirectReelShareMutation: {
+            data: { xig_direct_clip_share_with_slide_msg_response: {
+                message_id: 'forwarded-message', timestamp_ms: '1786303825317',
+            } },
+        },
+    }, calls));
+    assert.deepEqual(await handlers.forwardMessage({
+        targetThreadFbid: '1776201113780017',
+        sourceThreadIgId: '340282366841710301244259951218690866993',
+        sourceIsViewer: false,
+        offlineThreadingId: '7492301276698669817',
+        content: { kind: 'reel', mediaId: '3958077625981405644' },
+    }), {
+        messageId: 'forwarded-message',
+        timestampMs: 1_786_303_825_317,
+        clientRequestId: '7492301276698669817',
+    });
+    assert.equal(calls[0].operation, 'IGDirectReelShareMutation');
+});
+
 test('semantic handlers dispatch to the catalog with exact caller-supplied send IDs', async () => {
     const calls: Call[] = [];
     const execute = executor(
@@ -421,7 +444,7 @@ test('every closed catalog operation has a semantic or secondary RPC route', () 
         Object.keys(INSTAGRAM_RPC_OPERATION_REACHABILITY).sort(),
         Object.keys(INSTAGRAM_GRAPHQL_OPERATIONS).sort(),
     );
-    assert.equal(Object.keys(INSTAGRAM_RPC_OPERATION_REACHABILITY).length, 35);
+    assert.equal(Object.keys(INSTAGRAM_RPC_OPERATION_REACHABILITY).length, 36);
     assert.equal(
         INSTAGRAM_RPC_OPERATION_REACHABILITY.IGDirectCutoutStickerShareMutation,
         'sendCutoutSticker',

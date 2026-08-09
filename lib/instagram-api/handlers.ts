@@ -9,6 +9,7 @@ import type {
 import type { InstagramGraphqlOperationName } from './catalog.ts';
 import {
     parseInboxResponse,
+    parseForwardedReelResponse,
     parseMarkThreadReadResponse,
     parseMarkThreadReadValidationResponse,
     parseMailboxId,
@@ -40,7 +41,7 @@ type AsyncHandlers<Map extends Record<keyof Map, (...args: never[]) => unknown>>
 };
 type CanonicalHandlerRpcMap = Pick<
     RpcMap,
-    'getInbox' | 'getThread' | 'sendText' | 'setReaction' | 'setReelLiked' |
+    'getInbox' | 'getThread' | 'sendText' | 'forwardMessage' | 'setReaction' | 'setReelLiked' |
     'setReelSaved' | 'togglePin'
 >;
 export type InstagramRpcHandlers = AsyncHandlers<CanonicalHandlerRpcMap>;
@@ -363,6 +364,41 @@ function createInstagramHandlers(
                 input.offlineThreadingId,
             );
         },
+        async forwardMessage(value: unknown) {
+            const payload = record(value);
+            exactKeys(payload, [
+                'targetThreadFbid', 'sourceThreadIgId',
+                'sourceIsViewer', 'offlineThreadingId', 'content',
+            ]);
+            const targetThreadFbid = requiredString(payload.targetThreadFbid, 'target thread FBID');
+            const sourceThreadIgId = requiredString(payload.sourceThreadIgId, 'source thread IG ID');
+            const offlineThreadingId = numericStringId(payload.offlineThreadingId, 'offline threading ID');
+            if (typeof payload.sourceIsViewer !== 'boolean')
+                throw new Error('Invalid Instagram forwarding sender state');
+            const content = record(payload.content, 'forwarding content');
+            if (content.kind === 'text') {
+                exactKeys(content, ['kind', 'text']);
+                const text = requiredString(content.text, 'forwarded text', MAX_TEXT_LENGTH);
+                return parseSentTextResponse(await execute('IGDirectTextSendMutation', {
+                    threadFbid: targetThreadFbid,
+                    offlineThreadingId,
+                    text,
+                    forwardedFromThreadId: sourceThreadIgId,
+                    isForwardedFromOwnMessage: payload.sourceIsViewer,
+                }), offlineThreadingId);
+            }
+            if (content.kind === 'reel') {
+                exactKeys(content, ['kind', 'mediaId']);
+                return parseForwardedReelResponse(await execute('IGDirectReelShareMutation', {
+                    targetThreadFbid,
+                    sourceThreadIgId,
+                    sourceIsViewer: payload.sourceIsViewer,
+                    offlineThreadingId,
+                    mediaId: numericStringId(content.mediaId, 'forwarded media ID'),
+                }), offlineThreadingId);
+            }
+            throw new Error('Unsupported Instagram forwarding content');
+        },
         async setReaction(value: unknown) {
             const payload = record(value);
             exactKeys(payload, ['threadFbid', 'messageId', 'emoji', 'remove']);
@@ -504,6 +540,7 @@ export function createInstagramRpcHandlers(
         getInbox: handlers.getInbox,
         getThread: handlers.getThread,
         sendText: handlers.sendText,
+        forwardMessage: handlers.forwardMessage,
         setReaction: handlers.setReaction,
         setReelLiked: handlers.setReelLiked,
         setReelSaved: handlers.setReelSaved,
@@ -539,6 +576,7 @@ export const INSTAGRAM_RPC_OPERATION_REACHABILITY = {
     useIGDMarkThreadAsReadMutation: 'markThreadRead',
     useIGDMarkThreadAsReadValidationMutation: 'markThreadRead',
     IGDirectTextSendMutation: 'sendText',
+    IGDirectReelShareMutation: 'forwardMessage',
     IGDirectReactionSendMutation: 'setReaction',
     PolarisAPILikePostMutation: 'setReelLiked',
     PolarisAPIUnlikePostMutation: 'setReelLiked',

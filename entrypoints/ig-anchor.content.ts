@@ -28,6 +28,7 @@ const REMOTE_RPC_NAMES = [
     'setReelLiked',
     'setReelSaved',
     'sendText',
+    'forwardMessage',
     'setReaction',
     'togglePin',
 ] as const satisfies readonly RemoteRpcName[];

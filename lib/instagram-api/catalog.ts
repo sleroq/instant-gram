@@ -232,7 +232,14 @@ export const INSTAGRAM_GRAPHQL_OPERATIONS = {
     IGDirectTextSendMutation: mutation(
         FRIENDLY_NAMES.sendText,
         DOC_IDS.sendText,
-        (input: { threadFbid: string; offlineThreadingId: string; text: string; replyToMessageId?: string }) => ({
+        (input: {
+            threadFbid: string;
+            offlineThreadingId: string;
+            text: string;
+            replyToMessageId?: string;
+            forwardedFromThreadId?: string;
+            isForwardedFromOwnMessage?: boolean;
+        }) => ({
             ig_thread_igid: input.threadFbid,
             offline_threading_id: input.offlineThreadingId,
             recipient_igids: null,
@@ -244,9 +251,37 @@ export const INSTAGRAM_GRAPHQL_OPERATIONS = {
             mentions: [],
             mentioned_user_ids: [],
             commands: null,
-            forwarded_from_thread_id: null,
-            is_forwarded_from_own_message: null,
+            forwarded_from_thread_id: input.forwardedFromThreadId ?? null,
+            is_forwarded_from_own_message: input.isForwardedFromOwnMessage ?? null,
             send_attribution: 'igd_web_chat_tab:in_thread',
+        }),
+    ),
+    IGDirectReelShareMutation: mutation(
+        FRIENDLY_NAMES.forwardReel,
+        DOC_IDS.forwardReel,
+        (input: {
+            targetThreadFbid: string;
+            sourceThreadIgId: string;
+            sourceIsViewer: boolean;
+            offlineThreadingId: string;
+            mediaId: string;
+        }) => ({
+            ig_media_igid: input.mediaId,
+            otid: input.offlineThreadingId,
+            data: {
+                forwarded_from_thread_id: input.sourceThreadIgId,
+                is_forwarded_from_own_message: input.sourceIsViewer,
+                offline_threading_id: input.offlineThreadingId,
+                recipient_users: null,
+                thread_id: input.targetThreadFbid,
+            },
+            clip_share_params: {
+                inventory_source: null,
+                send_attribution: null,
+                social_context_share_type: null,
+                text: null,
+                tracking_token: null,
+            },
         }),
     ),
     IGDirectReactionSendMutation: mutation(

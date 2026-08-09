@@ -83,6 +83,35 @@ test('text and read builders preserve captured nulls and string timestamps', () 
     );
 });
 
+test('reel forwarding uses the existing-thread branch from the captured client', () => {
+    const operation = operations.IGDirectReelShareMutation;
+    assert.equal(operation.docId, '26212720875066239');
+    assert.deepEqual(operation.buildVariables({
+        targetThreadFbid: 'target-operation-id',
+        sourceThreadIgId: 'source-large-id',
+        sourceIsViewer: false,
+        offlineThreadingId: '7492301276698669817',
+        mediaId: '3958077625981405644',
+    }, context), {
+        ig_media_igid: '3958077625981405644',
+        otid: '7492301276698669817',
+        data: {
+            forwarded_from_thread_id: 'source-large-id',
+            is_forwarded_from_own_message: false,
+            offline_threading_id: '7492301276698669817',
+            recipient_users: null,
+            thread_id: 'target-operation-id',
+        },
+        clip_share_params: {
+            inventory_source: null,
+            send_attribution: null,
+            social_context_share_type: null,
+            text: null,
+            tracking_token: null,
+        },
+    });
+});
+
 test('reaction builder matches the HAR-backed mutation variables exactly', () => {
     assert.deepEqual(
         operations.IGDirectReactionSendMutation.buildVariables(
@@ -151,7 +180,7 @@ test('conversation pin and unpin use distinct current web documents and exact va
 });
 
 test('catalog is a closed DM allowlist', () => {
-    assert.equal(Object.keys(operations).length, 35);
+    assert.equal(Object.keys(operations).length, 36);
     assert.equal(isInstagramGraphqlOperationName('IGDirectReactionSendMutation'), true);
     for (const shellOperation of [
         'PolarisFeedTimelinePaginationQuery',

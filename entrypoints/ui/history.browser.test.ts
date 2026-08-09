@@ -3031,7 +3031,7 @@ test('controlled drafts and composer actions remain per-thread and operable at n
         pointerType: 'touch', pointerId: 7, isPrimary: true, clientX: box!.x + 12, clientY: box!.y + 12,
     });
     const messageMenu = page.getByRole('menu', { name: 'Message actions' });
-    assert.deepEqual(await messageMenu.getByRole('menuitem').allTextContents(), ['Reply']);
+    assert.deepEqual(await messageMenu.getByRole('menuitem').allTextContents(), ['Reply', 'Forward']);
     await page.keyboard.press('Escape');
     await messageMenu.waitFor({ state: 'detached' });
     await page.waitForTimeout(850);

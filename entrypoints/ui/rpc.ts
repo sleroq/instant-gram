@@ -31,5 +31,6 @@ export const uiRpc: CompleteUiRpc = {
     getPins: () => call('getPins', undefined),
     togglePin: payload => call('togglePin', payload),
     sendText: payload => call('sendText', payload),
+    forwardMessage: payload => call('forwardMessage', payload),
     setReaction: payload => call('setReaction', payload),
 };

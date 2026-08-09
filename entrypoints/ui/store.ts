@@ -1,4 +1,5 @@
 import type {
+    ForwardMessageContent,
     IncomingDmSnapshot,
     Message,
     MessageReaction,
@@ -121,7 +122,29 @@ export type ReelState = {
     saveMutation?: ReelMutation;
 };
 
-export type FrontendStoreRpc = UiRpc & Pick<CompleteUiRpc, 'sendText' | 'setReaction'>;
+export type ForwardTargetProgress = {
+    commentSent: boolean;
+    complete: boolean;
+    targetThreadFbid?: string;
+    commentOfflineThreadingId?: string;
+    forwardOfflineThreadingId?: string;
+    error?: string;
+};
+
+export type ForwardingState = {
+    sourceThreadId: string;
+    sourceMessageId: string;
+    sourceThreadIgId: string;
+    sourceIsViewer: boolean;
+    content: ForwardMessageContent;
+    selectedTargetIds: string[];
+    comment: string;
+    status: 'idle' | 'submitting' | 'error' | 'success';
+    progress: Record<string, ForwardTargetProgress>;
+    error?: string;
+};
+
+export type FrontendStoreRpc = UiRpc & Pick<CompleteUiRpc, 'sendText' | 'forwardMessage' | 'setReaction'>;
 
 type IncomingSyncEnvironment = {
     isVisible: () => boolean;
@@ -151,6 +174,7 @@ export type FrontendState = {
         activeUrl?: string;
         byId: Record<string, ReelState>;
     };
+    forwarding?: ForwardingState;
 };
 
 const SIGNED_64_MAX = 9_223_372_036_854_775_807n;
@@ -225,6 +249,7 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
     let visibleWarmupKey = '';
     let visibleWarmupIds = new Set<string>();
     const generatedOfflineThreadingIds = new Set<string>();
+    let forwardRequest: symbol | undefined;
     let threadMutationRevision = 0;
     const threadMutationRevisions = new Map<string, number>();
     const reactionStateRevisions = new Map<string, number>();
@@ -930,7 +955,7 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
         }
     }
 
-    function nextOfflineThreadingId(history: HistoryState) {
+    function nextOfflineThreadingId(history?: HistoryState) {
         let id: string;
         do {
             const random = new Uint32Array(1);
@@ -946,8 +971,8 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
             id = value.toString();
         } while (
             generatedOfflineThreadingIds.has(id) ||
-            history.pendingSends[`local:${id}`] ||
-            history.failedSends[`local:${id}`]
+            history?.pendingSends[`local:${id}`] ||
+            history?.failedSends[`local:${id}`]
         );
         generatedOfflineThreadingIds.add(id);
         return id;
@@ -1120,6 +1145,85 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
         emit();
         void runSend(threadId, send);
         return localId;
+    }
+
+    function forwardingContent(message: Message) {
+        if (message.kind === 'text') return { kind: 'text' as const, text: message.text };
+        if (message.kind === 'reel_share' && message.mediaType === 'reel' && message.mediaId) {
+            return { kind: 'reel' as const, mediaId: message.mediaId };
+        }
+        return undefined;
+    }
+
+    async function submitForwarding() {
+        const forwarding = state.forwarding;
+        if (!forwarding || forwarding.status === 'submitting' || !forwarding.selectedTargetIds.length) {
+            return false;
+        }
+        const request = Symbol('forward');
+        const requestGeneration = generation;
+        forwardRequest = request;
+        forwarding.status = 'submitting';
+        forwarding.error = undefined;
+        for (const targetId of forwarding.selectedTargetIds) {
+            forwarding.progress[targetId] ??= { commentSent: false, complete: false };
+            forwarding.progress[targetId].error = undefined;
+        }
+        emit();
+        const comment = forwarding.comment.trim();
+
+        await Promise.all(forwarding.selectedTargetIds.map(async targetId => {
+            const progress = forwarding.progress[targetId];
+            if (progress.complete) return;
+            const targetThreadFbid = progress.targetThreadFbid ?? state.inbox.byId[targetId]?.threadFbid;
+            if (!targetThreadFbid) {
+                progress.error = 'Conversation is not available for forwarding.';
+                return;
+            }
+            progress.targetThreadFbid = targetThreadFbid;
+            try {
+                if (comment && !progress.commentSent) {
+                    const commentId = progress.commentOfflineThreadingId ??= nextOfflineThreadingId();
+                    const commentResult = await rpc.sendText({
+                        threadFbid: targetThreadFbid,
+                        text: comment,
+                        offlineThreadingId: commentId,
+                    });
+                    if (!commentResult.ok) throw new Error(commentResult.error.message);
+                    if (generation !== requestGeneration || forwardRequest !== request || state.forwarding !== forwarding) return;
+                    progress.commentSent = true;
+                }
+                const forwardId = progress.forwardOfflineThreadingId ??= nextOfflineThreadingId();
+                const result = await rpc.forwardMessage({
+                    targetThreadFbid,
+                    sourceThreadIgId: forwarding.sourceThreadIgId,
+                    sourceIsViewer: forwarding.sourceIsViewer,
+                    offlineThreadingId: forwardId,
+                    content: forwarding.content,
+                });
+                if (!result.ok) throw new Error(result.error.message);
+                if (generation !== requestGeneration || forwardRequest !== request || state.forwarding !== forwarding) return;
+                progress.complete = true;
+            } catch (error) {
+                if (generation === requestGeneration && forwardRequest === request && state.forwarding === forwarding) {
+                    progress.error = errorMessage(error);
+                }
+            }
+        }));
+
+        if (generation !== requestGeneration || forwardRequest !== request || state.forwarding !== forwarding) return false;
+        forwardRequest = undefined;
+        const failed = forwarding.selectedTargetIds.filter(id => !forwarding.progress[id]?.complete);
+        if (failed.length) {
+            forwarding.status = 'error';
+            forwarding.error = `Could not forward to ${failed.length} ${failed.length === 1 ? 'conversation' : 'conversations'}. Retry to continue.`;
+            emit();
+            return false;
+        }
+        forwarding.status = 'success';
+        forwarding.error = undefined;
+        emit();
+        return true;
     }
 
     async function runReaction(threadId: string, messageId: string, emoji: string) {
@@ -1924,6 +2028,58 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
             listeners.add(listener);
             return () => listeners.delete(listener);
         },
+        openForwarding(sourceThreadId: string, sourceMessageId: string) {
+            const history = state.histories[sourceThreadId];
+            const message = history?.byId[sourceMessageId];
+            const sourceThread = state.inbox.byId[sourceThreadId];
+            const content = message && forwardingContent(message);
+            if (!message || !content || !history?.viewerId || !sourceThread?.threadIgId) return false;
+            state.forwarding = {
+                sourceThreadId,
+                sourceMessageId,
+                sourceThreadIgId: sourceThread.threadIgId,
+                sourceIsViewer: 'senderId' in message && message.senderId === history.viewerId,
+                content,
+                selectedTargetIds: [],
+                comment: '',
+                status: 'idle',
+                progress: {},
+            };
+            emit();
+            return true;
+        },
+        closeForwarding() {
+            if (!state.forwarding || state.forwarding.status === 'submitting') return false;
+            state.forwarding = undefined;
+            emit();
+            return true;
+        },
+        toggleForwardTarget(targetId: string) {
+            const forwarding = state.forwarding;
+            const target = state.inbox.byId[targetId];
+            if (!forwarding || forwarding.status === 'submitting' || forwarding.status === 'success' ||
+                !target?.threadFbid) return false;
+            const selected = forwarding.selectedTargetIds.includes(targetId);
+            if (!selected && forwarding.selectedTargetIds.length >= 5) return false;
+            forwarding.selectedTargetIds = selected
+                ? forwarding.selectedTargetIds.filter(id => id !== targetId)
+                : [...forwarding.selectedTargetIds, targetId];
+            forwarding.status = 'idle';
+            forwarding.error = undefined;
+            emit();
+            return true;
+        },
+        setForwardComment(comment: string) {
+            const forwarding = state.forwarding;
+            if (!forwarding || forwarding.status === 'submitting' || forwarding.status === 'success' ||
+                Object.values(forwarding.progress).some(progress => progress.commentOfflineThreadingId)) return false;
+            forwarding.comment = comment;
+            forwarding.error = undefined;
+            if (forwarding.status === 'error') forwarding.status = 'idle';
+            emit();
+            return true;
+        },
+        submitForwarding,
         start() {
             const firstStart = !started;
             started = true;
@@ -1945,6 +2101,7 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
             unsubscribeIncomingVisibility?.();
             unsubscribeIncomingVisibility = undefined;
             incomingPollRequest = undefined;
+            forwardRequest = undefined;
             replyNavigationCancellations.forEach(cancel => cancel());
             replyNavigationCancellations.clear();
             cancelWarmups();

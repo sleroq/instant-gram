@@ -993,6 +993,87 @@ test('optimistic send retries one row and reconciles every normalized index', as
     store.destroy();
 });
 
+test('forwarding sends comments first, retries partial targets safely, and preserves selection', async () => {
+    installWindowTimers();
+    const events: string[] = [];
+    const commentIds: Record<string, string[]> = {};
+    const forwardIds: Record<string, string[]> = {};
+    const forwardPayloads: Parameters<CompleteUiRpc['forwardMessage']>[0][] = [];
+    let failCommentB = true;
+    let failForwardC = true;
+    const base = fakeRpc(async () => ({
+        ok: true,
+        value: { items: [thread('a'), thread('b'), thread('c')], hasNextPage: false },
+    }), async () => historyPage(0, 1, undefined, false));
+    const rpc: CompleteUiRpc = {
+        ...base,
+        sendText: async payload => {
+            (commentIds[payload.threadFbid] ??= []).push(payload.offlineThreadingId);
+            events.push(`comment:${payload.threadFbid}:${payload.text}`);
+            if (payload.threadFbid === '2' && failCommentB) {
+                failCommentB = false;
+                return { ok: false, error: { message: 'ambiguous comment failure' } };
+            }
+            return {
+                ok: true,
+                value: { messageId: `comment-${payload.threadFbid}`, timestampMs: 1, clientRequestId: payload.offlineThreadingId },
+            };
+        },
+        forwardMessage: async payload => {
+            forwardPayloads.push(payload);
+            (forwardIds[payload.targetThreadFbid] ??= []).push(payload.offlineThreadingId);
+            events.push(`forward:${payload.targetThreadFbid}`);
+            if (payload.targetThreadFbid === '3' && failForwardC) {
+                failForwardC = false;
+                return { ok: false, error: { message: 'ambiguous forward failure' } };
+            }
+            return { ok: true, value: { messageId: `forward-${payload.targetThreadFbid}`, clientRequestId: payload.offlineThreadingId } };
+        },
+    };
+    const store = createFrontendStore(rpc);
+    store.start();
+    await settle();
+    store.selectThread('a');
+    await settle();
+    assert.equal(store.openForwarding('a', 'm0'), true);
+    store.toggleForwardTarget('b');
+    store.toggleForwardTarget('c');
+    store.setForwardComment('  context first  ');
+
+    assert.equal(await store.submitForwarding(), false);
+    assert.deepEqual(events, [
+        'comment:2:context first', 'comment:3:context first',
+        'forward:3',
+    ]);
+    assert.equal(store.state.selectedThreadId, 'a');
+    assert.equal(store.state.forwarding?.status, 'error');
+    assert.equal(store.setForwardComment('different retry text'), false);
+    assert.equal(store.state.forwarding?.comment, '  context first  ');
+    store.state.inbox.byId.a.threadIgId = 'changed-source';
+    store.state.inbox.byId.b.threadFbid = 'changed-target';
+    const sourceMessage = store.state.histories.a.byId.m0;
+    if (sourceMessage.kind === 'text') sourceMessage.text = 'changed content';
+
+    assert.equal(await store.submitForwarding(), true);
+    assert.deepEqual(events.slice(0, 3), [
+        'comment:2:context first', 'comment:3:context first',
+        'forward:3',
+    ]);
+    assert.deepEqual(events.slice(3).sort(), [
+        'comment:2:context first', 'forward:2', 'forward:3',
+    ]);
+    assert.ok(events.indexOf('comment:2:context first', 1) < events.indexOf('forward:2'));
+    assert.equal(commentIds['2'][1], commentIds['2'][0]);
+    assert.equal(forwardIds['3'][1], forwardIds['3'][0]);
+    assert.equal(commentIds['3'].length, 1);
+    assert.ok(forwardPayloads.every(payload => payload.sourceThreadIgId.endsWith('97')));
+    assert.ok(forwardPayloads.every(payload => payload.content.kind === 'text' && payload.content.text === 'm0'));
+    assert.deepEqual(forwardPayloads.map(payload => payload.targetThreadFbid).sort(), ['2', '3', '3']);
+    assert.equal(store.state.selectedThreadId, 'a');
+    assert.equal(store.state.forwarding?.status, 'success');
+    store.destroy();
+});
+
 test('sending while genuinely away from newest preserves the viewport and history cursor', async () => {
     installWindowTimers();
     let resolveSend!: (result: Result<SentTextMessage>) => void;
@@ -2558,6 +2639,7 @@ function fakeRpc(
         getPins,
         togglePin,
         sendText,
+        forwardMessage: async () => ({ ok: false, error: { message: 'not used' } }),
         setReaction,
         getReelMedia: async () => ({
             ok: false,
@@ -2607,6 +2689,7 @@ function thread(key: string): Thread {
     return {
         key,
         threadFbid: String(key.charCodeAt(0) - 96),
+        threadIgId: `34028236684171030000000000000000000000${key.charCodeAt(0)}`,
         title: key,
         isGroup: false,
         isMuted: false,

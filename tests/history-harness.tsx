@@ -33,6 +33,7 @@ let postRefreshWithoutSoundtrack = false;
 const thread = {
     key: 'thread',
     threadFbid: '1001',
+    threadIgId: '340282366841710301244259951218690866993',
     title: 'History harness',
     isGroup: false,
     isMuted: false,
@@ -46,6 +47,7 @@ const secondThread = {
     ...thread,
     key: 'second-thread',
     threadFbid: '1002',
+    threadIgId: '340282366841710301244259951218690866994',
     title: 'Second history',
 };
 
@@ -505,6 +507,10 @@ async function mount(scenario: Scenario) {
                 },
             });
         },
+        forwardMessage: async payload => ({
+            ok: true,
+            value: { messageId: 'forwarded', clientRequestId: payload.offlineThreadingId },
+        }),
         setReaction: async payload => {
             reactionCalls.push(payload);
             if (scenario === 'keyboard-actions' && payload.messageId === 'keyboard-target') {

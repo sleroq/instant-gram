@@ -747,6 +747,13 @@ export function parseSentCutoutStickerResponse(json: unknown, clientRequestId: s
     );
 }
 
+export function parseForwardedReelResponse(json: unknown, clientRequestId: string): SentMessage {
+    return sentMessage(
+        responseData(json)?.xig_direct_clip_share_with_slide_msg_response,
+        clientRequestId,
+    );
+}
+
 function stickerImage(value: JsonObject | undefined) {
     const animated = objectProp(objectProp(value?.animated_info)?.webp);
     const still = objectProp(objectProp(value?.static_info)?.png);

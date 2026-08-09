@@ -46,6 +46,7 @@ const REMOTE_RPC_NAMES = [
     'setReelLiked',
     'setReelSaved',
     'sendText',
+    'forwardMessage',
     'setReaction',
 ] as const satisfies readonly DirectRemoteRpcName[];
 const enqueuePinMutation = createSerialTaskQueue();
