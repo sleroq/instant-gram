@@ -384,6 +384,9 @@ test('reel preview and modal own playback, carousel, actions, comments, links, a
     });
     const preview = page.getByRole('button', { name: 'Open reel from reel_author' });
     await preview.waitFor();
+    await page.waitForFunction(() => document.querySelector<HTMLVideoElement>(
+        '.message-reel-preview video',
+    )?.preload === 'auto');
     assert.equal(await page.locator('[data-message-id="reel-message"] a[href*="/reel/"]').count(), 0);
     const inlineGeometry = await page.locator('.message-reel-preview__media').evaluate(element => {
         const rect = element.getBoundingClientRect();
@@ -397,6 +400,7 @@ test('reel preview and modal own playback, carousel, actions, comments, links, a
             cardWidth: cardRect.width,
             width: video.getAttribute('width'),
             height: video.getAttribute('height'),
+            preload: video.preload,
         };
     });
     assert.ok(Math.abs(inlineGeometry.ratio - 9 / 16) < 0.01);
@@ -406,6 +410,7 @@ test('reel preview and modal own playback, carousel, actions, comments, links, a
     assert.deepEqual({ width: inlineGeometry.width, height: inlineGeometry.height }, {
         width: '540', height: '960',
     });
+    assert.equal(inlineGeometry.preload, 'auto');
     const inlinePlayAlignment = await page.locator('.message-reel-preview__badge').evaluate(badge => {
         const badgeRect = badge.getBoundingClientRect();
         const iconRect = badge.querySelector('svg')!.getBoundingClientRect();
@@ -2137,7 +2142,7 @@ test('Vim keys navigate chats and bounded history, preserve thread focus, and re
     await page.close();
 });
 
-test('focused message Enter opens only an existing share action and Space leaves one default reaction', async () => {
+test('focused message Enter opens only an existing share action and Space toggles the default reaction', async () => {
     const page = await openHarness();
     await page.evaluate(() => window.historyHarness.mount('keyboard-actions'));
     const initialViewport = await page.evaluate(() =>
@@ -2206,14 +2211,18 @@ test('focused message Enter opens only an existing share action and Space leaves
     )?.textContent?.includes('❤'));
     assert.equal(await target.evaluate(row => row.dispatchEvent(new KeyboardEvent('keydown', {
         key: ' ', code: 'Space', bubbles: true, cancelable: true,
-    }))), true, 'the already-current default is a safe unhandled no-op');
-    assert.equal((await page.evaluate(() => window.historyHarness.reactionCalls())).length, 1);
+    }))), false, 'Space must handle removal of the current default');
+    assert.deepEqual((await page.evaluate(() => window.historyHarness.reactionCalls())).at(-1), {
+        threadFbid: '1001', messageId: 'keyboard-target', emoji: '❤', remove: true,
+    });
 
     const already = page.locator('[data-message-id="keyboard-already"]');
     assert.equal(await already.evaluate(row => row.dispatchEvent(new KeyboardEvent('keydown', {
         key: ' ', code: 'Space', bubbles: true, cancelable: true,
-    }))), true);
-    assert.equal((await page.evaluate(() => window.historyHarness.reactionCalls())).length, 1);
+    }))), false);
+    assert.deepEqual((await page.evaluate(() => window.historyHarness.reactionCalls())).at(-1), {
+        threadFbid: '1001', messageId: 'keyboard-already', emoji: '❤', remove: true,
+    });
 
     const failure = page.locator('[data-message-id="keyboard-failure"]');
     await failure.focus();
@@ -2294,9 +2303,12 @@ test('focused message Enter opens only an existing share action and Space leaves
     await switchedAlready.focus();
     assert.equal(await switchedAlready.evaluate(row => row.dispatchEvent(new KeyboardEvent('keydown', {
         key: ' ', code: 'Space', bubbles: true, cancelable: true,
-    }))), true, 'the shortcut must use the switched thread normalized state');
+    }))), false, 'the shortcut must use the switched thread normalized state');
+    assert.deepEqual((await page.evaluate(() => window.historyHarness.reactionCalls())).at(-1), {
+        threadFbid: '1001', messageId: 'keyboard-already', emoji: '❤', remove: false,
+    });
 
-    assert.equal((await page.evaluate(() => window.historyHarness.reactionCalls())).length, callsBeforeSuppression);
+    assert.equal((await page.evaluate(() => window.historyHarness.reactionCalls())).length, callsBeforeSuppression + 1);
     const finalState = await page.evaluate(() => ({
         calls: window.historyHarness.calls(),
         viewportIds: window.historyHarness.historyState('thread').viewportIds,

@@ -39,6 +39,7 @@ const thread = {
     isMuted: false,
     folder: 'PRIMARY' as const,
     lastActivityMs: 0,
+    isUnread: false,
     serverIsPin: false,
     users: [],
 };
@@ -513,7 +514,7 @@ async function mount(scenario: Scenario) {
         }),
         setReaction: async payload => {
             reactionCalls.push(payload);
-            if (scenario === 'keyboard-actions' && payload.messageId === 'keyboard-target') {
+            if (scenario === 'keyboard-actions' && payload.messageId === 'keyboard-target' && !payload.remove) {
                 return new Promise(resolve => {
                     resolveReaction = () => resolve({
                         ok: true,
@@ -539,6 +540,7 @@ async function mount(scenario: Scenario) {
                 },
             };
         },
+        markThreadRead: async () => ({ ok: true as const, value: { success: true as const } }),
         getReelMedia: async () => {
             if (scenario !== 'reel' && scenario !== 'reel-delayed' && scenario !== 'post') return { ok: false, error: { message: 'not used' } };
             reelMediaCalls++;

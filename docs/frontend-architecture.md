@@ -253,12 +253,16 @@ to the numeric media ID using the relationship proven by sanitized
 `GET /api/v1/media/<id>/info/` and accepts the result only when both REST `pk`
 and `code` match. The parser retains all unique captured `video_versions`.
 
-Every loaded initial or older history page scans its messages for reel shares.
-The store deduplicates by shortcode, starts at most two reel preloads at once,
-and spends at most eight preload starts per store lifetime. This includes inbox
-warmups, so a later modal open reads the same cache synchronously rather than
-creating a component-owned request/cache. Explicit open is outside that budget
-and waits for an overlapping preload instead of issuing a duplicate request.
+Every loaded history page scans its messages for reel shares and normalizes their
+shortcodes. Selected initial pages and incoming tails enqueue newest-first
+speculative media-info preloads; unopened-chat warmups and older pages wait for a
+viewport signal instead of spending bandwidth offscreen. The store deduplicates
+by shortcode, starts at most two reel preloads at once, and spends at most eight
+speculative preload starts per store lifetime. Near-visible shares are not
+blocked by that lifetime budget, but use the same two-request queue. A later
+modal open reads the same cache synchronously rather than creating a
+component-owned request/cache. Explicit open is outside that budget and waits
+for an overlapping preload instead of issuing a duplicate request.
 
 Comments are deliberately not part of preload. `openReel(shortcode, mediaId?)`
 records modal intent, ensures media, and only then requests the initial comments
@@ -364,13 +368,16 @@ asynchronous preload completion invalidates only its reel-bearing message row
 instead of leaving the XMA dimensions/source mounted indefinitely.
 Any cache-arrival geometry correction stays under the existing history
 `ResizeObserver` anchor contract rather than media load handlers. Inline history
-video never starts playback. It may preload metadata and display its poster, but
-playback starts only from an explicit action in the modal player. An intersection
+video never starts playback. It preloads metadata offscreen and switches to the
+browser's automatic media preload hint inside the same 160px near-viewport
+boundary, allowing the modal's identical signed CDN URL to reuse browser-cached
+video data without downloading every loaded reel. Playback starts only from an
+explicit action in the modal player. An intersection
 observer plus a direct 160px scrollport geometry check instead reports visible or
 near-visible shortcodes to the store. The bounded two-request/eight-start preload
 queue moves queued targets ahead. A normalized visible target outside the first
-eight candidates displaces an unstarted low-priority candidate without increasing
-the actual-start budget or creating a component cache; an
+eight speculative candidates may start outside that lifetime budget without
+creating a component cache; an
 explicit open still joins an overlapping request. Comments remain excluded from
 preload and begin only after explicit open and media readiness.
 
@@ -667,13 +674,12 @@ while an `inline_share` with its parser-provided `targetUrl` uses the same
 `target="_blank"` link. Plain text, images without an action, activity, and
 unsupported rows do nothing; the UI neither derives nor invents Instagram URLs.
 Plain Space on a reaction-capable server row applies `❤`, the default reaction.
-The row treats an existing viewer `❤` as a safe no-op, and a pending mutation
-remains single-flight. The row reads the
-current normalized mutation and reaction synchronously: only a newly accepted
-reaction prevents Space scrolling, while pending and already-default no-ops do
-not. Editors, modifier chords, nested links/buttons, contextual surfaces, and
-dialogs retain their native keys. These actions use the normalized current
-message ID and existing stable row-key bridge, so pane focus survives thread
+If the viewer already has `❤`, Space removes it; a pending mutation remains
+single-flight. The row reads the current normalized mutation and reaction
+synchronously: an accepted add or removal prevents Space scrolling, while a
+pending no-op does not. Editors, modifier chords, nested links/buttons,
+contextual surfaces, and dialogs retain their native keys. These actions use the
+normalized current message ID and existing stable row-key bridge, so pane focus survives thread
 reuse without creating parallel selection or mutation state.
 
 Menus expose only capabilities already owned by this frontend. Selected and

@@ -1661,22 +1661,22 @@ test('visible reel priority moves queued media ahead without duplicating active 
     await settle();
     store.selectThread('a');
     await settle();
-    assert.deepEqual(calls, ['P0', 'P1']);
+    assert.deepEqual(calls, ['P11', 'P10']);
 
-    store.prioritizeReelPreloads(['P10']);
-    resolvers.get('P0')!({ ok: true, value: reelMedia('P0', '2000', 'https://cdn/P0.mp4') });
-    resolvers.delete('P0');
+    store.prioritizeReelPreloads(['P0']);
+    resolvers.get('P11')!({ ok: true, value: reelMedia('P11', '2011', 'https://cdn/P11.mp4') });
+    resolvers.delete('P11');
     await settle();
-    assert.deepEqual(calls, ['P0', 'P1', 'P10']);
+    assert.deepEqual(calls, ['P11', 'P10', 'P0']);
 
-    const opening = store.openReel('P1', '2001');
-    assert.equal(calls.filter(shortcode => shortcode === 'P1').length, 1);
-    resolvers.get('P1')!({ ok: true, value: reelMedia('P1', '2001', 'https://cdn/P1.mp4') });
-    resolvers.delete('P1');
+    const opening = store.openReel('P10', '2010');
+    assert.equal(calls.filter(shortcode => shortcode === 'P10').length, 1);
+    resolvers.get('P10')!({ ok: true, value: reelMedia('P10', '2010', 'https://cdn/P10.mp4') });
+    resolvers.delete('P10');
     assert.equal(await opening, true);
-    assert.equal(calls.filter(shortcode => shortcode === 'P1').length, 1);
-    assert.equal(store.state.reels.byId.P1.comments.status, 'ready');
-    while (calls.length < 8) {
+    assert.equal(calls.filter(shortcode => shortcode === 'P10').length, 1);
+    assert.equal(store.state.reels.byId.P10.comments.status, 'ready');
+    while (calls.length < 9) {
         const shortcode = calls.find(candidate => resolvers.has(candidate));
         assert.ok(shortcode);
         resolvers.get(shortcode)!({
@@ -1686,9 +1686,9 @@ test('visible reel priority moves queued media ahead without duplicating active 
         resolvers.delete(shortcode);
         await settle();
     }
-    assert.equal(calls.length, 8);
-    assert.ok(calls.includes('P10'));
-    assert.equal(calls.includes('P7'), false, 'visible reel should displace the last unstarted preload');
+    assert.equal(calls.length, 9);
+    assert.ok(calls.includes('P0'));
+    assert.equal(calls.includes('P3'), false, 'only eight speculative reels should start');
     store.destroy();
 });
 

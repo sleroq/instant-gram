@@ -1253,12 +1253,7 @@ const MessageRow = memo(function MessageRow({
         }
 
         const currentHistory = store.state.histories[threadId];
-        const currentMessage = currentHistory?.byId[message.id];
-        const currentViewerReaction = currentMessage?.reactions?.find(
-            reaction => reaction.senderId === currentHistory.viewerId,
-        )?.reaction;
-        if (!eligibleForActions || currentHistory?.reactionMutations[message.id]?.status === 'pending' ||
-            currentViewerReaction === DEFAULT_REACTION) return;
+        if (!eligibleForActions || currentHistory?.reactionMutations[message.id]?.status === 'pending') return;
         event.preventDefault();
         void store.setReaction(threadId, message.id, DEFAULT_REACTION);
     };
@@ -1861,6 +1856,7 @@ function InlineReel({
 }) {
     const rootRef = useRef<HTMLButtonElement>(null as unknown as HTMLButtonElement);
     const videoRef = useRef<HTMLVideoElement>(null as unknown as HTMLVideoElement);
+    const [shouldPreloadVideo, setShouldPreloadVideo] = useState(false);
     const video = item?.kind === 'video' ? item : undefined;
     const mediaWidth = item?.width ?? message.previewWidth;
     const mediaHeight = item?.height ?? message.previewHeight;
@@ -1884,12 +1880,16 @@ function InlineReel({
             const rootRect = root.getBoundingClientRect();
             const historyRect = history.getBoundingClientRect();
             if (rootRect.width > 0 && rootRect.height > 0 &&
-                rootRect.bottom >= historyRect.top - 160 && rootRect.top <= historyRect.bottom + 160)
+                rootRect.bottom >= historyRect.top - 160 && rootRect.top <= historyRect.bottom + 160) {
                 store.prioritizeReelPreloads([message.shortcode]);
+                setShouldPreloadVideo(true);
+            }
         };
         const observer = new IntersectionObserver(entries => {
-            if (entries.some(entry => entry.isIntersecting))
+            if (entries.some(entry => entry.isIntersecting)) {
                 store.prioritizeReelPreloads([message.shortcode]);
+                setShouldPreloadVideo(true);
+            }
         }, { root: history, rootMargin: '160px 0px', threshold: 0 });
         observer.observe(root);
         history.addEventListener('scroll', checkPosition, { passive: true });
@@ -1923,7 +1923,7 @@ function InlineReel({
                     muted
                     loop
                     playsInline
-                    preload="metadata"
+                    preload={shouldPreloadVideo ? 'auto' : 'metadata'}
                     width={video.width}
                     height={video.height}
                     aria-hidden="true"

@@ -250,7 +250,7 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
     const reelLikeReceiptRevisions = new Map<string, number>();
     const reelSaveReceiptRevisions = new Map<string, number>();
     const reelMediaSettledListeners = new Map<string, Set<() => void>>();
-    const reelPreloadQueue: { shortcode: string; mediaId?: string }[] = [];
+    const reelPreloadQueue: { shortcode: string; mediaId?: string; budgeted: boolean }[] = [];
     const queuedReelPreloads = new Set<string>();
     let activeReelPreloads = 0;
     let reelPreloadsStarted = 0;
@@ -460,7 +460,7 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
             queuedReelPreloads.delete(next.shortcode);
             if (state.reels.byId[next.shortcode]?.media || reelMediaRequests.has(next.shortcode)) continue;
             activeReelPreloads++;
-            reelPreloadsStarted++;
+            if (next.budgeted) reelPreloadsStarted++;
             void loadReelMedia(next.shortcode, next.mediaId).finally(() => {
                 activeReelPreloads--;
                 if (generation >= 0) drainReelPreloads();
@@ -468,19 +468,20 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
         }
     }
 
-    function scheduleReelsFromMessages(messages: Message[]) {
-        for (const message of messages) {
+    function scheduleReelsFromMessages(messages: Message[], shouldPreload = true) {
+        for (const message of [...messages].reverse()) {
             if (message.kind !== 'reel_share') continue;
             const shortcode = message.shortcode;
             reelState(shortcode, message.mediaId);
             if (
-                reelPreloadsStarted + reelPreloadQueue.length >= 8 ||
+                !shouldPreload ||
+                reelPreloadsStarted + reelPreloadQueue.filter(item => item.budgeted).length >= 8 ||
                 queuedReelPreloads.has(shortcode) ||
                 reelMediaRequests.has(shortcode) ||
                 state.reels.byId[shortcode]?.media
             ) continue;
             queuedReelPreloads.add(shortcode);
-            reelPreloadQueue.push({ shortcode, mediaId: message.mediaId });
+            reelPreloadQueue.push({ shortcode, mediaId: message.mediaId, budgeted: true });
         }
         drainReelPreloads();
     }
@@ -488,7 +489,7 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
     function prioritizeReelPreloads(shortcodes: string[]) {
         if (!shortcodes.length) return;
         const priority = [...new Set(shortcodes)];
-        const prioritized: { shortcode: string; mediaId?: string }[] = [];
+        const prioritized: { shortcode: string; mediaId?: string; budgeted: boolean }[] = [];
         for (const shortcode of priority) {
             const queuedIndex = reelPreloadQueue.findIndex(item => item.shortcode === shortcode);
             if (queuedIndex >= 0) {
@@ -497,18 +498,15 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
             }
             const reel = state.reels.byId[shortcode];
             if (
-                !reel || reel.media || reelMediaRequests.has(shortcode) ||
-                reelPreloadsStarted + prioritized.length >= 8
+                !reel || reel.media || reelMediaRequests.has(shortcode)
             ) continue;
-            prioritized.push({ shortcode, mediaId: reel.mediaIdHint });
+            // Near-visible media is user-directed work. It remains concurrency
+            // bounded, but must not be blocked by the speculative lifetime budget.
+            prioritized.push({ shortcode, mediaId: reel.mediaIdHint, budgeted: false });
             queuedReelPreloads.add(shortcode);
         }
         if (!prioritized.length) return;
         reelPreloadQueue.unshift(...prioritized);
-        const remainingCapacity = Math.max(0, 8 - reelPreloadsStarted);
-        while (reelPreloadQueue.length > remainingCapacity) {
-            queuedReelPreloads.delete(reelPreloadQueue.pop()!.shortcode);
-        }
         drainReelPreloads();
     }
 
@@ -993,7 +991,7 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
                 if (!history.byId[message.id]) history.listedIds.push(message.id);
                 history.byId[message.id] = message;
             }
-            scheduleReelsFromMessages(result.value.items);
+            scheduleReelsFromMessages(result.value.items, !isPreloading);
             history.cursor = result.value.cursor;
             history.hasOlder = result.value.hasNextPage;
             history.viewerId = result.value.viewerId;
@@ -1418,7 +1416,9 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
             mergeIncomingMessage(threadId, history, message, reactionRevisions);
         }
         if (olderIds.length) history.listedIds = [...olderIds, ...history.listedIds];
-        scheduleReelsFromMessages(items);
+        // Older pages can contain many offscreen shares. Normalize them now and
+        // let the viewport signal which media is worth warming.
+        scheduleReelsFromMessages(items, false);
         return olderIds.length;
     }
 
