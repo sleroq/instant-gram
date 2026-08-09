@@ -284,11 +284,22 @@ test('image messages render with reserved geometry and a useful inbox summary', 
     await page.waitForFunction(() => document.querySelector('.message-images img'));
     const result = await page.evaluate(() => {
         const image = document.querySelector<HTMLImageElement>('.message-images img')!;
+        const bubble = image.closest<HTMLElement>('.message__bubble')!;
+        const time = bubble.querySelector<HTMLElement>('.message__body > time')!;
+        const imageRect = image.getBoundingClientRect();
+        const timeRect = time.getBoundingClientRect();
+        const bubbleStyle = getComputedStyle(bubble);
         return {
             width: image.getAttribute('width'),
             height: image.getAttribute('height'),
             alt: image.alt,
             summary: document.querySelector('.chat-row__snippet')?.textContent,
+            timePosition: getComputedStyle(time).position,
+            timeInsideImage: timeRect.right <= imageRect.right && timeRect.bottom <= imageRect.bottom &&
+                timeRect.left >= imageRect.left && timeRect.top >= imageRect.top,
+            bubblePadding: bubbleStyle.padding,
+            bubbleBackground: bubbleStyle.backgroundColor,
+            bubbleBorderWidth: bubbleStyle.borderWidth,
         };
     });
     assert.deepEqual(result, {
@@ -296,6 +307,11 @@ test('image messages render with reserved geometry and a useful inbox summary', 
         height: '960',
         alt: 'Shared image',
         summary: 'Photo',
+        timePosition: 'absolute',
+        timeInsideImage: true,
+        bubblePadding: '0px',
+        bubbleBackground: 'rgba(0, 0, 0, 0)',
+        bubbleBorderWidth: '0px',
     });
     await page.close();
 });

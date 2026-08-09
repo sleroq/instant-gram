@@ -395,10 +395,11 @@ creating a component cache; an
 explicit open still joins an overlapping request. Comments remain excluded from
 preload and begin only after explicit open and media readiness.
 
-Shared reel and inline-post rows are media surfaces rather than generic message
-bubbles. Their compact author identity is overflow-safe, their bubble background
-and padding are removed, grouped reactions are a sibling beneath content, and
-their absolute bottom-right timestamp is revealed only by row hover or focus.
+Shared reel, inline-post, and uploaded-image rows are media surfaces rather than
+generic message bubbles. Their compact author identity is overflow-safe, their
+bubble background, border, and padding are removed, grouped reactions are a
+sibling beneath content, and their absolute bottom-right timestamp is revealed
+only by row hover or focus.
 Reply context and history-level date grouping remain intact. These behaviors are
 independently implemented; no Telegram source, styles, icons, or assets were used.
 

@@ -877,7 +877,7 @@ test('an older reply window advances through locally normalized newer history', 
     installWindowTimers();
     const store = createFrontendStore(fakeRpc(async () => ({
         ok: true, value: { items: [thread('a')], hasNextPage: false },
-    }), async () => historyPage(0, 160, undefined, false)));
+    }), async () => historyPage(0, 240, undefined, false)));
     store.start();
     await settle();
     store.selectThread('a');
@@ -891,6 +891,12 @@ test('an older reply window advances through locally normalized newer history', 
     store.completeHistoryReplacement('a');
     assert.equal(store.revealNewerHistory('a'), true);
     assert.deepEqual(store.state.histories.a.viewportIds, messageIds(80, 160));
+    store.completeHistoryReplacement('a');
+    assert.equal(store.revealNewerHistory('a'), true);
+    assert.deepEqual(store.state.histories.a.viewportIds, messageIds(120, 200));
+    store.completeHistoryReplacement('a');
+    assert.equal(store.revealNewerHistory('a'), true);
+    assert.deepEqual(store.state.histories.a.viewportIds, messageIds(160, 240));
     store.completeHistoryReplacement('a');
     assert.equal(store.revealNewerHistory('a'), false);
     store.destroy();

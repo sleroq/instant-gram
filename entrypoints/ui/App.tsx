@@ -1315,6 +1315,7 @@ const MessageRow = memo(function MessageRow({
     const reactionRef = useRef<HTMLButtonElement>(null as unknown as HTMLButtonElement);
     const isServerMessage = !message.id.startsWith('local:');
     const isSharedPost = message.kind === 'reel_share' || message.kind === 'inline_share';
+    const isMediaMessage = isSharedPost || message.kind === 'image';
     const eligibleForActions = isServerMessage && 'senderId' in message;
     const groupedReactions = groupReactions(message, viewerId);
     const viewerReaction = message.reactions?.find(reaction => reaction.senderId === viewerId)?.reaction;
@@ -1432,9 +1433,9 @@ const MessageRow = memo(function MessageRow({
                     <time className="status-surface" dateTime={new Date(message.ts).toISOString()}>{formatMessageDate(message.ts)}</time>
                 </div>
             )}
-            <div className={`message${outgoing ? ' message--outgoing' : ''}${grouped ? ' message--grouped' : ''}${isSharedPost ? ' message--shared-post' : ''}${message.kind === 'reaction_log' || message.kind === 'activity' ? ' message--log' : ''}`}>
+            <div className={`message${outgoing ? ' message--outgoing' : ''}${grouped ? ' message--grouped' : ''}${isMediaMessage ? ' message--media' : ''}${message.kind === 'reaction_log' || message.kind === 'activity' ? ' message--log' : ''}`}>
                 <div className="message__stack">
-                <div className={`message__bubble${isSharedPost ? ' message__bubble--shared-post' : ''}`}>
+                <div className={`message__bubble${isMediaMessage ? ' message__bubble--media' : ''}`}>
                     {senderName && <strong className="message__sender-name">{senderName}</strong>}
                     {'replyPreview' in message && message.replyPreview && (
                         <ReplyPreview
@@ -1445,7 +1446,7 @@ const MessageRow = memo(function MessageRow({
                             targetId={'repliedTo' in message ? message.repliedTo : undefined}
                         />
                     )}
-                    <div className={`message__body${isSharedPost ? ' message__body--shared-post' : ''}`}>
+                    <div className={`message__body${isMediaMessage ? ' message__body--media' : ''}`}>
                         <MessageContent store={store} message={message} reelItem={reelItem} />
                         <time dateTime={new Date(message.ts).toISOString()}>
                             {formatMessageTime(message.ts)}

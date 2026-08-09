@@ -814,14 +814,15 @@ body.is-resizing-sidebar * {
     }
 }
 
-.message--shared-post .message__stack {
+.message--media .message__stack {
     max-width: min(520px, 90%);
 }
 
-.message__bubble--shared-post {
+.message__bubble--media {
     padding: 0;
     background: transparent !important;
     border-radius: 0 !important;
+    border: 0;
     gap: 7px;
 }
 
@@ -1257,7 +1258,7 @@ body.is-resizing-sidebar * {
     }
 }
 
-.message__body--shared-post {
+.message__body--media {
     position: relative;
     display: block;
 
@@ -1360,7 +1361,7 @@ body.is-resizing-sidebar * {
     border-radius: 12px;
 }
 
-.message__bubble--shared-post .message-card {
+.message__bubble--media .message-card {
     width: min(300px, 70vw);
 }
 
