@@ -1855,7 +1855,6 @@ function InlineReel({
     item?: ReelMediaItem;
 }) {
     const rootRef = useRef<HTMLButtonElement>(null as unknown as HTMLButtonElement);
-    const videoRef = useRef<HTMLVideoElement>(null as unknown as HTMLVideoElement);
     const [shouldPreloadVideo, setShouldPreloadVideo] = useState(false);
     const video = item?.kind === 'video' ? item : undefined;
     const mediaWidth = item?.width ?? message.previewWidth;
@@ -1914,33 +1913,33 @@ function InlineReel({
             }}
         >
             <span className="message-reel-preview__media" style={mediaStyle}>
-                {video ? (
-                    <video
-                    key={video.id}
-                    ref={videoRef}
-                    src={video.videoUrl}
-                    poster={video.posterUrl || message.thumbUrl}
-                    muted
-                    loop
-                    playsInline
-                    preload={shouldPreloadVideo ? 'auto' : 'metadata'}
-                    width={video.width}
-                    height={video.height}
-                    aria-hidden="true"
-                    />
-                ) : (
-                    <img
-                        src={item?.posterUrl || message.thumbUrl}
-                        alt=""
-                        width={mediaWidth}
-                        height={mediaHeight}
-                        loading="lazy"
-                    />
-                )}
+                <img
+                    className="message-reel-preview__thumbnail"
+                    src={message.thumbUrl}
+                    alt=""
+                    width={mediaWidth}
+                    height={mediaHeight}
+                    loading="lazy"
+                />
                 <SharedPostAuthor store={store} message={message} />
                 <span className="message-reel-preview__badge" aria-hidden="true">
                     {message.mediaType === 'reel' || item?.kind === 'video' ? <PlayIcon /> : <PostIcon />}
                 </span>
+                {video && (
+                    <video
+                        key={video.id}
+                        className="message-reel-preview__video-preload"
+                        src={video.videoUrl}
+                        poster={video.posterUrl || message.thumbUrl}
+                        muted
+                        loop
+                        playsInline
+                        preload={shouldPreloadVideo ? 'auto' : 'metadata'}
+                        width={video.width}
+                        height={video.height}
+                        aria-hidden="true"
+                    />
+                )}
             </span>
             {message.caption && <span>{message.caption}</span>}
         </button>

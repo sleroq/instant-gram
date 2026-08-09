@@ -305,6 +305,7 @@ test('delayed reel metadata updates inline ratio without moving the history anch
     await page.evaluate(() => window.historyHarness.mount('reel-delayed'));
     const previewMedia = page.locator('.message-reel-preview__media');
     await previewMedia.waitFor();
+    await previewMedia.locator('img').evaluate(image => { image.dataset.originalThumbnail = 'true'; });
     const anchor = page.locator('[data-message-id="m30"]');
     await anchor.scrollIntoViewIfNeeded();
     await anchor.focus();
@@ -355,6 +356,8 @@ test('delayed reel metadata updates inline ratio without moving the history anch
             objectFit: getComputedStyle(media).objectFit,
             overflows: preview.scrollWidth > preview.clientWidth || preview.scrollHeight > preview.clientHeight,
             source: preview.querySelector('video')?.getAttribute('src'),
+            thumbnailRetained: preview.querySelector('img')?.dataset.originalThumbnail,
+            preloadHidden: getComputedStyle(preview.querySelector('video')!).opacity,
             focusedId: document.activeElement?.closest<HTMLElement>('[data-message-id]')?.dataset.messageId,
             viewportIds: window.historyHarness.historyState('thread').viewportIds,
             calls: window.historyHarness.calls(),
@@ -368,6 +371,8 @@ test('delayed reel metadata updates inline ratio without moving the history anch
     assert.equal(after.objectFit, 'contain');
     assert.equal(after.overflows, false);
     assert.match(after.source ?? '', /^data:video\/mp4/);
+    assert.equal(after.thumbnailRetained, 'true');
+    assert.equal(after.preloadHidden, '0');
     assert.ok(Math.abs(after.anchorTop - before.anchorTop) < 1);
     assert.equal(after.focusedId, 'm30');
     assert.deepEqual(after.viewportIds, before.viewportIds);

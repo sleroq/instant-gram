@@ -1395,6 +1395,13 @@ body.is-resizing-sidebar * {
         object-fit: contain;
     }
 
+    .message-reel-preview__video-preload {
+        position: absolute;
+        inset: 0;
+        opacity: 0;
+        pointer-events: none;
+    }
+
     &:hover .message-reel-preview__badge,
     &:focus-visible .message-reel-preview__badge {
         opacity: 1;

@@ -264,6 +264,12 @@ modal open reads the same cache synchronously rather than creating a
 component-owned request/cache. Explicit open is outside that budget and waits
 for an overlapping preload instead of issuing a duplicate request.
 
+Inline shares retain the DM thumbnail as their visible media while post info
+loads. Once metadata arrives, a video item is mounted invisibly for native byte
+preloading behind that stable thumbnail; the preview never swaps its painted
+media node merely to warm the modal source, avoiding a blank frame during the
+metadata update.
+
 Comments are deliberately not part of preload. `openReel(shortcode, mediaId?)`
 records modal intent, ensures media, and only then requests the initial comments
 page. The modal loads subsequent pages only after the user scrolls the bounded
