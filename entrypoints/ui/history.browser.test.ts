@@ -2352,6 +2352,113 @@ test('sending at bottom follows the outgoing message', async () => {
     await page.close();
 });
 
+test('incoming messages follow at bottom and preserve a scrolled-up reader', async () => {
+    const page = await openHarness({ width: 900, height: 520 });
+    await page.evaluate(() => window.historyHarness.mount('mutations'));
+    await page.locator('[data-message-id]').first().waitFor();
+    await page.evaluate(() => {
+        const scroller = document.querySelector<HTMLElement>('.messages')!;
+        scroller.scrollTop = scroller.scrollHeight;
+        scroller.dispatchEvent(new Event('scroll'));
+        window.historyHarness.applyIncoming('thread', 'incoming-bottom', 10_000);
+    });
+    await page.locator('[data-message-id="incoming-bottom"]').waitFor();
+    const bottomDistance = await page.evaluate(() => {
+        const scroller = document.querySelector<HTMLElement>('.messages')!;
+        return scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+    });
+    assert.ok(bottomDistance <= 2, `incoming bottom follow ended ${bottomDistance}px away`);
+
+    const before = await page.evaluate(() => {
+        const scroller = document.querySelector<HTMLElement>('.messages')!;
+        scroller.scrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight - 250);
+        scroller.dispatchEvent(new Event('scroll'));
+        const top = scroller.getBoundingClientRect().top;
+        const row = [...scroller.querySelectorAll<HTMLElement>('[data-message-id]')]
+            .find(item => item.getBoundingClientRect().bottom > top)!;
+        const result = {
+            id: row.dataset.messageId!,
+            top: row.getBoundingClientRect().top,
+            viewportIds: window.historyHarness.historyState('thread').viewportIds,
+        };
+        window.historyHarness.applyIncoming('thread', 'incoming-scrolled', 11_000);
+        return result;
+    });
+    await page.getByRole('button', { name: 'Go to newest message' }).waitFor();
+    assert.equal(await page.locator('[data-message-id="incoming-scrolled"]').count(), 0);
+    const afterTop = await page.locator(`[data-message-id="${before.id}"]`).evaluate(row =>
+        row.getBoundingClientRect().top,
+    );
+    assert.ok(Math.abs(afterTop - before.top) < 1);
+    assert.deepEqual(
+        (await page.evaluate(() => window.historyHarness.historyState('thread'))).viewportIds,
+        before.viewportIds,
+    );
+    await page.close();
+});
+
+test('incoming follow acknowledgement stays scoped to the retained thread pane', async () => {
+    const page = await openHarness({ width: 900, height: 520 });
+    await page.evaluate(() => window.historyHarness.mount('thread-state'));
+    await page.locator('[data-message-id]').first().waitFor();
+
+    const restored = await page.evaluate(() => {
+        const scroller = document.querySelector<HTMLElement>('.messages')!;
+        scroller.scrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight - 300);
+        scroller.dispatchEvent(new Event('scroll'));
+        const scrollerTop = scroller.getBoundingClientRect().top;
+        const row = [...scroller.querySelectorAll<HTMLElement>('[data-message-id]')]
+            .find(item => item.getBoundingClientRect().bottom > scrollerTop)!;
+        return {
+            id: row.dataset.messageId!,
+            offset: row.getBoundingClientRect().top - scrollerTop,
+            distanceFromBottom: scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight,
+        };
+    });
+    assert.ok(restored.distanceFromBottom >= 250);
+
+    await page.evaluate(() => window.historyHarness.select('second-thread'));
+    await page.waitForFunction(() =>
+        document.querySelector('.conversation__header h2')?.textContent === 'Second history');
+    await page.evaluate(() => {
+        const scroller = document.querySelector<HTMLElement>('.messages')!;
+        scroller.scrollTop = scroller.scrollHeight;
+        scroller.dispatchEvent(new Event('scroll'));
+        window.historyHarness.applyIncoming('second-thread', 'incoming-a', 200_000);
+    });
+    await page.locator('[data-message-id="incoming-a"]').waitFor();
+
+    await page.evaluate(() => window.historyHarness.select('thread'));
+    await page.waitForFunction(() =>
+        document.querySelector('.conversation__header h2')?.textContent === 'History harness');
+    await page.waitForTimeout(100);
+    const afterReturn = await page.evaluate(id => {
+        const scroller = document.querySelector<HTMLElement>('.messages')!;
+        const row = scroller.querySelector<HTMLElement>(`[data-message-id="${id}"]`)!;
+        return {
+            offset: row.getBoundingClientRect().top - scroller.getBoundingClientRect().top,
+            distanceFromBottom: scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight,
+        };
+    }, restored.id);
+    assert.ok(Math.abs(afterReturn.offset - restored.offset) < 1);
+    assert.ok(afterReturn.distanceFromBottom >= 250);
+    assert.equal(await page.locator('[data-message-id="incoming-a"]').count(), 0);
+
+    await page.evaluate(() => {
+        const scroller = document.querySelector<HTMLElement>('.messages')!;
+        scroller.scrollTop = scroller.scrollHeight;
+        scroller.dispatchEvent(new Event('scroll'));
+        window.historyHarness.applyIncoming('thread', 'incoming-b', 201_000);
+    });
+    await page.locator('[data-message-id="incoming-b"]').waitFor();
+    const finalDistance = await page.evaluate(() => {
+        const scroller = document.querySelector<HTMLElement>('.messages')!;
+        return scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+    });
+    assert.ok(finalDistance <= 2, `fresh B follow ended ${finalDistance}px from newest`);
+    await page.close();
+});
+
 test('sending while scrolled up preserves the logical viewport and offers newest navigation', async () => {
     const page = await openHarness({ width: 900, height: 520 });
     await page.evaluate(() => window.historyHarness.mount('mutations'));

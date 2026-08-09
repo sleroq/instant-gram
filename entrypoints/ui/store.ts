@@ -1,4 +1,5 @@
 import type {
+    IncomingDmSnapshot,
     Message,
     MessageReaction,
     ReelComment,
@@ -59,6 +60,8 @@ export type HistoryState = {
     failedSends: Record<string, FailedSend>;
     rowKeyByMessageId: Record<string, string>;
     reactionMutations: Record<string, ReactionMutation>;
+    isFollowingNewest: boolean;
+    incomingFollowVersion: number;
     error?: string;
 };
 
@@ -120,6 +123,21 @@ export type ReelState = {
 
 export type FrontendStoreRpc = UiRpc & Pick<CompleteUiRpc, 'sendText' | 'setReaction'>;
 
+type IncomingSyncEnvironment = {
+    isVisible: () => boolean;
+    subscribeVisibility: (listener: () => void) => () => void;
+    setTimeout: (callback: () => void, delayMs: number) => unknown;
+    clearTimeout: (timer: unknown) => void;
+};
+
+export type FrontendStoreOptions = {
+    incomingSync?: false | {
+        intervalMs?: number;
+        maxBackoffMs?: number;
+        environment?: IncomingSyncEnvironment;
+    };
+};
+
 export type FrontendState = {
     inbox: InboxState;
     pinnedIds: string[];
@@ -138,7 +156,7 @@ const SIGNED_64_MAX = 9_223_372_036_854_775_807n;
 const NINETEEN_DIGIT_MIN = 1_000_000_000_000_000_000n;
 const OFFLINE_THREADING_RANDOM_MASK = 0x3f_ffff;
 
-export function createFrontendStore(rpc: FrontendStoreRpc) {
+export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStoreOptions = {}) {
     const state: FrontendState = {
         inbox: {
             orderedIds: [],
@@ -208,6 +226,32 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
     const generatedOfflineThreadingIds = new Set<string>();
     let threadMutationRevision = 0;
     const threadMutationRevisions = new Map<string, number>();
+    const reactionStateRevisions = new Map<string, number>();
+    const sendRevisions = new Map<string, number>();
+    let started = false;
+    let incomingPollRequest: symbol | undefined;
+    let incomingPollTimer: unknown;
+    let incomingPollFailures = 0;
+    let unsubscribeIncomingVisibility: (() => void) | undefined;
+    const defaultIncomingEnvironment: IncomingSyncEnvironment | undefined =
+        typeof document !== 'undefined' && typeof window !== 'undefined'
+            ? {
+                isVisible: () => document.visibilityState !== 'hidden',
+                subscribeVisibility: listener => {
+                    document.addEventListener('visibilitychange', listener);
+                    return () => document.removeEventListener('visibilitychange', listener);
+                },
+                setTimeout: (callback, delayMs) => window.setTimeout(callback, delayMs),
+                clearTimeout: timer => window.clearTimeout(timer as number),
+            }
+            : undefined;
+    const incomingSync = options.incomingSync === false
+        ? undefined
+        : {
+            intervalMs: options.incomingSync?.intervalMs ?? 5_000,
+            maxBackoffMs: options.incomingSync?.maxBackoffMs ?? 60_000,
+            environment: options.incomingSync?.environment ?? defaultIncomingEnvironment,
+        };
 
     function emit() {
         listeners.forEach(listener => listener());
@@ -419,7 +463,221 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
                 }
                 : thread;
         }
+        state.inbox.orderedIds.sort((left, right) =>
+            state.inbox.byId[right].lastActivityMs - state.inbox.byId[left].lastActivityMs,
+        );
         return added;
+    }
+
+    function reactionKey(threadId: string, messageId: string) {
+        return `${threadId}\u0000${messageId}`;
+    }
+
+    function reactionsMatch(left?: MessageReaction[], right?: MessageReaction[]) {
+        if (left === right) return true;
+        if (left?.length !== right?.length) return false;
+        return left?.every((reaction, index) => {
+            const other = right?.[index];
+            return other?.senderId === reaction.senderId &&
+                other.reaction === reaction.reaction &&
+                other.timestampMs === reaction.timestampMs;
+        }) ?? true;
+    }
+
+    function mergeIncomingMessage(
+        threadId: string,
+        history: HistoryState,
+        message: Message,
+        reactionRevisions: Map<string, number>,
+    ) {
+        const existing = history.byId[message.id];
+        const mutation = history.reactionMutations[message.id];
+        const key = reactionKey(threadId, message.id);
+        const capturedRevision = reactionRevisions.get(message.id) ?? 0;
+        let merged = existing && existing.ts > message.ts
+            ? { ...existing, reactions: message.reactions }
+            : message;
+        if (
+            mutation?.status === 'pending' && history.viewerId &&
+            (reactionStateRevisions.get(key) ?? 0) <= capturedRevision
+        ) {
+            const viewerReaction = existing?.reactions?.find(
+                reaction => reaction.senderId === history.viewerId,
+            );
+            mutation.rollbackReactions = message.reactions ? [...message.reactions] : undefined;
+            const remoteWithoutViewer = (message.reactions ?? []).filter(
+                reaction => reaction.senderId !== history.viewerId,
+            );
+            merged = {
+                ...merged,
+                reactions: viewerReaction
+                    ? [
+                        ...remoteWithoutViewer,
+                        viewerReaction,
+                    ]
+                    : remoteWithoutViewer,
+            };
+        } else if (
+            existing &&
+            (reactionStateRevisions.get(key) ?? 0) > capturedRevision
+        ) {
+            merged = { ...merged, reactions: existing.reactions };
+        }
+        if (existing && !reactionsMatch(existing.reactions, merged.reactions)) {
+            reactionStateRevisions.set(key, (reactionStateRevisions.get(key) ?? 0) + 1);
+        }
+        history.byId[message.id] = merged;
+        return !existing;
+    }
+
+    function applyIncomingSnapshot(
+        snapshot: IncomingDmSnapshot,
+        readRevision = threadMutationRevision,
+        reactionRevisions?: Map<string, number>,
+    ) {
+        if (!started) return false;
+        mergeThreads(snapshot.threads, readRevision);
+        const incomingHistory = snapshot.history;
+        const history = incomingHistory
+            ? state.histories[incomingHistory.threadId]
+            : undefined;
+        if (history && history.status === 'ready') {
+            const capturedReactionRevisions = reactionRevisions ?? new Map(
+                incomingHistory!.messages.map(message => [
+                    message.id,
+                    reactionStateRevisions.get(
+                        reactionKey(incomingHistory!.threadId, message.id),
+                    ) ?? 0,
+                ]),
+            );
+            const added: string[] = [];
+            for (const message of incomingHistory!.messages) {
+                if (mergeIncomingMessage(
+                    incomingHistory!.threadId,
+                    history,
+                    message,
+                    capturedReactionRevisions,
+                )) added.push(message.id);
+            }
+            if (added.length) {
+                const order = new Map(history.listedIds.map((id, index) => [id, index]));
+                history.listedIds = [...new Set([...history.listedIds, ...added])].sort((left, right) => {
+                    const delta = history.byId[left].ts - history.byId[right].ts;
+                    return delta || (order.get(left) ?? Number.MAX_SAFE_INTEGER) -
+                        (order.get(right) ?? Number.MAX_SAFE_INTEGER);
+                });
+                if (history.isFollowingNewest && state.selectedThreadId === incomingHistory!.threadId) {
+                    history.viewportIds = initialHistoryWindow(history.listedIds);
+                    history.incomingFollowVersion++;
+                }
+                scheduleReelsFromMessages(
+                    added.map(id => history.byId[id]).filter(Boolean),
+                );
+            }
+            history.viewerId ||= incomingHistory!.viewerId;
+        }
+        emit();
+        return true;
+    }
+
+    function clearIncomingPollTimer() {
+        if (incomingPollTimer === undefined || !incomingSync?.environment) return;
+        incomingSync.environment.clearTimeout(incomingPollTimer);
+        incomingPollTimer = undefined;
+    }
+
+    function scheduleIncomingPoll(delayMs?: number) {
+        clearIncomingPollTimer();
+        const sync = incomingSync;
+        const environment = sync?.environment;
+        if (!started || !sync || !environment?.isVisible()) return;
+        const delay = delayMs ?? Math.min(
+            sync.intervalMs * 2 ** incomingPollFailures,
+            sync.maxBackoffMs,
+        );
+        incomingPollTimer = environment.setTimeout(() => {
+            incomingPollTimer = undefined;
+            void pollIncoming();
+        }, delay);
+    }
+
+    async function pollIncoming() {
+        const environment = incomingSync?.environment;
+        if (!started || !environment?.isVisible()) return false;
+        if (incomingPollRequest) return false;
+        if (inboxRequest) {
+            // The consumed timer (or visibility resume) collided with the
+            // ordinary inbox owner. Retain the current failure backoff and
+            // install exactly one bounded retry rather than stopping the loop.
+            scheduleIncomingPoll();
+            return false;
+        }
+        const request = Symbol('incoming-poll');
+        const requestGeneration = generation;
+        const readRevision = threadMutationRevision;
+        const selectedThreadId = state.selectedThreadId;
+        const selectedThread = selectedThreadId ? state.inbox.byId[selectedThreadId] : undefined;
+        const selectedHistory = selectedThreadId ? state.histories[selectedThreadId] : undefined;
+        const pollHistory = Boolean(
+            selectedThreadId && selectedThread && selectedHistory?.status === 'ready' &&
+            !historyRequests.has(selectedThreadId) &&
+            !olderHistoryRequests.has(selectedThreadId) &&
+            !hasInFlightSend(selectedThreadId),
+        );
+        const sendRevision = selectedThreadId ? sendRevisions.get(selectedThreadId) ?? 0 : 0;
+        const capturedReactionRevisions = new Map<string, number>();
+        if (pollHistory) {
+            for (const id of selectedHistory!.listedIds) {
+                capturedReactionRevisions.set(
+                    id,
+                    reactionStateRevisions.get(reactionKey(selectedThreadId!, id)) ?? 0,
+                );
+            }
+        }
+        incomingPollRequest = request;
+        inboxRequest = request;
+        if (pollHistory) historyRequests.set(selectedThreadId!, request);
+        try {
+            const [inboxResult, historyResult] = await Promise.all([
+                rpc.getInbox({}),
+                pollHistory
+                    ? rpc.getThread({ threadKey: selectedThread!.cursor ?? selectedThread!.key })
+                    : Promise.resolve(undefined),
+            ]);
+            if (generation !== requestGeneration || incomingPollRequest !== request || !started)
+                return false;
+            if (!inboxResult.ok || (historyResult && !historyResult.ok)) {
+                incomingPollFailures++;
+                return false;
+            }
+            applyIncomingSnapshot({
+                kind: 'snapshot',
+                threads: inboxResult.value.items,
+                history: historyResult && selectedThreadId &&
+                    !hasInFlightSend(selectedThreadId) &&
+                    (sendRevisions.get(selectedThreadId) ?? 0) === sendRevision
+                    ? {
+                        threadId: selectedThreadId,
+                        messages: historyResult.value.items,
+                        viewerId: historyResult.value.viewerId,
+                    }
+                    : undefined,
+            }, readRevision, capturedReactionRevisions);
+            incomingPollFailures = 0;
+            return true;
+        } catch {
+            if (generation === requestGeneration && incomingPollRequest === request)
+                incomingPollFailures++;
+            return false;
+        } finally {
+            if (generation === requestGeneration && incomingPollRequest === request) {
+                incomingPollRequest = undefined;
+                if (inboxRequest === request) inboxRequest = undefined;
+                if (selectedThreadId && historyRequests.get(selectedThreadId) === request)
+                    historyRequests.delete(selectedThreadId);
+                scheduleIncomingPoll();
+            }
+        }
     }
 
     async function loadInbox(cursor?: string) {
@@ -615,6 +873,8 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
             failedSends: {},
             rowKeyByMessageId: {},
             reactionMutations: {},
+            isFollowingNewest: false,
+            incomingFollowVersion: 0,
         };
         history.status = 'loading';
         history.isPreloading = isPreloading;
@@ -755,6 +1015,7 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
         const request = Symbol(`send:${send.localId}`);
         const requestGeneration = generation;
         sendRequests.set(key, request);
+        sendRevisions.set(threadId, (sendRevisions.get(threadId) ?? 0) + 1);
         history.pendingSends[send.localId] = send;
         delete history.failedSends[send.localId];
         emit();
@@ -810,9 +1071,15 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
         } finally {
             if (generation === requestGeneration && sendRequests.get(key) === request) {
                 sendRequests.delete(key);
+                sendRevisions.set(threadId, (sendRevisions.get(threadId) ?? 0) + 1);
                 emit();
             }
         }
+    }
+
+    function hasInFlightSend(threadId: string) {
+        const prefix = `${threadId}\u0000`;
+        return [...sendRequests.keys()].some(key => key.startsWith(prefix));
     }
 
     function sendText(threadId: string, text: string, options: SendTextOptions) {
@@ -925,6 +1192,10 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
                 ...history.byId[messageId],
                 reactions: result.value.reactions,
             };
+            reactionStateRevisions.set(
+                reactionKey(threadId, messageId),
+                (reactionStateRevisions.get(reactionKey(threadId, messageId)) ?? 0) + 1,
+            );
             delete history.reactionMutations[messageId];
             return true;
         } catch (error) {
@@ -953,32 +1224,16 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
         }
     }
 
-    function mergeOlderMessages(history: HistoryState, items: Message[]) {
+    function mergeOlderMessages(
+        threadId: string,
+        history: HistoryState,
+        items: Message[],
+        reactionRevisions: Map<string, number>,
+    ) {
         const olderIds: string[] = [];
         for (const message of items) {
             if (!history.byId[message.id]) olderIds.push(message.id);
-            const mutation = history.reactionMutations[message.id];
-            if (mutation?.status === 'pending' && history.viewerId) {
-                const optimisticViewerReaction = history.byId[message.id]?.reactions?.find(
-                    reaction => reaction.senderId === history.viewerId,
-                );
-                mutation.rollbackReactions = message.reactions
-                    ? [...message.reactions]
-                    : undefined;
-                history.byId[message.id] = {
-                    ...message,
-                    reactions: optimisticViewerReaction
-                        ? [
-                            ...(message.reactions ?? []).filter(
-                                reaction => reaction.senderId !== history.viewerId,
-                            ),
-                            optimisticViewerReaction,
-                        ]
-                        : message.reactions,
-                };
-            } else {
-                history.byId[message.id] = message;
-            }
+            mergeIncomingMessage(threadId, history, message, reactionRevisions);
         }
         if (olderIds.length) history.listedIds = [...olderIds, ...history.listedIds];
         scheduleReelsFromMessages(items);
@@ -994,11 +1249,16 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
         const cursor = history?.cursor;
         if (
             !history || !thread || !cursor || !history.hasOlder ||
-            olderHistoryRequests.has(threadId) || history.failedOlderCursor === cursor
+            historyRequests.has(threadId) || olderHistoryRequests.has(threadId) ||
+            history.failedOlderCursor === cursor
         ) return false;
 
         const request = Symbol(`older:${threadId}`);
         const requestGeneration = generation;
+        const capturedReactionRevisions = new Map(history.listedIds.map(id => [
+            id,
+            reactionStateRevisions.get(reactionKey(threadId, id)) ?? 0,
+        ]));
         olderHistoryRequests.set(threadId, request);
         if (mode === 'preload') history.isPreloadingOlder = true;
         else if (mode !== 'reply-prefetch') history.isLoadingOlder = true;
@@ -1026,7 +1286,12 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
                 }
                 return false;
             }
-            const added = mergeOlderMessages(history, result.value.items);
+            const added = mergeOlderMessages(
+                threadId,
+                history,
+                result.value.items,
+                capturedReactionRevisions,
+            );
             if (result.value.hasNextPage && result.value.cursor === cursor && added === 0) {
                 if (mode === 'reply-prefetch') replyPrefetchFailedCursors.set(threadId, cursor);
                 else if (mode === 'navigate' && state.selectedThreadId !== threadId) {
@@ -1582,6 +1847,10 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
         cancelWarmups();
         warmupsStarted = 0;
         visibleWarmupKey = '';
+        if (state.selectedThreadId !== threadId) {
+            const history = state.histories[threadId];
+            if (history) history.isFollowingNewest = false;
+        }
         state.selectedThreadId = threadId;
         abandonReplyNavigationExcept(threadId);
         openedThreadIds.add(threadId);
@@ -1654,11 +1923,26 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
             return () => listeners.delete(listener);
         },
         start() {
+            const firstStart = !started;
+            started = true;
             void loadInbox();
             void loadPins();
+            const environment = incomingSync?.environment;
+            if (firstStart && environment) {
+                unsubscribeIncomingVisibility = environment.subscribeVisibility(() => {
+                    clearIncomingPollTimer();
+                    if (environment.isVisible()) void pollIncoming();
+                });
+                scheduleIncomingPoll();
+            }
         },
         destroy() {
+            started = false;
             generation++;
+            clearIncomingPollTimer();
+            unsubscribeIncomingVisibility?.();
+            unsubscribeIncomingVisibility = undefined;
+            incomingPollRequest = undefined;
             replyNavigationCancellations.forEach(cancel => cancel());
             replyNavigationCancellations.clear();
             cancelWarmups();
@@ -1682,6 +1966,8 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
             replyPrefetchIntent++;
             sendRequests.clear();
             reactionRequests.clear();
+            reactionStateRevisions.clear();
+            sendRevisions.clear();
             pinRequests.clear();
             reelMediaRequests.clear();
             reelCommentRequests.clear();
@@ -1774,6 +2060,11 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
         saveHistoryAnchor(threadId: string, anchor: { id: string; offset: number }) {
             const history = state.histories[threadId];
             if (history) history.scrollAnchor = anchor;
+        },
+        setHistoryFollowingNewest(threadId: string, following: boolean) {
+            if (state.selectedThreadId !== threadId) return;
+            const history = state.histories[threadId];
+            if (history) history.isFollowingNewest = following;
         },
         setDraft(threadId: string, draft: string) {
             const history = state.histories[threadId];
@@ -1883,6 +2174,10 @@ export function createFrontendStore(rpc: FrontendStoreRpc) {
         showInbox,
         warmVisibleThreads,
         orderedThreadIds,
+        applyIncomingSnapshot(snapshot: IncomingDmSnapshot) {
+            return applyIncomingSnapshot(snapshot);
+        },
+        pollIncomingNow: pollIncoming,
     };
 }
 

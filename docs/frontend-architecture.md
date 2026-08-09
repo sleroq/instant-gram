@@ -35,7 +35,7 @@ shapes and should be treated as reference evidence, not copied into components.
 getInbox({ cursor? }): Result<Page<Thread>>
 getThread({ threadKey, cursor? }): Result<ThreadMessages>
 getReelMedia({ shortcode, mediaId? }): Result<ReelMedia>
-getReelComments({ mediaId }): Result<ReelComments>
+getReelComments({ mediaId, cursor? }): Result<ReelComments>
 setReelLiked({ mediaId, liked }): Result<ReelLikeReceipt>
 setReelSaved({ mediaId, saved }): Result<ReelSaveReceipt>
 getPins(): { pinned: string[] }
@@ -130,6 +130,8 @@ type HistoryState = {
     failedSends: Record<string, FailedSend>;
     rowKeyByMessageId: Record<string, string>;
     reactionMutations: Record<string, ReactionMutation>;
+    isFollowingNewest: boolean;
+    incomingFollowVersion: number;
     error?: string;
 };
 
@@ -197,11 +199,11 @@ are parsed outside UI components.
 Reel-author profile images cross one additional trusted-media boundary. After
 the anchor returns normalized reel metadata, the extension background fetches
 only HTTPS `*.cdninstagram.com` image responses covered by its existing host
-permission, caps them at 2 MiB, and replaces the remote author URL with a data
-URL. This avoids CDN CORP failures in the extension page without weakening
-headers or teaching components Instagram host rules. A failed optional avatar
-becomes `null` so the reserved initials fallback remains usable and reel media
-does not fail with it.
+permission, refuses redirects, streams at most 2 MiB, and replaces the remote
+author URL with a data URL. This avoids CDN CORP failures in the extension page
+without weakening headers or teaching components Instagram host rules. A failed
+optional avatar becomes `null` so the reserved initials fallback remains usable
+and reel media does not fail with it.
 
 Media loading no longer depends on the failing, uncaptured
 `PolarisPostActionLoadPostQueryQuery`. The anchor prefers the validated numeric
@@ -220,8 +222,15 @@ and waits for an overlapping preload instead of issuing a duplicate request.
 
 Comments are deliberately not part of preload. `openReel(shortcode, mediaId?)`
 records modal intent, ensures media, and only then requests the initial comments
-page. The captures prove no comment cursor request, so this is deliberately one
-lazy page. Closing before media settles prevents the comments request. Comment rows
+page. The modal loads subsequent pages only after the user scrolls the bounded
+details panel near its comments tail; a short initial page does not recursively
+drain cursors without user movement. The media stage remains fixed beside that
+independently scrolling panel. The captured REST `next_min_id` is retained as an opaque
+cursor and returned unchanged as `min_id`; its internal JSON is never interpreted.
+Cursor presence is authoritative because captured continuation responses report
+`has_more_comments: false` while still returning another `next_min_id`. Pagination
+is single-flight and failure-gated until explicit retry. Closing before media
+settles prevents the initial comments request. Comment rows
 are normalized by comment ID. Like and save are separate per-reel single-flights:
 the store applies the boolean/count change optimistically, accepts only a
 matching media-ID/state receipt, and otherwise restores the snapshot while
@@ -299,11 +308,14 @@ browser cannot lay out.
 The reel message card takes the calculated width and `object-fit: contain` keeps
 the source uncropped inside the exact wrapper/media element box through poster,
 loading, image, and video states. On a narrower message column, the complete
-card scales down while retaining that calculated box ratio. Modal stages remain
-fixed to the available viewport; stage container units fit each item's
-dimension-derived box against both available axes before `contain` fitting, so
-portrait, square, and landscape slides preserve ratio without resizing the
-comments column. The first cached item is also an explicit memoized-row prop:
+card scales down while retaining that calculated box ratio. Modal stages derive
+their own box from the current item's dimensions and fit it against both
+available viewport axes. The dialog therefore follows portrait, square, and
+landscape slides instead of exposing a fixed black stage around the media; the
+comments column keeps a bounded independent width. On compact screens the
+existing stacked full-viewport layout remains in effect, with stage container
+units containing the media box. The first cached item is also an explicit
+memoized-row prop:
 asynchronous preload completion invalidates only its reel-bearing message row
 instead of leaving the XMA dimensions/source mounted indefinitely.
 Any cache-arrival geometry correction stays under the existing history
@@ -500,7 +512,11 @@ remain gated until `retryOlderHistory(id)` explicitly clears that cursor.
   response array on success, and rolls back with visible error state on failure.
   Local optimistic messages cannot be reaction targets. A history read that
   overlaps a pending reaction refreshes the rollback baseline while retaining
-  the viewer's optimistic choice.
+  the viewer's optimistic choice. It always removes the remote viewer entry
+  first, so an optimistic removal remains absent until settlement. Authoritative
+  arrays, including empty and timestamp-less arrays, replace accepted prior
+  state; read ownership and reaction revisions, not aggregate timestamps, reject
+  stale overlapping completions.
 - `pinRequests` permits one conversation pin mutation per thread. The background
   serializes storage commits so persisted prepend order follows invocation order;
   other pending optimistic pins are replayed over each authoritative list.
@@ -629,6 +645,59 @@ Up/Down move deterministically between category rows. Picker state is
 presentation-only while optimistic single-flight/error state remains normalized.
 Context-menu keyboard handling lives on the focusable row itself; the browser
 menu is prevented only for rows whose custom menu owns real actions.
+
+### Incoming DM synchronization
+
+Incoming synchronization uses bounded polling because available captures prove
+the no-cursor initial inbox and thread-detail response shapes, but do not contain
+decoded Iris/MQTT events or a stable page-runtime callback contract. Repeating
+those requests is structurally the authoritative initial/newest-shape fallback;
+live repeated-query freshness remains unverified pending authenticated
+two-account validation. The store polls every five seconds only while the UI
+document is visible. One poll is globally single-flight and shares the inbox
+read flight with initial and pagination loads. Its selected-thread detail shares
+that thread's read flight with initial and older history requests, without
+serializing unrelated threads. Selected-thread detail is omitted while a send
+for that thread is in flight; a response started just before a send is discarded,
+and later polls resume normally. If a scheduled or visibility-triggered poll
+collides with an ordinary inbox read, it consumes no second flight and installs
+one replacement timer using the current interval/backoff delay. Thus settlement
+or a bounded retry resumes polling without duplicate timers.
+Failures back off exponentially to 60 seconds; becoming visible refreshes
+immediately. `destroy()` clears the timer and visibility listener and invalidates
+the flight by store generation. The existing closed UI→background→anchor RPCs
+remain the only transport, so no unsolicited raw page data, credentials, tokens,
+or Instagram response objects cross into UI code.
+
+Both reads feed one protocol-neutral `IncomingDmSnapshot` reconciliation action.
+It updates normalized inbox entities/order and only an existing ready history;
+it never creates an unloaded history cache or changes older pagination cursors.
+Messages deduplicate by server ID and sort chronologically. A poll captures
+outgoing, send, and reaction-state revisions, so a stale completion cannot
+regress an optimistic/confirmed outgoing snippet, duplicate an unsettled send,
+or replace a pending/newer viewer or peer reaction. Older-page merges use the
+same reaction-state revision guard. Explicit `pinnedIds` remain unchanged while
+unpinned rows derive their activity order normally. The public snapshot boundary
+accepts updates only while the store is started, so captured callbacks are inert
+after teardown.
+
+`MessagePane` reports only whether the selected history is both at the DOM bottom
+and showing its latest loaded ID. An incoming tail then replaces the viewport
+with the newest bounded 40 IDs and increments a follow version that the pane
+scrolls after commit. When that measurement is false, reconciliation appends only
+to `listedIds`; `viewportIds` and the logical anchor remain unchanged, and the
+existing “Go to newest message” route becomes available. Reactions update their
+existing rows without changing the window. A selection transition invalidates
+the destination history's prior follow measurement before emitting; incoming
+data remains conservative until the newly mounted/restored pane reports current
+geometry. Because the pane is retained across selections, incoming-follow
+acknowledgement records both thread ID and version: switching threads baselines
+the destination version without scrolling, and only a later increment for that
+same selected thread follows newest. Stale measurements from an unselected
+thread are ignored. Measurements continue to apply normally while the same
+thread remains mounted. The production browser harness
+disables periodic polling and injects typed snapshots explicitly for deterministic
+bottom-follow and scrolled-up anchor coverage.
 
 ### Warmup generations, timers, and budget
 

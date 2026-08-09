@@ -7,6 +7,29 @@ Source: `examples/www.instagram.com-live-communication.har`. Use the same common
 - Bootstrap with `PolarisDirectInboxQuery` / `IGDThreadDetailQuery`, passing the live `device_id_for_iris_subscription`.
 - Instagram web keeps DMs live through its Iris/MQTT subscription; the HAR does not include decoded WebSocket frames, but the page CSP allows `wss://edge-chat.instagram.com` and the inbox queries are named `*_for_iris_subscription`.
 - Practical implementation path: keep an Instagram anchor tab open and listen in the page context to the app's live thread updates, or poll `IGDThreadDetailQuery` as a fallback using the newest seen message id/timestamp for de-dupe.
+- The extension currently uses that fallback. No authenticated two-account
+  session or decoded Iris/MQTT fixture was available to prove a narrow passive
+  page-runtime event contract, so implementing a page observer would have meant
+  guessing at private runtime or raw frame behavior. While the UI is visible it
+  polls the captured initial `PolarisDirectInboxQuery` and, when a loaded thread
+  is selected, the captured initial `IGDThreadDetailQuery`. Repeating the
+  no-cursor request is structurally the authoritative initial/newest 20-message
+  shape, so it is the safest permitted fallback; whether repeated live requests
+  expose peer updates promptly is not yet verified and requires authenticated
+  two-account validation. The older-only cursor query is never used for
+  synchronization. Both responses are already normalized by the anchor parsers
+  and only protocol-neutral entities cross into the UI store.
+- Polling starts after a 5-second interval, is single-flight, pauses completely
+  while the UI document is hidden, and refreshes immediately when it becomes
+  visible. Failures use exponential 10/20/40/60-second retry delays (capped at
+  60 seconds); a successful combined inbox/thread snapshot resets the delay. A
+  timer or visibility refresh that finds an ordinary inbox initial/pagination
+  read in flight schedules one replacement attempt at the current delay, rather
+  than issuing a duplicate request or stopping the loop.
+  Teardown removes the visibility listener, clears the timer, and generation-
+  gates any request already in flight. Typing and read-receipt updates remain
+  unsupported. Passive Iris/MQTT observation and manual two-account validation
+  remain future live-session work.
 - When a message is displayed/read, Instagram sends read markers:
     - `useIGDMarkThreadAsReadMutation`, `doc_id=27356881703909995`
     - `useIGDMarkThreadAsReadValidationMutation`, `doc_id=35211594988486314`
@@ -66,3 +89,7 @@ Use another emoji value to change/create a reaction. Revocation sends the curren
 emoji through the same mutation with `reaction_status: "deleted"`. The local web
 capture proves the creation shape; the deletion value follows Instagram's direct
 reaction contract and is reconciled only from the mutation's authoritative array.
+Read responses also carry complete authoritative arrays: accepted empty or
+timestamp-less arrays may remove/replace earlier reactions. The UI rejects stale
+overlapping reads by request ownership and local reaction revisions, not by
+comparing reaction timestamps.

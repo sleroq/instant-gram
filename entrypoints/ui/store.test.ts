@@ -1257,6 +1257,70 @@ test('older history reads preserve an optimistic reaction and become its rollbac
     store.destroy();
 });
 
+test('pending reaction removal stays absent and a failure restores the refreshed read', async () => {
+    installWindowTimers();
+    let resolveOlder!: (result: Result<ThreadMessages>) => void;
+    let resolveReaction!: (result: Result<SetReactionResult>) => void;
+    const rpc = fakeRpc(async () => ({
+        ok: true,
+        value: { items: [thread('a')], hasNextPage: false },
+    }), payload => payload.cursor
+        ? new Promise(resolve => { resolveOlder = resolve; })
+        : Promise.resolve({
+            ok: true,
+            value: {
+                items: [{
+                    kind: 'text', id: 'target', senderId: 'sender', ts: 2, text: 'target',
+                    reactions: [{ senderId: 'viewer', reaction: '❤', timestampMs: 1 }],
+                }],
+                cursor: 'older', hasNextPage: true, viewerId: 'viewer',
+            },
+        }), undefined, undefined, () =>
+        new Promise(resolve => { resolveReaction = resolve; }));
+    const store = createFrontendStore(rpc, { incomingSync: false });
+    store.start();
+    await settle();
+    store.selectThread('a');
+    await settle();
+
+    const removal = store.setReaction('a', 'target', '❤');
+    store.revealOlderHistory('a', true);
+    await settle();
+    resolveOlder({
+        ok: true,
+        value: {
+            items: [{
+                kind: 'text', id: 'target', senderId: 'sender', ts: 2, text: 'refreshed',
+                reactions: [
+                    { senderId: 'peer', reaction: '🔥' },
+                    { senderId: 'viewer', reaction: '❤', timestampMs: 2 },
+                ],
+            }],
+            hasNextPage: false,
+            viewerId: 'viewer',
+        },
+    });
+    await settle();
+    assert.deepEqual(
+        store.state.histories.a.byId.target.reactions?.map(reaction => reaction.senderId),
+        ['peer'],
+    );
+
+    resolveReaction({ ok: false, error: { message: 'failed removal' } });
+    assert.equal(await removal, false);
+    assert.deepEqual(
+        store.state.histories.a.byId.target.reactions?.map(reaction => reaction.reaction),
+        ['🔥', '❤'],
+    );
+    assert.equal(
+        store.state.histories.a.byId.target.reactions?.find(
+            reaction => reaction.senderId === 'viewer',
+        )?.timestampMs,
+        2,
+    );
+    store.destroy();
+});
+
 test('a mismatched reaction receipt rolls back, and completion after destroy is ignored', async () => {
     installWindowTimers();
     const resolvers: Array<(result: Result<SetReactionResult>) => void> = [];
@@ -1853,6 +1917,616 @@ test('destroyed reel store ignores deferred completions', async () => {
     resolveMedia({ ok: true, value: reelMedia('ABC', '100', 'https://cdn/late.mp4') });
     assert.equal(await opening, false);
     assert.equal(store.state.reels.byId.ABC.media, undefined);
+});
+
+test('incoming snapshots deduplicate, preserve pin order, reorder unpinned rows, and keep an older viewport', async () => {
+    installWindowTimers();
+    const rpc = fakeRpc(async () => ({
+        ok: true,
+        value: { items: [thread('a'), thread('b'), thread('c'), thread('d')], hasNextPage: false },
+    }), async () => historyPage(0, 50, undefined, false), async () => ({ pinned: ['a', 'b'] }));
+    const store = createFrontendStore(rpc, { incomingSync: false });
+    store.start();
+    await settle();
+    store.selectThread('a');
+    await settle();
+    store.revealOlderHistory('a');
+    const history = store.state.histories.a;
+    const viewport = [...history.viewportIds];
+    const anchor = { id: viewport[2], offset: 17 };
+    store.saveHistoryAnchor('a', anchor);
+
+    const incoming: Message = {
+        kind: 'text', id: 'incoming', senderId: 'peer', ts: 60, text: 'new',
+    };
+    store.applyIncomingSnapshot({
+        kind: 'snapshot',
+        threads: [
+            { ...thread('d'), lastActivityMs: 60, lastMessage: incoming },
+            { ...thread('c'), lastActivityMs: 50 },
+            { ...thread('a'), lastActivityMs: 55 },
+        ],
+        history: {
+            threadId: 'a', viewerId: 'viewer',
+            messages: [incoming, { ...incoming, id: 'late-but-older', ts: 55 }],
+        },
+    });
+    store.applyIncomingSnapshot({
+        kind: 'snapshot', threads: [],
+        history: { threadId: 'a', viewerId: 'viewer', messages: [incoming] },
+    });
+
+    assert.equal(history.listedIds.filter(id => id === 'incoming').length, 1);
+    assert.deepEqual(history.listedIds.slice(-2), ['late-but-older', 'incoming']);
+    assert.deepEqual(history.viewportIds, viewport);
+    assert.equal(history.scrollAnchor, anchor);
+    assert.deepEqual(store.orderedThreadIds(), ['a', 'b', 'd', 'c']);
+    assert.deepEqual(store.state.pinnedIds, ['a', 'b']);
+    store.destroy();
+});
+
+test('incoming messages follow only a history measured at newest', async () => {
+    installWindowTimers();
+    const rpc = fakeRpc(async () => ({
+        ok: true,
+        value: { items: [thread('a')], hasNextPage: false },
+    }), async () => historyPage(0, 80, undefined, false));
+    const store = createFrontendStore(rpc, { incomingSync: false });
+    store.start();
+    await settle();
+    store.selectThread('a');
+    await settle();
+    store.setHistoryFollowingNewest('a', true);
+    const history = store.state.histories.a;
+    const version = history.incomingFollowVersion;
+    const incoming: Message = {
+        kind: 'text', id: 'incoming', senderId: 'peer', ts: 100, text: 'new',
+    };
+    store.applyIncomingSnapshot({
+        kind: 'snapshot', threads: [],
+        history: { threadId: 'a', viewerId: 'viewer', messages: [incoming] },
+    });
+    assert.equal(history.viewportIds.at(-1), 'incoming');
+    assert.ok(history.viewportIds.length <= 40);
+    assert.equal(history.incomingFollowVersion, version + 1);
+    store.destroy();
+});
+
+test('reselecting a history requires a fresh newest measurement before following incoming data', async () => {
+    installWindowTimers();
+    const rpc = fakeRpc(async () => ({
+        ok: true,
+        value: { items: [thread('a'), thread('b')], hasNextPage: false },
+    }), async () => historyPage(0, 80, undefined, false));
+    const store = createFrontendStore(rpc, { incomingSync: false });
+    store.start();
+    await settle();
+    store.selectThread('a');
+    await settle();
+    const history = store.state.histories.a;
+    history.viewportIds = history.listedIds.slice(0, 40);
+    const restoredViewport = [...history.viewportIds];
+    const anchor = { id: restoredViewport[10], offset: 18 };
+    store.saveHistoryAnchor('a', anchor);
+    store.setHistoryFollowingNewest('a', true);
+
+    store.selectThread('b');
+    await settle();
+    store.selectThread('a');
+    assert.equal(history.isFollowingNewest, false);
+    store.applyIncomingSnapshot({
+        kind: 'snapshot', threads: [],
+        history: {
+            threadId: 'a', viewerId: 'viewer',
+            messages: [{ kind: 'text', id: 'before-measure', senderId: 'peer', ts: 100, text: 'new' }],
+        },
+    });
+    assert.deepEqual(history.viewportIds, restoredViewport);
+    assert.equal(history.scrollAnchor, anchor);
+
+    store.setHistoryFollowingNewest('a', true);
+    store.applyIncomingSnapshot({
+        kind: 'snapshot', threads: [],
+        history: {
+            threadId: 'a', viewerId: 'viewer',
+            messages: [{ kind: 'text', id: 'after-measure', senderId: 'peer', ts: 101, text: 'newer' }],
+        },
+    });
+    assert.equal(history.viewportIds.at(-1), 'after-measure');
+    assert.ok(history.viewportIds.length <= 40);
+    store.destroy();
+});
+
+test('selected-thread polling suppresses a server copy until an optimistic send settles', async () => {
+    installWindowTimers();
+    let resolveSend!: (value: Result<SentTextMessage>) => void;
+    let resolvePoll!: (value: Result<ThreadMessages>) => void;
+    let threadCalls = 0;
+    const rpc = fakeRpc(async () => ({
+        ok: true,
+        value: { items: [thread('a')], hasNextPage: false },
+    }), async () => {
+        threadCalls++;
+        if (threadCalls === 1) return emptyHistory();
+        if (threadCalls === 2) return new Promise(resolve => { resolvePoll = resolve; });
+        return {
+            ok: true,
+            value: {
+                items: [{ kind: 'text', id: 'server', senderId: 'viewer', ts: 20, text: 'hello' }],
+                hasNextPage: false,
+                viewerId: 'viewer',
+            },
+        };
+    }, undefined, async () =>
+        new Promise(resolve => { resolveSend = resolve; }));
+    const store = createFrontendStore(rpc, {
+        incomingSync: {
+            environment: {
+                isVisible: () => true,
+                subscribeVisibility: () => () => undefined,
+                setTimeout: () => 1,
+                clearTimeout: () => undefined,
+            },
+        },
+    });
+    store.start();
+    await settle();
+    store.selectThread('a');
+    await settle();
+    const poll = store.pollIncomingNow();
+    await settle();
+    const localId = store.sendText('a', 'hello', { followNewest: true });
+    assert.ok(localId);
+    resolvePoll({
+        ok: true,
+        value: {
+            items: [{ kind: 'text', id: 'server', senderId: 'viewer', ts: 20, text: 'hello' }],
+            hasNextPage: false,
+            viewerId: 'viewer',
+        },
+    });
+    await poll;
+    let history = store.state.histories.a;
+    assert.deepEqual(history.listedIds, [localId]);
+    assert.equal(Object.keys(history.byId).length, 1);
+    resolveSend({
+        ok: true,
+        value: { messageId: 'server', timestampMs: 20, clientRequestId: 'request' },
+    });
+    await settle();
+    history = store.state.histories.a;
+    assert.equal(history.listedIds.filter(id => id === 'server').length, 1);
+    assert.equal(Object.keys(history.byId).length, 1);
+    assert.ok(!history.listedIds.includes(localId));
+    assert.equal(store.messageRowKey('a', 'server'), localId);
+    assert.equal(await store.pollIncomingNow(), true);
+    assert.equal(threadCalls, 3);
+    store.destroy();
+});
+
+test('a polling read started before a reaction receipt cannot regress it', async () => {
+    installWindowTimers();
+    let inboxCalls = 0;
+    let threadCalls = 0;
+    let resolvePoll!: (value: Result<ThreadMessages>) => void;
+    const baseMessage: Message = {
+        kind: 'text', id: 'target', senderId: 'peer', ts: 1, text: 'hello', reactions: [],
+    };
+    const rpc = fakeRpc(async () => {
+        inboxCalls++;
+        return { ok: true, value: { items: [thread('a')], hasNextPage: false } };
+    }, async () => {
+        threadCalls++;
+        if (threadCalls === 1) return {
+            ok: true,
+            value: { items: [baseMessage], hasNextPage: false, viewerId: 'viewer' },
+        };
+        return new Promise(resolve => { resolvePoll = resolve; });
+    }, undefined, undefined, async () => ({
+        ok: true,
+        value: {
+            messageId: 'target',
+            reactions: [{ senderId: 'viewer', reaction: '❤', timestampMs: 20 }],
+        },
+    }));
+    // Enable only the explicit lifecycle-safe poll; no timers are installed.
+    const pollStore = createFrontendStore(rpc, {
+        incomingSync: {
+            environment: {
+                isVisible: () => true,
+                subscribeVisibility: () => () => undefined,
+                setTimeout: () => 1,
+                clearTimeout: () => undefined,
+            },
+        },
+    });
+    pollStore.start();
+    await settle();
+    pollStore.selectThread('a');
+    await settle();
+    const poll = pollStore.pollIncomingNow();
+    await settle();
+    await pollStore.setReaction('a', 'target', '❤');
+    resolvePoll({
+        ok: true,
+        value: { items: [baseMessage], hasNextPage: false, viewerId: 'viewer' },
+    });
+    await poll;
+    assert.equal(firstReaction(pollStore.state.histories.a.byId.target), '❤');
+    assert.equal(inboxCalls, 2);
+    pollStore.destroy();
+});
+
+test('polling shares inbox and per-thread read flights with initial and older reads', async () => {
+    installWindowTimers();
+    let inboxCalls = 0;
+    let threadCalls = 0;
+    let resolveInitialInbox!: (value: Result<Page<Thread>>) => void;
+    let resolveNextInbox!: (value: Result<Page<Thread>>) => void;
+    let resolveInitialHistory!: (value: Result<ThreadMessages>) => void;
+    let resolveOlderHistory!: (value: Result<ThreadMessages>) => void;
+    const rpc = fakeRpc(async payload => {
+        inboxCalls++;
+        if (inboxCalls === 1) return new Promise(resolve => { resolveInitialInbox = resolve; });
+        if (payload.cursor) return new Promise(resolve => { resolveNextInbox = resolve; });
+        return { ok: true, value: { items: [thread('a')], hasNextPage: false } };
+    }, async payload => {
+        threadCalls++;
+        if (!payload.cursor) return new Promise(resolve => { resolveInitialHistory = resolve; });
+        return new Promise(resolve => { resolveOlderHistory = resolve; });
+    });
+    const store = createFrontendStore(rpc, {
+        incomingSync: {
+            environment: {
+                isVisible: () => true,
+                subscribeVisibility: () => () => undefined,
+                setTimeout: () => 1,
+                clearTimeout: () => undefined,
+            },
+        },
+    });
+
+    store.start();
+    assert.equal(await store.pollIncomingNow(), false);
+    assert.equal(inboxCalls, 1);
+    resolveInitialInbox({
+        ok: true,
+        value: { items: [thread('a')], cursor: 'next', hasNextPage: true },
+    });
+    await settle();
+
+    store.loadNextInboxPage();
+    assert.equal(await store.pollIncomingNow(), false);
+    assert.equal(inboxCalls, 2);
+    resolveNextInbox({ ok: true, value: { items: [], hasNextPage: false } });
+    await settle();
+
+    store.selectThread('a');
+    await settle();
+    assert.equal(threadCalls, 1);
+    assert.equal(await store.pollIncomingNow(), true);
+    assert.equal(threadCalls, 1);
+    resolveInitialHistory({
+        ok: true,
+        value: {
+            items: [{ kind: 'text', id: 'target', senderId: 'peer', ts: 10, text: 'newest' }],
+            cursor: 'older',
+            hasNextPage: true,
+            viewerId: 'viewer',
+        },
+    });
+    await settle();
+
+    store.revealOlderHistory('a', true);
+    await settle();
+    assert.equal(threadCalls, 2);
+    assert.equal(await store.pollIncomingNow(), true);
+    assert.equal(threadCalls, 2);
+    resolveOlderHistory({
+        ok: true,
+        value: {
+            items: [{ kind: 'text', id: 'older', senderId: 'peer', ts: 1, text: 'older' }],
+            hasNextPage: false,
+            viewerId: 'viewer',
+        },
+    });
+    await settle();
+    assert.deepEqual(store.state.histories.a.listedIds, ['older', 'target']);
+    store.destroy();
+});
+
+test('a consumed poll timer retries after initial and paginated inbox read collisions', async () => {
+    let timer: { callback: () => void; delay: number } | undefined;
+    let inboxCalls = 0;
+    let resolveInitial!: (value: Result<Page<Thread>>) => void;
+    let resolvePage!: (value: Result<Page<Thread>>) => void;
+    const takeTimer = () => {
+        assert.ok(timer);
+        const callback = timer.callback;
+        timer = undefined;
+        return callback;
+    };
+    const rpc = fakeRpc(payload => {
+        inboxCalls++;
+        if (inboxCalls === 1) return new Promise(resolve => { resolveInitial = resolve; });
+        if (payload.cursor) return new Promise(resolve => { resolvePage = resolve; });
+        return Promise.resolve({
+            ok: true,
+            value: { items: [thread('a')], cursor: 'next', hasNextPage: true },
+        });
+    });
+    const store = createFrontendStore(rpc, {
+        incomingSync: {
+            intervalMs: 5,
+            environment: {
+                isVisible: () => true,
+                subscribeVisibility: () => () => undefined,
+                setTimeout: (callback, delay) => (timer = { callback, delay }),
+                clearTimeout: value => { if (timer === value) timer = undefined; },
+            },
+        },
+    });
+
+    store.start();
+    assert.equal(inboxCalls, 1);
+    takeTimer()();
+    assert.equal(inboxCalls, 1);
+    assert.equal((timer as { callback: () => void; delay: number } | undefined)?.delay, 5);
+    resolveInitial({
+        ok: true,
+        value: { items: [thread('a')], cursor: 'next', hasNextPage: true },
+    });
+    await settle();
+    takeTimer()();
+    await settle();
+    assert.equal(inboxCalls, 2);
+
+    store.loadNextInboxPage();
+    assert.equal(inboxCalls, 3);
+    takeTimer()();
+    assert.equal(inboxCalls, 3);
+    assert.equal((timer as { callback: () => void; delay: number } | undefined)?.delay, 5);
+    resolvePage({ ok: true, value: { items: [], hasNextPage: false } });
+    await settle();
+    takeTimer()();
+    await settle();
+    assert.equal(inboxCalls, 4);
+    store.destroy();
+});
+
+test('visibility resume during an inbox read schedules a later poll', async () => {
+    let visibilityListener: () => void = () => undefined;
+    let timer: { callback: () => void; delay: number } | undefined;
+    let inboxCalls = 0;
+    let resolveInitial!: (value: Result<Page<Thread>>) => void;
+    const rpc = fakeRpc(() => {
+        inboxCalls++;
+        if (inboxCalls === 1) return new Promise(resolve => { resolveInitial = resolve; });
+        return Promise.resolve({ ok: true, value: { items: [thread('a')], hasNextPage: false } });
+    });
+    const store = createFrontendStore(rpc, {
+        incomingSync: {
+            intervalMs: 7,
+            environment: {
+                isVisible: () => true,
+                subscribeVisibility: listener => {
+                    visibilityListener = listener;
+                    return () => undefined;
+                },
+                setTimeout: (callback, delay) => (timer = { callback, delay }),
+                clearTimeout: value => { if (timer === value) timer = undefined; },
+            },
+        },
+    });
+
+    store.start();
+    visibilityListener();
+    assert.equal(inboxCalls, 1);
+    assert.equal(timer?.delay, 7);
+    resolveInitial({ ok: true, value: { items: [thread('a')], hasNextPage: false } });
+    await settle();
+    const retry = timer!.callback;
+    timer = undefined;
+    retry();
+    await settle();
+    assert.equal(inboxCalls, 2);
+    store.destroy();
+});
+
+test('sequential authoritative reaction snapshots may remove and replace timestamp-less reactions', async () => {
+    installWindowTimers();
+    const base: Message = {
+        kind: 'text', id: 'target', senderId: 'peer', ts: 1, text: 'hello', reactions: [],
+    };
+    const rpc = fakeRpc(async () => ({
+        ok: true,
+        value: { items: [thread('a')], hasNextPage: false },
+    }), async () => ({
+        ok: true,
+        value: { items: [base], hasNextPage: false, viewerId: 'viewer' },
+    }));
+    const store = createFrontendStore(rpc, { incomingSync: false });
+    store.start();
+    await settle();
+    store.selectThread('a');
+    await settle();
+    const timestamped = {
+        ...base,
+        reactions: [{ senderId: 'peer-2', reaction: '🔥', timestampMs: 20 }],
+    };
+    store.applyIncomingSnapshot({
+        kind: 'snapshot', threads: [],
+        history: { threadId: 'a', viewerId: 'viewer', messages: [timestamped] },
+    });
+    store.applyIncomingSnapshot({
+        kind: 'snapshot', threads: [],
+        history: { threadId: 'a', viewerId: 'viewer', messages: [{ ...base, reactions: [] }] },
+    });
+    assert.deepEqual(store.state.histories.a.byId.target.reactions, []);
+    store.applyIncomingSnapshot({
+        kind: 'snapshot', threads: [],
+        history: {
+            threadId: 'a', viewerId: 'viewer',
+            messages: [{ ...base, reactions: [{ senderId: 'peer-2', reaction: '👍' }] }],
+        },
+    });
+    assert.equal(firstReaction(store.state.histories.a.byId.target), '👍');
+    store.applyIncomingSnapshot({
+        kind: 'snapshot', threads: [],
+        history: {
+            threadId: 'a', viewerId: 'viewer',
+            messages: [{ ...base, reactions: [{ senderId: 'peer-2', reaction: '😂' }] }],
+        },
+    });
+    assert.equal(firstReaction(store.state.histories.a.byId.target), '😂');
+    store.destroy();
+});
+
+test('an older-page completion cannot overwrite a newer peer reaction', async () => {
+    installWindowTimers();
+    let resolveOlder!: (value: Result<ThreadMessages>) => void;
+    let calls = 0;
+    const base: Message = {
+        kind: 'text', id: 'target', senderId: 'peer', ts: 10, text: 'hello',
+        reactions: [{ senderId: 'peer-2', reaction: '👍', timestampMs: 10 }],
+    };
+    const rpc = fakeRpc(async () => ({
+        ok: true,
+        value: { items: [thread('a')], hasNextPage: false },
+    }), async () => ++calls === 1 ? {
+        ok: true,
+        value: { items: [base], cursor: 'older', hasNextPage: true, viewerId: 'viewer' },
+    } : new Promise(resolve => { resolveOlder = resolve; }));
+    const store = createFrontendStore(rpc, { incomingSync: false });
+    store.start();
+    await settle();
+    store.selectThread('a');
+    await settle();
+    store.revealOlderHistory('a', true);
+    await settle();
+    store.applyIncomingSnapshot({
+        kind: 'snapshot', threads: [],
+        history: {
+            threadId: 'a', viewerId: 'viewer',
+            messages: [{
+                ...base,
+                reactions: [{ senderId: 'peer-2', reaction: '🔥' }],
+            }],
+        },
+    });
+    resolveOlder({
+        ok: true,
+        value: {
+            items: [{
+                ...base,
+                reactions: [{ senderId: 'peer-2', reaction: '👍', timestampMs: 999 }],
+            }, { kind: 'text', id: 'older', senderId: 'peer', ts: 1, text: 'old' }],
+            hasNextPage: false,
+            viewerId: 'viewer',
+        },
+    });
+    await settle();
+    assert.equal(firstReaction(store.state.histories.a.byId.target), '🔥');
+    store.destroy();
+});
+
+test('the incoming snapshot boundary is inert after destroy', async () => {
+    const store = createFrontendStore(fakeRpc(async () => ({
+        ok: true,
+        value: { items: [thread('a')], hasNextPage: false },
+    })), { incomingSync: false });
+    store.start();
+    await settle();
+    let emissions = 0;
+    store.subscribe(() => { emissions++; });
+    store.destroy();
+    const before = JSON.stringify(store.state);
+    assert.equal(store.applyIncomingSnapshot({
+        kind: 'snapshot',
+        threads: [{ ...thread('b'), lastActivityMs: 20 }],
+    }), false);
+    assert.equal(JSON.stringify(store.state), before);
+    assert.equal(emissions, 0);
+});
+
+test('incoming polling is visible, single-flight, backed off, and stale after destroy', async () => {
+    let visible = true;
+    let visibilityListener: () => void = () => undefined;
+    let subscribed = false;
+    let timer: { callback: () => void; delay: number } | undefined;
+    let inboxCalls = 0;
+    let resolveDeferred!: (value: Result<Page<Thread>>) => void;
+    const rpc = fakeRpc(async () => {
+        inboxCalls++;
+        if (inboxCalls === 1) return {
+            ok: true,
+            value: { items: [thread('a')], hasNextPage: false },
+        };
+        if (inboxCalls <= 6) return { ok: false, error: { message: 'offline' } };
+        return new Promise(resolve => { resolveDeferred = resolve; });
+    });
+    const store = createFrontendStore(rpc, {
+        incomingSync: {
+            intervalMs: 5,
+            maxBackoffMs: 60,
+            environment: {
+                isVisible: () => visible,
+                subscribeVisibility: listener => {
+                    subscribed = true;
+                    visibilityListener = listener;
+                    return () => { subscribed = false; };
+                },
+                setTimeout: (callback, delay) => {
+                    timer = { callback, delay };
+                    return timer;
+                },
+                clearTimeout: value => {
+                    if (timer === value) timer = undefined;
+                },
+            },
+        },
+    });
+    store.start();
+    await settle();
+    assert.equal((timer as { callback: () => void; delay: number } | undefined)?.delay, 5);
+    const firstPoll = timer!.callback;
+    timer = undefined;
+    firstPoll();
+    await settle();
+    assert.equal((timer as { callback: () => void; delay: number } | undefined)?.delay, 10);
+    for (const expectedDelay of [20, 40, 60]) {
+        const retry = timer!.callback;
+        timer = undefined;
+        retry();
+        await settle();
+        assert.equal(
+            (timer as { callback: () => void; delay: number } | undefined)?.delay,
+            expectedDelay,
+        );
+    }
+    const cappedRetry = timer!.callback;
+    timer = undefined;
+    cappedRetry();
+    await settle();
+    assert.equal((timer as { callback: () => void; delay: number } | undefined)?.delay, 60);
+
+    visible = false;
+    visibilityListener();
+    assert.equal(timer, undefined);
+    visible = true;
+    visibilityListener();
+    await settle();
+    visibilityListener();
+    assert.equal(inboxCalls, 7);
+    store.destroy();
+    assert.equal(subscribed, false);
+    resolveDeferred({
+        ok: true,
+        value: { items: [thread('b')], hasNextPage: false },
+    });
+    await settle();
+    assert.deepEqual(store.state.inbox.orderedIds, ['a']);
+    assert.equal(timer, undefined);
 });
 
 function fakeRpc(

@@ -545,7 +545,7 @@ async function mount(scenario: Scenario) {
             return Promise.resolve(page(0, 20));
         },
     };
-    activeStore = createFrontendStore(rpc);
+    activeStore = createFrontendStore(rpc, { incomingSync: false });
     TeactDOM.render(createElement(App, { store: activeStore }) as never, document.querySelector('#app')!);
     await waitFor(() => activeStore?.state.inbox.status === 'ready');
     activeStore.selectThread(selectedThreadId);
@@ -604,6 +604,15 @@ window.historyHarness = {
     select: (threadId: string) => activeStore?.selectThread(threadId),
     revealOlder: (threadId: string) => activeStore?.revealOlderHistory(threadId),
     showInbox: () => activeStore?.showInbox(),
+    applyIncoming: (threadId: string, id: string, ts: number) => activeStore?.applyIncomingSnapshot({
+        kind: 'snapshot',
+        threads: [],
+        history: {
+            threadId,
+            viewerId: 'viewer',
+            messages: [{ kind: 'text', id, senderId: 'sender', ts, text: id }],
+        },
+    }),
     historyState: (threadId: string) => {
         const history = activeStore?.state.histories[threadId];
         return {
@@ -635,6 +644,7 @@ declare global {
             select: (threadId: string) => void;
             revealOlder: (threadId: string) => void;
             showInbox: () => void;
+            applyIncoming: (threadId: string, id: string, ts: number) => void;
             historyState: (threadId: string) => {
                 selected?: string;
                 viewportIds?: string[];

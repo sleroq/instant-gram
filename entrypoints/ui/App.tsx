@@ -496,11 +496,26 @@ function MessagePane({
     const activeThreadRef = useRef(thread.key);
     const openedThreadRef = useRef('');
     const followNewestThreadRef = useRef<string>();
+    const handledIncomingFollowRef = useRef({
+        threadId: thread.key,
+        version: history?.incomingFollowVersion ?? 0,
+    });
     const handledReplyNavigationRef = useRef(0);
     const [isViewportAtBottom, setIsViewportAtBottom] = useState(false);
     const viewportKey = history?.viewportIds.join('\u0000') ?? '';
 
     activeThreadRef.current = thread.key;
+
+    const updateBottomState = (scroller: HTMLDivElement) => {
+        const atBottom = isAtBottom(scroller);
+        const current = store.state.histories[thread.key];
+        const latestId = current?.listedIds.at(-1);
+        store.setHistoryFollowingNewest(
+            thread.key,
+            Boolean(atBottom && latestId && current?.viewportIds.includes(latestId)),
+        );
+        setIsViewportAtBottom(atBottom);
+    };
 
     const clearRevealTimer = () => {
         if (revealTimerRef.current !== undefined) {
@@ -608,6 +623,10 @@ function MessagePane({
         clearRevealTimer();
         clearContinuationTimers();
         followNewestThreadRef.current = undefined;
+        handledIncomingFollowRef.current = {
+            threadId: thread.key,
+            version: history?.incomingFollowVersion ?? 0,
+        };
         return () => {
             clearRevealTimer();
             clearContinuationTimers();
@@ -629,7 +648,7 @@ function MessagePane({
             } else {
                 scroller.scrollTop = scroller.scrollHeight;
             }
-            setIsViewportAtBottom(isAtBottom(scroller));
+            updateBottomState(scroller);
         }
         const pending = pendingAnchorRef.current;
         if (history.isReplacingViewport) {
@@ -650,7 +669,7 @@ function MessagePane({
             scheduleThreadContinuation(thread.key, reevaluateOlderReveal, 50);
         }
         updateResizeAnchor(scroller, resizeAnchorRef);
-        setIsViewportAtBottom(isAtBottom(scroller));
+        updateBottomState(scroller);
         if (
             scroller.scrollHeight <= scroller.clientHeight + 1 && history.hasOlder &&
             !history.isLoadingOlder && !history.isPreloadingOlder &&
@@ -683,8 +702,27 @@ function MessagePane({
         scroller.scrollTop = scroller.scrollHeight;
         followNewestThreadRef.current = undefined;
         updateResizeAnchor(scroller, resizeAnchorRef);
-        setIsViewportAtBottom(isAtBottom(scroller));
+        updateBottomState(scroller);
     }, [thread.key, viewportKey]);
+
+    useLayoutEffect(() => {
+        const version = history?.incomingFollowVersion ?? 0;
+        const handled = handledIncomingFollowRef.current;
+        if (handled.threadId !== thread.key) {
+            handledIncomingFollowRef.current = { threadId: thread.key, version };
+            return;
+        }
+        if (version === handled.version) return;
+        handledIncomingFollowRef.current = { threadId: thread.key, version };
+        const scroller = scrollerRef.current;
+        if (
+            !scroller || activeThreadRef.current !== thread.key ||
+            store.state.selectedThreadId !== thread.key
+        ) return;
+        scroller.scrollTop = scroller.scrollHeight;
+        updateResizeAnchor(scroller, resizeAnchorRef);
+        updateBottomState(scroller);
+    }, [thread.key, history?.incomingFollowVersion]);
 
     useLayoutEffect(() => {
         const navigation = history?.replyNavigation;
@@ -702,7 +740,7 @@ function MessagePane({
         handledReplyNavigationRef.current = navigation.requestId;
         row.scrollIntoView({ block: 'center' });
         row.focus({ preventScroll: true });
-        setIsViewportAtBottom(isAtBottom(scroller));
+        updateBottomState(scroller);
         store.saveHistoryAnchor(thread.key, {
             id: navigation.targetId,
             offset: row.getBoundingClientRect().top - scroller.getBoundingClientRect().top,
@@ -813,7 +851,7 @@ function MessagePane({
             });
         }
         updateResizeAnchor(scroller, resizeAnchorRef);
-        setIsViewportAtBottom(isAtBottom(scroller));
+        updateBottomState(scroller);
     };
 
     const submitDraft = () => {
@@ -852,7 +890,7 @@ function MessagePane({
             scroller.scrollTop = scroller.scrollHeight;
             followNewestThreadRef.current = undefined;
             updateResizeAnchor(scroller, resizeAnchorRef);
-            setIsViewportAtBottom(isAtBottom(scroller));
+            updateBottomState(scroller);
         });
     };
 

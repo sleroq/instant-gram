@@ -155,6 +155,17 @@ export type ThreadMessages = Page<Message> & {
     viewerId: string;
 };
 
+/** Protocol-neutral authoritative DM data used by the UI reconciliation boundary. */
+export type IncomingDmSnapshot = {
+    kind: 'snapshot';
+    threads: Thread[];
+    history?: {
+        threadId: string;
+        messages: Message[];
+        viewerId: string;
+    };
+};
+
 export type ApiError = { message: string };
 export type Result<T> = { ok: true; value: T } | { ok: false; error: ApiError };
 
