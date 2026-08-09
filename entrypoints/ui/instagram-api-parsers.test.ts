@@ -54,6 +54,7 @@ test('current inbox aliases normalize thread flags, folders, and server pins', (
                                     system_folder: 'INBOX',
                                     folder: 'PRIMARY',
                                     is_pin: true,
+                                    marked_as_unread: true,
                                     users: [user],
                                     last_activity_timestamp_ms: '1785763880444',
                                 },
@@ -80,6 +81,7 @@ test('current inbox aliases normalize thread flags, folders, and server pins', (
                 isMuted: true,
                 folder: 'REQUESTS',
                 lastActivityMs: 1_785_763_880_444,
+                isUnread: true,
                 serverIsPin: true,
                 serverPinnedMessageIds: [],
                 users: [
@@ -97,6 +99,28 @@ test('current inbox aliases normalize thread flags, folders, and server pins', (
         cursor: 'next-page',
         hasNextPage: true,
     });
+});
+
+test('thread unread state compares the latest incoming message with the viewer watermark', () => {
+    const parsed = parseThread({
+        thread_key: 'person-1',
+        thread_id: 'read-receipt-1',
+        viewer: { interop_messaging_user_fbid: 'viewer-fbid' },
+        marked_as_unread: false,
+        slide_read_receipts: [{
+            participant_fbid: 'viewer-fbid',
+            watermark_timestamp_ms: '1786269297000',
+        }],
+        slide_messages: { edges: [{ node: {
+            id: 'latest-message',
+            sender_fbid: 'peer-fbid',
+            timestamp_ms: '1786269297434',
+            content_type: 'TEXT',
+            content: { __typename: 'SlideMessageText', text_body: 'new' },
+        } }] },
+    });
+
+    assert.equal(parsed?.isUnread, true);
 });
 
 test('thread FBID is retained independently from the stable UI key', () => {

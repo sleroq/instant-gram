@@ -48,6 +48,7 @@ const REMOTE_RPC_NAMES = [
     'sendText',
     'forwardMessage',
     'setReaction',
+    'markThreadRead',
 ] as const satisfies readonly DirectRemoteRpcName[];
 const enqueuePinMutation = createSerialTaskQueue();
 

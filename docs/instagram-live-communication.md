@@ -27,8 +27,9 @@ Source: `examples/www.instagram.com-live-communication.har`. Use the same common
   read in flight schedules one replacement attempt at the current delay, rather
   than issuing a duplicate request or stopping the loop.
   Teardown removes the visibility listener, clears the timer, and generation-
-  gates any request already in flight. Typing and read-receipt updates remain
-  unsupported. Passive Iris/MQTT observation and manual two-account validation
+  gates any request already in flight. Incoming peer read-receipt updates and
+  typing remain unsupported; selected unread conversations do send the captured
+  read pair. Passive Iris/MQTT observation and manual two-account validation
   remain future live-session work.
 - When a message is displayed/read, Instagram sends read markers:
     - `useIGDMarkThreadAsReadMutation`, `doc_id=27356881703909995`

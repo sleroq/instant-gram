@@ -42,7 +42,7 @@ type AsyncHandlers<Map extends Record<keyof Map, (...args: never[]) => unknown>>
 type CanonicalHandlerRpcMap = Pick<
     RpcMap,
     'getInbox' | 'getThread' | 'sendText' | 'forwardMessage' | 'setReaction' | 'setReelLiked' |
-    'setReelSaved' | 'togglePin'
+    'setReelSaved' | 'togglePin' | 'markThreadRead'
 >;
 export type InstagramRpcHandlers = AsyncHandlers<CanonicalHandlerRpcMap>;
 type CatalogHandlerRpcMap = Pick<
@@ -61,6 +61,10 @@ const MAX_CURSOR_LENGTH = 4_096;
 const MAX_TEXT_LENGTH = 10_000;
 const MAX_SEARCH_LENGTH = 256;
 const MAX_PLAYLIST_PAGE_SIZE = 50;
+
+function failureMessage(error: unknown) {
+    return error instanceof Error ? error.message : String(error);
+}
 
 function record(value: unknown, label = 'payload'): Record<string, unknown> {
     if (typeof value !== 'object' || value === null || Array.isArray(value))
@@ -475,12 +479,33 @@ function createInstagramHandlers(
                 messageId: requiredString(payload.messageId, 'message ID'),
                 messageTimestampMs: timestamp(payload.messageTimestampMs),
             };
-            parseMarkThreadReadResponse(
-                await execute('useIGDMarkThreadAsReadMutation', input),
-            );
-            return parseMarkThreadReadValidationResponse(
-                await execute('useIGDMarkThreadAsReadValidationMutation', input),
-            );
+            const [receipt, validation] = await Promise.allSettled([
+                execute('useIGDMarkThreadAsReadMutation', input),
+                execute('useIGDMarkThreadAsReadValidationMutation', input),
+            ]);
+            const failures: string[] = [];
+            if (receipt.status === 'rejected') {
+                failures.push(`receipt: ${failureMessage(receipt.reason)}`);
+            } else {
+                try {
+                    parseMarkThreadReadResponse(receipt.value);
+                } catch (error) {
+                    failures.push(`receipt: ${failureMessage(error)}`);
+                }
+            }
+            let parsedValidation: ReturnType<typeof parseMarkThreadReadValidationResponse> | undefined;
+            if (validation.status === 'rejected') {
+                failures.push(`validation: ${failureMessage(validation.reason)}`);
+            } else {
+                try {
+                    parsedValidation = parseMarkThreadReadValidationResponse(validation.value);
+                } catch (error) {
+                    failures.push(`validation: ${failureMessage(error)}`);
+                }
+            }
+            if (failures.length)
+                throw new Error(`Instagram mark-read request failed (${failures.join('; ')})`);
+            return parsedValidation!;
         },
         async pinMessage(value: unknown) {
             const payload = record(value);
@@ -545,6 +570,7 @@ export function createInstagramRpcHandlers(
         setReelLiked: handlers.setReelLiked,
         setReelSaved: handlers.setReelSaved,
         togglePin: handlers.togglePin,
+        markThreadRead: handlers.markThreadRead,
     };
 }
 

@@ -65,6 +65,26 @@ test('text and read builders preserve captured nulls and string timestamps', () 
         },
     );
     assert.deepEqual(
+        [
+            operations.useIGDMarkThreadAsReadMutation.docId,
+            operations.useIGDMarkThreadAsReadMutation.buildVariables(
+                { threadIgId: 'igid', messageId: 'message' },
+                context,
+            ),
+        ],
+        [
+            '27356881703909995',
+            {
+                metadata: { ig_thread_igid: 'igid' },
+                data: { item_id: '', message_id: 'message' },
+            },
+        ],
+    );
+    assert.equal(
+        operations.useIGDMarkThreadAsReadValidationMutation.docId,
+        '35211594988486314',
+    );
+    assert.deepEqual(
         operations.useIGDMarkThreadAsReadValidationMutation.buildVariables(
             {
                 threadIgId: 'igid',

@@ -71,6 +71,42 @@ test('markThreadRead accepts captured false validation after a successful receip
     ]);
 });
 
+test('markThreadRead waits for both mutations to settle before exposing a failure', async () => {
+    let resolveValidation!: (value: unknown) => void;
+    const handlers = createInstagramCatalogHandlers(async operation => {
+        if (operation === 'useIGDMarkThreadAsReadMutation') throw new Error('receipt failed');
+        if (operation === 'useIGDMarkThreadAsReadValidationMutation') {
+            return new Promise(resolve => { resolveValidation = resolve; });
+        }
+        throw new Error(`Unexpected operation ${operation}`);
+    });
+    const marking = handlers.markThreadRead({
+        threadIgId: 'thread-igid',
+        messageId: 'message-id',
+        messageTimestampMs: 1_785_763_880_444,
+    });
+    let settled = false;
+    void marking.then(() => { settled = true; }, () => { settled = true; });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(settled, false);
+
+    resolveValidation({ data: { xig_direct_mark_read_id_validation: false } });
+    await assert.rejects(marking, /receipt failed/);
+});
+
+test('markThreadRead labels failures from both required mutations', async () => {
+    const handlers = createInstagramCatalogHandlers(async operation => {
+        throw new Error(operation === 'useIGDMarkThreadAsReadMutation'
+            ? 'receipt transport failed'
+            : 'validation transport failed');
+    });
+    await assert.rejects(handlers.markThreadRead({
+        threadIgId: 'thread-igid',
+        messageId: 'message-id',
+        messageTimestampMs: 1_785_763_880_444,
+    }), /receipt: receipt transport failed; validation: validation transport failed/);
+});
+
 test('forwardMessage validates and parses the captured reel receipt', async () => {
     const calls: Call[] = [];
     const handlers = createInstagramRpcHandlers(executor({

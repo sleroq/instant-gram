@@ -95,6 +95,7 @@ export type Thread = {
     isMuted: boolean;
     folder: Folder;
     lastActivityMs: number;
+    isUnread: boolean;
     serverIsPin: boolean;
     serverPinnedMessageIds?: string[];
     users: User[];
@@ -419,4 +420,4 @@ export type InstagramRpcMap = {
 
 /** Capabilities exposed to the extension UI and routed through the background. */
 export type RpcMap = CoreRpcMap &
-    Pick<InstagramRpcMap, 'sendText' | 'forwardMessage' | 'setReaction'>;
+    Pick<InstagramRpcMap, 'sendText' | 'forwardMessage' | 'setReaction' | 'markThreadRead'>;

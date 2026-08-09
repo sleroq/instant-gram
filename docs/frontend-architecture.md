@@ -43,6 +43,7 @@ togglePin({ threadKey, threadFbid, pin }): Result<{ pinned, receipt }>
 sendText({ threadFbid, text, replyToMessageId?, offlineThreadingId }): Result<SentTextMessage>
 setReaction({ threadFbid, messageId, emoji }): Result<SetReactionResult>
 forwardMessage({ targetThreadFbid, sourceThreadIgId, sourceIsViewer, offlineThreadingId, content }): Result<SentMessage>
+markThreadRead({ threadIgId, messageId, messageTimestampMs }): Result<MutationSuccess>
 ```
 
 `CompleteUiRpc` mechanically maps those signatures to promises. The read-only
@@ -53,8 +54,8 @@ check in actions at the store boundary.
 
 The extension bridge is a closed capability list. DM and reel mutation RPCs
 above are routed through UI, background, and content script; the broader
-Instagram operation catalog (including generic GraphQL execution, read markers,
-message pins, and richer sends) is not exposed to UI code. The content-script
+Instagram operation catalog (including generic GraphQL execution, message pins,
+and richer sends) is not exposed to UI code. The content-script
 anchor executes catalog descriptors and converts thrown request/decoder errors
 to `Result` failures. Text success requires both server message ID and timestamp;
 reaction success requires the matching target ID and the complete authoritative
@@ -72,9 +73,13 @@ stage completed, so retry resumes incomplete work without duplicating requests
 whose server response was lost. Source content and protocol metadata, target
 operation IDs, and the optional comment become immutable once their associated
 request IDs are allocated, keeping every retried payload idempotent.
-The whole operation is single-flight and generation-guarded. Success is announced
-inside the focus-contained modal; partial failures retain their selected targets
-and actionable retry state without changing `selectedThreadId` or target caches.
+The whole operation is single-flight and generation-guarded. Submission closes
+the selection modal immediately and continues in the background. Completion is
+announced through the app-level toast queue; failure notifications can retry the
+same immutable operation. Partial failures retain their selected targets and
+progress without changing `selectedThreadId` or target caches. Global notices
+are store-owned presentation state and render once at the app root so other
+features can reuse success, error, and informational notifications.
 The currently captured forward protocol covers text and reel-share messages
 with a numeric media ID; unsupported message content does not expose Forward.
 
@@ -412,8 +417,10 @@ metadata and is not substituted for persisted `pinnedIds`.
 ### Selection and initial history
 
 `selectThread(id)` immediately writes `selectedThreadId`, records the thread as
-opened, emits, then requests its initial history. Selection UI therefore changes
-before the network resolves. `loadInitialHistory` returns when:
+opened, emits, marks an authoritative `isUnread` latest message read when
+the thread has its read-receipt ID, then requests its initial history. Selection
+UI therefore changes before the network resolves. `loadInitialHistory` returns
+when:
 
 - that thread already has a request in `historyRequests`; or
 - a history exists whose status is anything except `error`; or
@@ -423,6 +430,14 @@ Thus a warmed or previously opened `ready` history paints synchronously and is
 not refetched. A failed history can be retried. `isPreloading` means only “this
 initial one-page request was started by inbox warmup”; it is reset in `finally`.
 Do not reuse it for older-page lookahead.
+
+Read marking is store-owned, optimistic, and single-flight per thread. It sends
+Instagram's paired concurrent item-seen and validation mutations using the normalized
+`Thread.threadIgId` plus the latest normalized message ID/timestamp. A successful
+local watermark prevents an overlapping inbox read for that same latest message
+from restoring stale unread state; a genuinely newer message remains unread.
+Already-read rows and rerenders/reopens do not send. Failure restores unread only
+when the same message is still latest and remains an accessible row error.
 
 `MessagePane` renders the bounded viewport, opens new chats at the newest row,
 restores visited chats from an ID-plus-offset anchor, groups adjacent senders,
@@ -559,6 +574,9 @@ remain gated until `retryOlderHistory(id)` explicitly clears that cursor.
 - `pinRequests` permits one conversation pin mutation per thread. The background
   serializes storage commits so persisted prepend order follows invocation order;
   other pending optimistic pins are replayed over each authoritative list.
+- `readRequests` permits one read mutation per thread. The request is generation
+  guarded, and only an authoritative unread thread with a latest message and
+  read-receipt ID can start it.
 - `reelMediaRequests` and `reelCommentRequests` permit one read per shortcode;
   opening during preload joins its settlement, while comments require open
   intent. `reelLikeRequests` and `reelSaveRequests` serialize those actions

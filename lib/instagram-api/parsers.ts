@@ -449,6 +449,17 @@ export function parseThread(value: unknown): Thread | undefined {
         .map(user => user.username || user.fullName)
         .filter(Boolean)
         .join(', ');
+    const viewerFbid = stringProp(objectProp(thread.viewer)?.interop_messaging_user_fbid);
+    const viewerWatermark = (Array.isArray(thread.slide_read_receipts)
+        ? thread.slide_read_receipts
+        : []
+    ).find(value => stringProp(objectProp(value)?.participant_fbid) === viewerFbid);
+    const viewerWatermarkMs = parseTimestampMs(objectProp(viewerWatermark)?.watermark_timestamp_ms);
+    const hasUnreadIncoming = Boolean(
+        viewerFbid && viewerWatermarkMs !== undefined && lastMessage &&
+        'senderId' in lastMessage && lastMessage.senderId !== viewerFbid &&
+        lastMessage.ts > viewerWatermarkMs,
+    );
     return {
         key,
         threadFbid:
@@ -472,6 +483,7 @@ export function parseThread(value: unknown): Thread | undefined {
             parseFolder(thread.folder) ??
             'PRIMARY',
         lastActivityMs: parseThreadActivityMs(thread),
+        isUnread: thread.marked_as_unread === true || hasUnreadIncoming,
         serverIsPin: booleanProp(thread.is_pin) ?? false,
         serverPinnedMessageIds: pinnedMessageIds(thread),
         users,

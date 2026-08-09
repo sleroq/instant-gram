@@ -33,4 +33,5 @@ export const uiRpc: CompleteUiRpc = {
     sendText: payload => call('sendText', payload),
     forwardMessage: payload => call('forwardMessage', payload),
     setReaction: payload => call('setReaction', payload),
+    markThreadRead: payload => call('markThreadRead', payload),
 };

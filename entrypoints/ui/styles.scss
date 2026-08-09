@@ -18,6 +18,7 @@
     --color-avatar-start: #8959bb;
     --color-avatar-end: #57406f;
     --color-danger: #ff7a90;
+    --color-success: #65d6a0;
     --color-danger-surface: #3a1d2a;
     --color-danger-hover: #4a2232;
     --color-focus: #cba2ff;
@@ -419,8 +420,16 @@ body.is-resizing-sidebar * {
 }
 
 .chat-row__topline strong {
+    min-width: 0;
     font-size: 14px;
     font-weight: 650;
+}
+
+.chat-row__title {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 4px;
 }
 
 .chat-row__topline time {
@@ -457,6 +466,29 @@ body.is-resizing-sidebar * {
     padding: 0;
     color: var(--color-accent-bright);
     background: transparent;
+}
+
+.chat-row__pin {
+    display: grid;
+    flex: none;
+    width: 18px;
+    height: 18px;
+    place-items: center;
+    color: var(--color-text-muted);
+}
+
+.chat-row__pin svg {
+    width: 13px;
+    height: 13px;
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.5;
+}
+
+.chat-row--selected .chat-row__pin {
+    color: rgba(255, 255, 255, 0.88);
 }
 
 .chat-row--selected .chat-row__badge {
@@ -1058,7 +1090,7 @@ body.is-resizing-sidebar * {
     color: var(--color-danger) !important;
 }
 
-.chat-row__pin-error {
+.chat-row__mutation-error {
     position: absolute;
     right: 12px;
     bottom: 3px;
@@ -1431,7 +1463,7 @@ body.is-resizing-sidebar * {
 .forward-modal__dialog {
     display: flex;
     width: min(520px, 100%);
-    max-height: min(720px, calc(100dvh - 40px));
+    max-height: min(780px, calc(100dvh - 40px));
     overflow: hidden;
     flex-direction: column;
     color: var(--color-text);
@@ -1440,6 +1472,60 @@ body.is-resizing-sidebar * {
     border-radius: 20px;
     box-shadow: 0 28px 80px rgba(0, 0, 0, 0.58);
     animation: reel-dialog-in 180ms ease both;
+}
+
+.toast-host {
+    position: fixed;
+    z-index: 1200;
+    top: 18px;
+    right: 18px;
+    display: flex;
+    width: min(400px, calc(100vw - 36px));
+    flex-direction: column;
+    gap: 10px;
+    pointer-events: none;
+}
+
+.toast {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 13px 14px;
+    color: var(--color-text);
+    background: var(--color-panel-elevated);
+    border: 1px solid rgba(203, 162, 255, 0.2);
+    border-left: 3px solid var(--color-accent-bright);
+    border-radius: 12px;
+    box-shadow: 0 16px 44px rgba(0, 0, 0, 0.45);
+    pointer-events: auto;
+    animation: toast-in 180ms ease both;
+
+    > span { min-width: 0; flex: 1; }
+    > button {
+        padding: 5px 8px;
+        color: var(--color-accent-bright);
+        background: transparent;
+        border: 0;
+        border-radius: 8px;
+        cursor: pointer;
+        font: inherit;
+        font-weight: 700;
+    }
+
+    &--success { border-left-color: var(--color-success); }
+    &--error { border-left-color: var(--color-danger); }
+}
+
+.toast .toast__close {
+    padding: 2px 5px;
+    color: var(--color-text-muted);
+    font-size: 20px;
+    font-weight: 400;
+}
+
+@keyframes toast-in {
+    from { opacity: 0; transform: translateY(-8px); }
+    to { opacity: 1; transform: translateY(0); }
 }
 
 .forward-modal__header,

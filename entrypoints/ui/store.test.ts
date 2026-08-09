@@ -19,6 +19,83 @@ test('chat window handles the top and exact end', () => {
     assert.deepEqual(computeChatWindow(72 * 999, 1_000), { start: 969, end: 1_000 });
 });
 
+test('selecting an unread thread marks its latest message read once', async () => {
+    const readCalls: Parameters<CompleteUiRpc['markThreadRead']>[0][] = [];
+    let resolveRead!: (result: Awaited<ReturnType<CompleteUiRpc['markThreadRead']>>) => void;
+    const unread = {
+        ...thread('a'),
+        isUnread: true,
+        lastMessage: {
+            kind: 'text' as const,
+            id: 'latest-message',
+            senderId: 'peer',
+            ts: 1_786_269_297_434,
+            text: 'new',
+        },
+    };
+    const rpc = fakeRpc(
+        async () => ({ ok: true, value: { items: [unread], hasNextPage: false } }),
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        payload => {
+            readCalls.push(payload);
+            return new Promise(resolve => { resolveRead = resolve; });
+        },
+    );
+    const store = createFrontendStore(rpc);
+    store.start();
+    await settle();
+
+    store.selectThread('a');
+    store.selectThread('a');
+    assert.equal(store.state.inbox.byId.a.isUnread, false);
+    assert.deepEqual(readCalls, [{
+        threadIgId: unread.threadIgId,
+        messageId: 'latest-message',
+        messageTimestampMs: 1_786_269_297_434,
+    }]);
+    resolveRead({ ok: true, value: { success: true } });
+    await settle();
+    store.selectThread('a');
+    assert.equal(readCalls.length, 1);
+    store.destroy();
+});
+
+test('a stale inbox page cannot apply an older local read to a newer message', async () => {
+    const firstMessage: Message = {
+        kind: 'text', id: 'first', senderId: 'peer', ts: 1, text: 'first',
+    };
+    const initial = {
+        ...thread('a'), lastActivityMs: 1, isUnread: true, lastMessage: firstMessage,
+    };
+    const store = createFrontendStore(fakeRpc(async () => ({
+        ok: true, value: { items: [initial], hasNextPage: false },
+    })), { incomingSync: false });
+    store.start();
+    await settle();
+    store.selectThread('a');
+    await settle();
+
+    const newerMessage: Message = {
+        kind: 'text', id: 'newer', senderId: 'peer', ts: 2, text: 'newer',
+    };
+    store.applyIncomingSnapshot({
+        kind: 'snapshot',
+        threads: [{ ...initial, lastActivityMs: 2, isUnread: true, lastMessage: newerMessage }],
+    });
+    store.applyIncomingSnapshot({
+        kind: 'snapshot',
+        threads: [{ ...initial, isUnread: true }],
+    });
+
+    assert.equal(store.state.inbox.byId.a.lastMessage?.id, 'newer');
+    assert.equal(store.state.inbox.byId.a.isUnread, true);
+    store.destroy();
+});
+
 test('background mutation queue preserves invocation order through failures', async () => {
     const enqueue = createSerialTaskQueue();
     const events: string[] = [];
@@ -1040,13 +1117,18 @@ test('forwarding sends comments first, retries partial targets safely, and prese
     store.toggleForwardTarget('c');
     store.setForwardComment('  context first  ');
 
-    assert.equal(await store.submitForwarding(), false);
+    const firstSubmission = store.submitForwarding();
+    assert.equal(store.state.forwarding?.isModalOpen, false);
+    assert.equal(store.state.selectedThreadId, 'a');
+    assert.equal(await firstSubmission, false);
     assert.deepEqual(events, [
         'comment:2:context first', 'comment:3:context first',
         'forward:3',
     ]);
     assert.equal(store.state.selectedThreadId, 'a');
     assert.equal(store.state.forwarding?.status, 'error');
+    assert.equal(store.state.notifications.at(-1)?.kind, 'error');
+    assert.equal(store.state.notifications.at(-1)?.action?.label, 'Retry');
     assert.equal(store.setForwardComment('different retry text'), false);
     assert.equal(store.state.forwarding?.comment, '  context first  ');
     store.state.inbox.byId.a.threadIgId = 'changed-source';
@@ -1071,6 +1153,7 @@ test('forwarding sends comments first, retries partial targets safely, and prese
     assert.deepEqual(forwardPayloads.map(payload => payload.targetThreadFbid).sort(), ['2', '3', '3']);
     assert.equal(store.state.selectedThreadId, 'a');
     assert.equal(store.state.forwarding?.status, 'success');
+    assert.equal(store.state.notifications.at(-1)?.kind, 'success');
     store.destroy();
 });
 
@@ -2076,6 +2159,153 @@ test('incoming messages follow only a history measured at newest', async () => {
     store.destroy();
 });
 
+test('only an unread message displayed at the newest edge is marked read', async () => {
+    installWindowTimers();
+    const readCalls: Parameters<CompleteUiRpc['markThreadRead']>[0][] = [];
+    const rpc = fakeRpc(async () => ({
+        ok: true,
+        value: { items: [thread('a'), thread('b')], hasNextPage: false },
+    }), async () => historyPage(0, 1, undefined, false), undefined, undefined,
+    undefined, undefined, async payload => {
+        readCalls.push(payload);
+        return { ok: true, value: { success: true } };
+    });
+    const store = createFrontendStore(rpc, { incomingSync: false });
+    store.start();
+    await settle();
+    store.selectThread('a');
+    await settle();
+    store.setHistoryFollowingNewest('a', true);
+    const incoming: Message = {
+        kind: 'text', id: 'incoming', senderId: 'peer', ts: 100, text: 'new',
+    };
+
+    store.applyIncomingSnapshot({
+        kind: 'snapshot',
+        threads: [
+            { ...thread('a'), lastActivityMs: 100, isUnread: true, lastMessage: incoming },
+            { ...thread('b'), lastActivityMs: 100, isUnread: true, lastMessage: incoming },
+        ],
+    });
+    assert.equal(readCalls.length, 0);
+
+    const mismatched: Message = {
+        kind: 'text', id: 'mismatch', senderId: 'peer', ts: 50, text: 'older',
+    };
+    store.applyIncomingSnapshot({
+        kind: 'snapshot', threads: [],
+        history: { threadId: 'a', viewerId: 'viewer', messages: [mismatched] },
+    });
+    assert.equal(readCalls.length, 0);
+
+    store.applyIncomingSnapshot({
+        kind: 'snapshot', threads: [],
+        history: { threadId: 'a', viewerId: 'viewer', messages: [incoming] },
+    });
+    assert.deepEqual(readCalls, [{
+        threadIgId: thread('a').threadIgId,
+        messageId: 'incoming',
+        messageTimestampMs: 100,
+    }]);
+    assert.equal(store.state.inbox.byId.a.isUnread, false);
+    assert.equal(store.state.inbox.byId.b.isUnread, true);
+    store.destroy();
+});
+
+test('a newer displayed message waits behind a successful or failed thread read', async () => {
+    installWindowTimers();
+    for (const firstSucceeds of [true, false]) {
+        const first: Message = {
+            kind: 'text', id: 'first', senderId: 'peer', ts: 10, text: 'first',
+        };
+        const readCalls: Parameters<CompleteUiRpc['markThreadRead']>[0][] = [];
+        let resolveFirst!: (result: Awaited<ReturnType<CompleteUiRpc['markThreadRead']>>) => void;
+        const rpc = fakeRpc(async () => ({
+            ok: true,
+            value: {
+                items: [{ ...thread('a'), lastActivityMs: 10, isUnread: true, lastMessage: first }],
+                hasNextPage: false,
+            },
+        }), async () => ({
+            ok: true, value: { items: [first], hasNextPage: false, viewerId: 'viewer' },
+        }), undefined, undefined, undefined, undefined, payload => {
+            readCalls.push(payload);
+            if (readCalls.length === 1) return new Promise(resolve => { resolveFirst = resolve; });
+            return Promise.resolve({ ok: true, value: { success: true } });
+        });
+        const store = createFrontendStore(rpc, { incomingSync: false });
+        store.start();
+        await settle();
+        store.selectThread('a');
+        await settle();
+        store.setHistoryFollowingNewest('a', true);
+
+        const second: Message = {
+            kind: 'text', id: 'second', senderId: 'peer', ts: 20, text: 'second',
+        };
+        store.applyIncomingSnapshot({
+            kind: 'snapshot',
+            threads: [{ ...thread('a'), lastActivityMs: 20, isUnread: true, lastMessage: second }],
+            history: { threadId: 'a', viewerId: 'viewer', messages: [second] },
+        });
+        assert.deepEqual(readCalls.map(call => call.messageId), ['first']);
+
+        resolveFirst(firstSucceeds
+            ? { ok: true, value: { success: true } }
+            : { ok: false, error: { message: 'first failed' } });
+        await settle();
+        assert.deepEqual(readCalls.map(call => call.messageId), ['first', 'second']);
+        assert.equal(store.state.inbox.byId.a.isUnread, false);
+        store.destroy();
+    }
+});
+
+test('a queued displayed read is suppressed after selection change or destroy', async () => {
+    installWindowTimers();
+    for (const abandon of ['switch', 'destroy'] as const) {
+        const first: Message = {
+            kind: 'text', id: 'first', senderId: 'peer', ts: 10, text: 'first',
+        };
+        const readCalls: Parameters<CompleteUiRpc['markThreadRead']>[0][] = [];
+        let resolveFirst!: (result: Awaited<ReturnType<CompleteUiRpc['markThreadRead']>>) => void;
+        const rpc = fakeRpc(async () => ({
+            ok: true,
+            value: {
+                items: [
+                    { ...thread('a'), lastActivityMs: 10, isUnread: true, lastMessage: first },
+                    thread('b'),
+                ],
+                hasNextPage: false,
+            },
+        }), async payload => payload.threadKey === 'a'
+            ? { ok: true, value: { items: [first], hasNextPage: false, viewerId: 'viewer' } }
+            : emptyHistory(), undefined, undefined, undefined, undefined, payload => {
+            readCalls.push(payload);
+            return new Promise(resolve => { resolveFirst = resolve; });
+        });
+        const store = createFrontendStore(rpc, { incomingSync: false });
+        store.start();
+        await settle();
+        store.selectThread('a');
+        await settle();
+        store.setHistoryFollowingNewest('a', true);
+        const second: Message = {
+            kind: 'text', id: 'second', senderId: 'peer', ts: 20, text: 'second',
+        };
+        store.applyIncomingSnapshot({
+            kind: 'snapshot',
+            threads: [{ ...thread('a'), lastActivityMs: 20, isUnread: true, lastMessage: second }],
+            history: { threadId: 'a', viewerId: 'viewer', messages: [second] },
+        });
+        if (abandon === 'switch') store.selectThread('b');
+        else store.destroy();
+        resolveFirst({ ok: true, value: { success: true } });
+        await settle();
+        assert.deepEqual(readCalls.map(call => call.messageId), ['first']);
+        if (abandon === 'switch') store.destroy();
+    }
+});
+
 test('reselecting a history requires a fresh newest measurement before following incoming data', async () => {
     installWindowTimers();
     const rpc = fakeRpc(async () => ({
@@ -2632,6 +2862,10 @@ function fakeRpc(
             receipt: { threadFbid: payload.threadFbid, isPinned: payload.pin },
         },
     }),
+    markThreadRead: CompleteUiRpc['markThreadRead'] = async () => ({
+        ok: true,
+        value: { success: true },
+    }),
 ): CompleteUiRpc {
     return {
         getInbox,
@@ -2641,6 +2875,7 @@ function fakeRpc(
         sendText,
         forwardMessage: async () => ({ ok: false, error: { message: 'not used' } }),
         setReaction,
+        markThreadRead,
         getReelMedia: async () => ({
             ok: false,
             error: { message: 'not used' },
@@ -2695,6 +2930,7 @@ function thread(key: string): Thread {
         isMuted: false,
         folder: 'PRIMARY',
         lastActivityMs: 0,
+        isUnread: false,
         serverIsPin: false,
         users: [],
     };

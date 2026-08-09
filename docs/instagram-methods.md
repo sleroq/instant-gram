@@ -20,10 +20,15 @@ Source captures: `examples/www.instagram.com.har`, `examples/www.instagram.com-t
 | `getReelMedia`     | REST | — | `GET /api/v1/media/<numeric-id>/info/`; prefer the validated DM `mediaId`, otherwise decode Instagram's URL-safe-base64 shortcode | REST `items[0]`, with ID and shortcode checked |
 | `pinThread`        |             `useIGDPinThreadMutation` | `26491513390471063` | `{ thread_fbid, pin:true }`                                                                                                                                                                                                                                                                                                                                                                         | `data.xig_direct_pin_thread.{ is_pin, id }`                         |
 | `unpinThread`      |           `useIGDUnpinThreadMutation` | `26719492947719993` | `{ thread_fbid, pin:false }`                                                                                                                                                                                                                                                                                                                                                                        | `data.xig_direct_pin_thread.{ is_pin, id }`                         |
+| `markThreadRead` | concurrent `useIGDMarkThreadAsReadMutation` and `useIGDMarkThreadAsReadValidationMutation` | `27356881703909995`, `35211594988486314` | item-seen `{ metadata:{ ig_thread_igid:thread_id }, data:{ item_id:'', message_id } }`; validation `{ metadata:{ ig_thread_igid:thread_id }, data:{ message_id, message_timestamp_ms:'<decimal ms>' } }` | item-seen receipt and boolean `data.xig_direct_mark_read_id_validation` |
 
 ## Parser notes
 
 - Inbox threads live in `threads_by_folder.edges[].node.as_ig_direct_thread`; use `threads_by_folder.page_info.end_cursor/has_next_page` for inbox pagination.
+- Conversation unread state is normalized from an explicit `marked_as_unread`
+  flag or a latest incoming message newer than the viewer participant's
+  `slide_read_receipts[].watermark_timestamp_ms`. Read mutations use the distinct
+  large `thread_id`, never `thread_key` or the smaller operation `thread_fbid`.
 - Thread messages live in `slide_messages.edges[].node`; use `slide_messages.page_info.end_cursor/has_next_page` for older-message pagination.
 - Text messages are `content_type: 'TEXT'` with `content.__typename: 'SlideMessageText'` and `text_body`.
 - Reel/post shares are `content_type: 'MESSAGE_INLINE_SHARE'` with `content.__typename: 'SlideMessageXMAContent'`; reel shares have `content.xma.__typename: 'SlideMessagePortraitXMA'`, `target_url` like `/reel/<shortcode>/...`, and `preview_image.url` for the thumbnail. Some shares are `SlideMessageStandardXMA` posts or `SlideMessagePlaceholderXMA` unavailable content.

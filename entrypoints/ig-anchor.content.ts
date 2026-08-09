@@ -31,6 +31,7 @@ const REMOTE_RPC_NAMES = [
     'forwardMessage',
     'setReaction',
     'togglePin',
+    'markThreadRead',
 ] as const satisfies readonly RemoteRpcName[];
 
 type GraphqlRequest = {

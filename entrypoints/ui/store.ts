@@ -94,6 +94,12 @@ export type PinMutation = {
     error?: string;
 };
 
+export type ReadMutation = {
+    messageId: string;
+    status: 'pending' | 'error';
+    error?: string;
+};
+
 export type ReelMutation = {
     desired: boolean;
     status: 'pending' | 'error';
@@ -137,6 +143,7 @@ export type ForwardingState = {
     sourceThreadIgId: string;
     sourceIsViewer: boolean;
     content: ForwardMessageContent;
+    isModalOpen: boolean;
     selectedTargetIds: string[];
     comment: string;
     status: 'idle' | 'submitting' | 'error' | 'success';
@@ -144,7 +151,20 @@ export type ForwardingState = {
     error?: string;
 };
 
-export type FrontendStoreRpc = UiRpc & Pick<CompleteUiRpc, 'sendText' | 'forwardMessage' | 'setReaction'>;
+export type GlobalNotification = {
+    id: number;
+    kind: 'success' | 'error' | 'info';
+    message: string;
+    action?: {
+        label: string;
+        run: () => void;
+    };
+};
+
+export type FrontendStoreRpc = UiRpc & Pick<
+    CompleteUiRpc,
+    'sendText' | 'forwardMessage' | 'setReaction' | 'markThreadRead'
+>;
 
 type IncomingSyncEnvironment = {
     isVisible: () => boolean;
@@ -167,6 +187,7 @@ export type FrontendState = {
     committedPinnedIds: string[];
     pinsStatus: Status;
     pinMutations: Record<string, PinMutation>;
+    readMutations: Record<string, ReadMutation>;
     selectedThreadId?: string;
     histories: Record<string, HistoryState>;
     reels: {
@@ -175,6 +196,7 @@ export type FrontendState = {
         byId: Record<string, ReelState>;
     };
     forwarding?: ForwardingState;
+    notifications: GlobalNotification[];
 };
 
 const SIGNED_64_MAX = 9_223_372_036_854_775_807n;
@@ -194,8 +216,10 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
         committedPinnedIds: [],
         pinsStatus: 'idle',
         pinMutations: {},
+        readMutations: {},
         histories: {},
         reels: { byId: {} },
+        notifications: [],
     };
     const listeners = new Set<() => void>();
     const historyRequests = new Map<string, symbol>();
@@ -216,6 +240,9 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
     const sendRequests = new Map<string, symbol>();
     const reactionRequests = new Map<string, symbol>();
     const pinRequests = new Map<string, symbol>();
+    const readRequests = new Map<string, symbol>();
+    const readMessageIds = new Map<string, string>();
+    const pendingReads = new Map<string, { messageId: string; requireDisplayed: boolean }>();
     const reelMediaRequests = new Map<string, symbol>();
     const reelCommentRequests = new Map<string, symbol>();
     const reelLikeRequests = new Map<string, symbol>();
@@ -250,6 +277,7 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
     let visibleWarmupIds = new Set<string>();
     const generatedOfflineThreadingIds = new Set<string>();
     let forwardRequest: symbol | undefined;
+    let nextNotificationId = 1;
     let threadMutationRevision = 0;
     const threadMutationRevisions = new Map<string, number>();
     const reactionStateRevisions = new Map<string, number>();
@@ -281,6 +309,21 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
 
     function emit() {
         listeners.forEach(listener => listener());
+    }
+
+    function notify(notification: Omit<GlobalNotification, 'id'>) {
+        const id = nextNotificationId++;
+        state.notifications.push({ id, ...notification });
+        emit();
+        return id;
+    }
+
+    function dismissNotification(id: number) {
+        const index = state.notifications.findIndex(notification => notification.id === id);
+        if (index < 0) return false;
+        state.notifications.splice(index, 1);
+        emit();
+        return true;
     }
 
     function reelState(shortcode: string, mediaId?: string): ReelState {
@@ -481,13 +524,19 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
                 (threadMutationRevisions.get(thread.key) ?? 0) > readRevision ||
                 existing.lastActivityMs > thread.lastActivityMs
             );
-            state.inbox.byId[thread.key] = preserveOutgoing
+            const merged = preserveOutgoing
                 ? {
                     ...thread,
                     lastActivityMs: existing.lastActivityMs,
                     lastMessage: existing.lastMessage,
                 }
                 : thread;
+            const locallyReadMessageId = readMessageIds.get(thread.key);
+            const preserveRead = locallyReadMessageId !== undefined &&
+                merged.lastMessage?.id === locallyReadMessageId;
+            state.inbox.byId[thread.key] = preserveRead
+                ? { ...merged, isUnread: false }
+                : merged;
         }
         state.inbox.orderedIds.sort((left, right) =>
             state.inbox.byId[right].lastActivityMs - state.inbox.byId[left].lastActivityMs,
@@ -602,7 +651,22 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
             }
             history.viewerId ||= incomingHistory!.viewerId;
         }
+        const displayedUnreadThreadId = incomingHistory?.threadId;
+        const displayedHistory = displayedUnreadThreadId
+            ? state.histories[displayedUnreadThreadId]
+            : undefined;
+        const displayedMessageId = displayedUnreadThreadId
+            ? state.inbox.byId[displayedUnreadThreadId]?.lastMessage?.id
+            : undefined;
+        const correlatedDisplayedMessageId = displayedMessageId !== undefined &&
+            displayedHistory?.listedIds.at(-1) === displayedMessageId &&
+            incomingHistory?.messages.some(message => message.id === displayedMessageId)
+            ? displayedMessageId
+            : undefined;
         emit();
+        if (displayedUnreadThreadId && correlatedDisplayedMessageId) {
+            void markThreadRead(displayedUnreadThreadId, correlatedDisplayedMessageId);
+        }
         return true;
     }
 
@@ -1164,6 +1228,7 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
         const requestGeneration = generation;
         forwardRequest = request;
         forwarding.status = 'submitting';
+        forwarding.isModalOpen = false;
         forwarding.error = undefined;
         for (const targetId of forwarding.selectedTargetIds) {
             forwarding.progress[targetId] ??= { commentSent: false, complete: false };
@@ -1217,12 +1282,24 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
         if (failed.length) {
             forwarding.status = 'error';
             forwarding.error = `Could not forward to ${failed.length} ${failed.length === 1 ? 'conversation' : 'conversations'}. Retry to continue.`;
-            emit();
+            notify({
+                kind: 'error',
+                message: forwarding.error,
+                action: {
+                    label: 'Retry',
+                    run: () => {
+                        if (state.forwarding === forwarding) void submitForwarding();
+                    },
+                },
+            });
             return false;
         }
         forwarding.status = 'success';
         forwarding.error = undefined;
-        emit();
+        notify({
+            kind: 'success',
+            message: `Message forwarded to ${forwarding.selectedTargetIds.length} ${forwarding.selectedTargetIds.length === 1 ? 'conversation' : 'conversations'}.`,
+        });
         return true;
     }
 
@@ -1949,6 +2026,79 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
         warmupTimers.clear();
     }
 
+    function isLatestMessageDisplayed(threadId: string, messageId: string) {
+        const thread = state.inbox.byId[threadId];
+        const history = state.histories[threadId];
+        return started && state.selectedThreadId === threadId &&
+            thread?.lastMessage?.id === messageId &&
+            history?.status === 'ready' && history.isFollowingNewest &&
+            history.listedIds.at(-1) === messageId &&
+            history.viewportIds.includes(messageId);
+    }
+
+    async function markThreadRead(threadId: string, displayedMessageId?: string) {
+        const thread = state.inbox.byId[threadId];
+        const message = thread?.lastMessage;
+        if (
+            !thread?.isUnread || !thread.threadIgId || !message || message.ts <= 0 ||
+            (displayedMessageId !== undefined &&
+                !isLatestMessageDisplayed(threadId, displayedMessageId))
+        ) return false;
+        if (readRequests.has(threadId)) {
+            if (readMessageIds.get(threadId) !== message.id) {
+                pendingReads.set(threadId, {
+                    messageId: message.id,
+                    requireDisplayed: displayedMessageId !== undefined,
+                });
+            }
+            return false;
+        }
+        const request = Symbol(`read:${threadId}`);
+        const requestGeneration = generation;
+        readRequests.set(threadId, request);
+        readMessageIds.set(threadId, message.id);
+        thread.isUnread = false;
+        state.readMutations[threadId] = { messageId: message.id, status: 'pending' };
+        emit();
+        try {
+            const result = await rpc.markThreadRead({
+                threadIgId: thread.threadIgId,
+                messageId: message.id,
+                messageTimestampMs: message.ts,
+            });
+            if (generation !== requestGeneration || readRequests.get(threadId) !== request)
+                return false;
+            if (!result.ok) throw new Error(result.error.message);
+            delete state.readMutations[threadId];
+            return true;
+        } catch (error) {
+            if (generation === requestGeneration && readRequests.get(threadId) === request) {
+                if (readMessageIds.get(threadId) === message.id) readMessageIds.delete(threadId);
+                const current = state.inbox.byId[threadId];
+                if (current?.lastMessage?.id === message.id) current.isUnread = true;
+                state.readMutations[threadId] = {
+                    messageId: message.id,
+                    status: 'error',
+                    error: errorMessage(error),
+                };
+            }
+            return false;
+        } finally {
+            if (generation === requestGeneration && readRequests.get(threadId) === request) {
+                readRequests.delete(threadId);
+                const pendingRead = pendingReads.get(threadId);
+                pendingReads.delete(threadId);
+                emit();
+                if (pendingRead) {
+                    void markThreadRead(
+                        threadId,
+                        pendingRead.requireDisplayed ? pendingRead.messageId : undefined,
+                    );
+                }
+            }
+        }
+    }
+
     function selectThread(threadId: string) {
         cancelWarmups();
         warmupsStarted = 0;
@@ -1961,6 +2111,7 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
         abandonReplyNavigationExcept(threadId);
         openedThreadIds.add(threadId);
         emit();
+        void markThreadRead(threadId);
         void loadInitialHistory(threadId);
     }
 
@@ -2029,6 +2180,10 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
             return () => listeners.delete(listener);
         },
         openForwarding(sourceThreadId: string, sourceMessageId: string) {
+            if (state.forwarding?.status === 'submitting') {
+                notify({ kind: 'info', message: 'A message is already being forwarded.' });
+                return false;
+            }
             const history = state.histories[sourceThreadId];
             const message = history?.byId[sourceMessageId];
             const sourceThread = state.inbox.byId[sourceThreadId];
@@ -2040,6 +2195,7 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
                 sourceThreadIgId: sourceThread.threadIgId,
                 sourceIsViewer: 'senderId' in message && message.senderId === history.viewerId,
                 content,
+                isModalOpen: true,
                 selectedTargetIds: [],
                 comment: '',
                 status: 'idle',
@@ -2079,6 +2235,8 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
             emit();
             return true;
         },
+        notify,
+        dismissNotification,
         submitForwarding,
         start() {
             const firstStart = !started;
@@ -2128,6 +2286,9 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
             reactionStateRevisions.clear();
             sendRevisions.clear();
             pinRequests.clear();
+            readRequests.clear();
+            readMessageIds.clear();
+            pendingReads.clear();
             reelMediaRequests.clear();
             reelCommentRequests.clear();
             reelLikeRequests.clear();

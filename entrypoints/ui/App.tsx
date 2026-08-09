@@ -16,7 +16,9 @@ import {
     useState,
 } from '../../vendor/teact/src/teact/teact';
 import type { AttachedAudio, Message, ReelMediaItem, Thread, User } from '../../lib/domain';
-import type { FrontendStore, HistoryState, PinMutation, ReelState } from './store';
+import type {
+    FrontendStore, GlobalNotification, HistoryState, PinMutation, ReadMutation, ReelState,
+} from './store';
 import { hasLocalOlderIds } from './history-window';
 import { calculateInlineMediaBox } from './inline-media-box';
 import {
@@ -208,8 +210,55 @@ export default function App({ store }: AppProps) {
             playbackMemory={reelPlaybackMemory.current}
             volumePreference={reelVolumePreference}
         />}
-        {state.forwarding && <ForwardModal key={`${state.forwarding.sourceThreadId}\u0000${state.forwarding.sourceMessageId}`} store={store} />}
+        {state.forwarding?.isModalOpen && <ForwardModal key={`${state.forwarding.sourceThreadId}\u0000${state.forwarding.sourceMessageId}`} store={store} />}
+        <ToastHost store={store} />
         </>
+    );
+}
+
+function ToastHost({ store }: AppProps) {
+    return (
+        <section className="toast-host" aria-label="Notifications">
+            {store.state.notifications.map(notification => (
+                <Toast key={notification.id} store={store} notification={notification} />
+            ))}
+        </section>
+    );
+}
+
+function Toast({ store, notification }: AppProps & { notification: GlobalNotification }) {
+    useEffect(() => {
+        const timer = window.setTimeout(
+            () => store.dismissNotification(notification.id),
+            notification.kind === 'error' ? 8_000 : 5_000,
+        );
+        return () => window.clearTimeout(timer);
+    }, [notification.id]);
+
+    return (
+        <div
+            className={`toast toast--${notification.kind}`}
+            role={notification.kind === 'error' ? 'alert' : 'status'}
+        >
+            <span>{notification.message}</span>
+            {notification.action && (
+                <button
+                    type="button"
+                    onClick={() => {
+                        store.dismissNotification(notification.id);
+                        notification.action?.run();
+                    }}
+                >
+                    {notification.action.label}
+                </button>
+            )}
+            <button
+                type="button"
+                className="toast__close"
+                aria-label="Dismiss notification"
+                onClick={() => store.dismissNotification(notification.id)}
+            >×</button>
+        </div>
     );
 }
 
@@ -281,6 +330,7 @@ function ChatList({ store }: AppProps) {
                         selected={id === state.selectedThreadId}
                         pinned={state.pinnedIds.includes(id)}
                         pinMutation={state.pinMutations[id]}
+                        readMutation={state.readMutations[id]}
                         onSelect={() => store.selectThread(id)}
                         onTogglePin={() => { void store.togglePin(id); }}
                     />
@@ -309,12 +359,13 @@ type ChatRowProps = {
     selected: boolean;
     pinned: boolean;
     pinMutation?: PinMutation;
+    readMutation?: ReadMutation;
     onSelect: () => void;
     onTogglePin: () => void;
 };
 
 function ChatRow({
-    store, thread, index, selected, pinned, pinMutation, onSelect, onTogglePin,
+    store, thread, index, selected, pinned, pinMutation, readMutation, onSelect, onTogglePin,
 }: ChatRowProps) {
     const [menuPoint, setMenuPoint] = useState<SurfacePoint>();
     const rowRef = useRef<HTMLButtonElement>(null as unknown as HTMLButtonElement);
@@ -322,6 +373,14 @@ function ChatRow({
     const canPin = Boolean(thread.threadFbid);
     const longPress = useLongPress(openMenu, canPin);
     const snippet = thread.lastMessage ? messageSummary(thread.lastMessage) : 'No messages yet';
+    const mutationErrors = [
+        pinMutation?.status === 'error'
+            ? pinMutation.error ?? 'Could not update conversation pin'
+            : undefined,
+        readMutation?.status === 'error'
+            ? readMutation.error ?? 'Could not mark conversation as read'
+            : undefined,
+    ].filter((error): error is string => error !== undefined);
 
     function openMenu(point: SurfacePoint) {
         if (!canPin) return;
@@ -408,29 +467,40 @@ function ChatRow({
                 onPointerUp={longPress.onPointerUp}
                 onPointerCancel={longPress.onPointerCancel}
                 aria-pressed={selected}
-                aria-busy={pinMutation?.status === 'pending'}
-                aria-label={`${thread.title}${thread.isMuted ? ', muted' : ''}${pinned ? ', pinned' : ''}`}
+                aria-busy={pinMutation?.status === 'pending' || readMutation?.status === 'pending'}
+                aria-label={`${thread.title}${thread.isUnread ? ', unread' : ''}${thread.isMuted ? ', muted' : ''}${pinned ? ', pinned' : ''}`}
             >
                 <ChatAvatar thread={thread} />
-                <span className="chat-row__body">
-                    <span className="chat-row__topline">
-                        <strong>{thread.title}</strong>
-                        <time dateTime={new Date(thread.lastActivityMs).toISOString()}>
-                            {formatThreadTime(thread.lastActivityMs)}
-                        </time>
+                    <span className="chat-row__body">
+                        <span className="chat-row__topline">
+                            <span className="chat-row__title">
+                                <strong>{thread.title}</strong>
+                                {pinned && (
+                                    <span className="chat-row__pin" title="Pinned" aria-hidden="true">
+                                        <svg viewBox="0 0 16 16" focusable="false">
+                                            <path d="M5 2.5h6M6 2.5v4l-2 2h8l-2-2v-4M8 8.5v5" />
+                                        </svg>
+                                    </span>
+                                )}
+                            </span>
+                            <time dateTime={new Date(thread.lastActivityMs).toISOString()}>
+                                {formatThreadTime(thread.lastActivityMs)}
+                            </time>
                     </span>
                     <span className="chat-row__bottomline">
                         <span className="chat-row__snippet">{snippet}</span>
                         <span className="chat-row__badges">
                             {thread.isMuted && <span className="chat-row__badge" title="Muted" aria-hidden="true">⌁</span>}
-                            {pinned && <span className="chat-row__badge chat-row__badge--accent" title="Pinned" aria-hidden="true">◆</span>}
+                            {thread.isUnread && (
+                                <span className="chat-row__badge chat-row__badge--accent" title="Unread" aria-hidden="true">◆</span>
+                            )}
                         </span>
                     </span>
                 </span>
             </button>
-            {pinMutation?.status === 'error' && (
-                <span className="chat-row__pin-error" role="alert">
-                    {pinMutation.error ?? 'Could not update conversation pin'}
+            {mutationErrors.length > 0 && (
+                <span className="chat-row__mutation-error" role="alert">
+                    {mutationErrors.join(' · ')}
                 </span>
             )}
             {menuPoint && (
