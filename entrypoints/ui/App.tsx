@@ -573,6 +573,7 @@ function MessagePane({
     const contentRef = useRef<HTMLDivElement>(null as unknown as HTMLDivElement);
     const pendingAnchorRef = useRef<{ id: string; top: number }>();
     const pendingViewportDirectionRef = useRef<'older' | 'newer'>();
+    const olderRevealSuppressedRef = useRef(false);
     const resizeAnchorRef = useRef<{ id: string; top: number }>();
     const sentinelIntersectingRef = useRef(false);
     const revealTimerRef = useRef<number>();
@@ -600,6 +601,14 @@ function MessagePane({
             Boolean(atBottom && latestId && current?.viewportIds.includes(latestId)),
         );
         setIsViewportAtBottom(atBottom);
+    };
+
+    const setComponentScrollTop = (scroller: HTMLDivElement, scrollTop: number) => {
+        scroller.scrollTop = scrollTop;
+        // Native scroll events from an imperative write may arrive later. Keep
+        // their comparison baseline at the written position without suppressing
+        // a subsequent user movement beyond it.
+        lastScrollTopRef.current = scroller.scrollTop;
     };
 
     const clearRevealTimer = () => {
@@ -664,6 +673,13 @@ function MessagePane({
             store.state.selectedThreadId !== originatingThreadKey
         ) return;
         sentinelIntersectingRef.current = isSentinelInRange();
+        if (
+            pendingViewportDirectionRef.current === 'newer' ||
+            olderRevealSuppressedRef.current
+        ) {
+            clearRevealTimer();
+            return;
+        }
         if (!sentinelIntersectingRef.current) {
             clearRevealTimer();
             return;
@@ -680,6 +696,10 @@ function MessagePane({
         if (result.completion) {
             void result.completion.finally(() => {
                 scheduleThreadContinuation(thread.key, () => {
+                    if (
+                        pendingViewportDirectionRef.current === 'newer' ||
+                        olderRevealSuppressedRef.current
+                    ) return;
                     if (!isSentinelInRange()) return;
                     clearRevealTimer();
                     captureAnchor();
@@ -707,6 +727,10 @@ function MessagePane({
     useLayoutEffect(() => {
         clearRevealTimer();
         clearContinuationTimers();
+        pendingAnchorRef.current = undefined;
+        pendingViewportDirectionRef.current = undefined;
+        olderRevealSuppressedRef.current = false;
+        lastScrollTopRef.current = scrollerRef.current?.scrollTop ?? 0;
         followNewestThreadRef.current = undefined;
         handledIncomingFollowRef.current = {
             threadId: thread.key,
@@ -715,6 +739,11 @@ function MessagePane({
         return () => {
             clearRevealTimer();
             clearContinuationTimers();
+            pendingAnchorRef.current = undefined;
+            pendingViewportDirectionRef.current = undefined;
+            olderRevealSuppressedRef.current = false;
+            lastScrollTopRef.current = 0;
+            store.completeHistoryReplacement(thread.key);
         };
     }, [thread.key]);
 
@@ -729,12 +758,11 @@ function MessagePane({
                 : undefined;
             if (row && saved) {
                 const actual = row.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
-                scroller.scrollTop += actual - saved.offset;
+                setComponentScrollTop(scroller, scroller.scrollTop + actual - saved.offset);
             } else {
-                scroller.scrollTop = scroller.scrollHeight;
+                setComponentScrollTop(scroller, scroller.scrollHeight);
             }
             updateBottomState(scroller);
-            lastScrollTopRef.current = scroller.scrollTop;
         }
         const pending = pendingAnchorRef.current;
         if (history.isReplacingViewport) {
@@ -743,9 +771,13 @@ function MessagePane({
                 const row = scroller.querySelector<HTMLElement>(
                     `[data-message-id="${cssEscape(pending.id)}"]`,
                 );
-                if (row) scroller.scrollTop += row.getBoundingClientRect().top - pending.top;
+                if (row) setComponentScrollTop(
+                    scroller,
+                    scroller.scrollTop + row.getBoundingClientRect().top - pending.top,
+                );
                 pendingAnchorRef.current = undefined;
             }
+            if (replacementDirection === 'newer') olderRevealSuppressedRef.current = true;
             store.completeHistoryReplacement(thread.key);
             pendingViewportDirectionRef.current = undefined;
             if (replacementDirection !== 'newer' && isSentinelInRange()) {
@@ -789,7 +821,7 @@ function MessagePane({
         if (followNewestThreadRef.current !== thread.key) return;
         const scroller = scrollerRef.current;
         if (!scroller) return;
-        scroller.scrollTop = scroller.scrollHeight;
+        setComponentScrollTop(scroller, scroller.scrollHeight);
         followNewestThreadRef.current = undefined;
         updateResizeAnchor(scroller, resizeAnchorRef);
         updateBottomState(scroller);
@@ -809,7 +841,7 @@ function MessagePane({
             !scroller || activeThreadRef.current !== thread.key ||
             store.state.selectedThreadId !== thread.key
         ) return;
-        scroller.scrollTop = scroller.scrollHeight;
+        setComponentScrollTop(scroller, scroller.scrollHeight);
         updateResizeAnchor(scroller, resizeAnchorRef);
         updateBottomState(scroller);
     }, [thread.key, history?.incomingFollowVersion]);
@@ -829,6 +861,7 @@ function MessagePane({
         if (!row) return;
         handledReplyNavigationRef.current = navigation.requestId;
         row.scrollIntoView({ block: 'center' });
+        lastScrollTopRef.current = scroller.scrollTop;
         row.focus({ preventScroll: true });
         updateBottomState(scroller);
         store.saveHistoryAnchor(thread.key, {
@@ -844,7 +877,12 @@ function MessagePane({
         const sentinel = sentinelRef.current;
         if (!root || !sentinel || !history || history.status !== 'ready') return;
         const observer = new IntersectionObserver(entries => {
+            const wasIntersecting = sentinelIntersectingRef.current;
             sentinelIntersectingRef.current = entries.some(entry => entry.isIntersecting);
+            if (
+                olderRevealSuppressedRef.current && !wasIntersecting &&
+                sentinelIntersectingRef.current
+            ) olderRevealSuppressedRef.current = false;
             reevaluateOlderReveal();
         }, { root, rootMargin: '750px 0px 0px' });
         observer.observe(sentinel);
@@ -901,6 +939,10 @@ function MessagePane({
 
     useLayoutEffect(() => store.onOlderHistorySettled(thread.key, () => {
         scheduleThreadContinuation(thread.key, () => {
+            if (
+                pendingViewportDirectionRef.current === 'newer' ||
+                olderRevealSuppressedRef.current
+            ) return;
             if (!isSentinelInRange()) return;
             clearRevealTimer();
             captureAnchor();
@@ -921,7 +963,9 @@ function MessagePane({
             if (!row) return;
             const top = row.getBoundingClientRect().top;
             const delta = top - anchor.top;
-            if (Math.abs(delta) > 0.01) scroller.scrollTop += delta;
+            if (Math.abs(delta) > 0.01) {
+                setComponentScrollTop(scroller, scroller.scrollTop + delta);
+            }
             updateResizeAnchor(scroller, resizeAnchorRef);
             reevaluateOlderReveal();
         });
@@ -933,7 +977,9 @@ function MessagePane({
         const scroller = scrollerRef.current;
         if (!scroller) return;
         const isMovingDown = scroller.scrollTop > lastScrollTopRef.current;
+        const isMovingUp = scroller.scrollTop < lastScrollTopRef.current;
         lastScrollTopRef.current = scroller.scrollTop;
+        if (isMovingUp) olderRevealSuppressedRef.current = false;
         const row = [...scroller.querySelectorAll<HTMLElement>('[data-message-id]')]
             .find(item => item.getBoundingClientRect().bottom > scroller.getBoundingClientRect().top);
         if (row?.dataset.messageId) {
@@ -947,6 +993,7 @@ function MessagePane({
         const currentHistory = store.state.histories[thread.key];
         if (
             isMovingDown && !scroller.dataset.keyboardNavigationScroll && currentHistory &&
+            !currentHistory.isReplacingViewport &&
             hasLocalNewerIds(currentHistory.listedIds, currentHistory.viewportIds) &&
             scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= 750
         ) {
@@ -957,6 +1004,7 @@ function MessagePane({
                 pendingAnchorRef.current = undefined;
             }
         }
+        if (isMovingUp) reevaluateOlderReveal();
     };
 
     const submitDraft = () => {
@@ -992,7 +1040,7 @@ function MessagePane({
             ) return;
             const scroller = scrollerRef.current;
             if (!scroller) return;
-            scroller.scrollTop = scroller.scrollHeight;
+            setComponentScrollTop(scroller, scroller.scrollHeight);
             followNewestThreadRef.current = undefined;
             updateResizeAnchor(scroller, resizeAnchorRef);
             updateBottomState(scroller);
@@ -1006,6 +1054,7 @@ function MessagePane({
     const hasNewerMessages = Boolean(history && (!isNewestWindow || !isViewportAtBottom));
     const selectReply = useCallback((messageId: string) => {
         const scroller = scrollerRef.current;
+        const originThreadKey = thread.key;
         const currentHistory = store.state.histories[thread.key];
         const latestId = currentHistory?.listedIds.at(-1);
         const wasFollowingNewest = Boolean(
@@ -1020,14 +1069,22 @@ function MessagePane({
         const anchorTop = anchor?.getBoundingClientRect().top;
         if (!store.setReplyTarget(thread.key, messageId)) return;
         requestAnimationFrame(() => {
+            if (
+                !scroller || scrollerRef.current !== scroller ||
+                activeThreadRef.current !== originThreadKey ||
+                store.state.selectedThreadId !== originThreadKey
+            ) return;
             if (scroller && wasFollowingNewest) {
-                scroller.scrollTop = scroller.scrollHeight;
+                setComponentScrollTop(scroller, scroller.scrollHeight);
                 updateResizeAnchor(scroller, resizeAnchorRef);
                 updateBottomState(scroller);
             } else if (scroller && anchor && anchorTop !== undefined) {
-                scroller.scrollTop += anchor.getBoundingClientRect().top - anchorTop;
+                setComponentScrollTop(
+                    scroller,
+                    scroller.scrollTop + anchor.getBoundingClientRect().top - anchorTop,
+                );
             }
-            document.querySelector<HTMLTextAreaElement>('.composer textarea')
+            scroller.closest('.conversation')?.querySelector<HTMLTextAreaElement>('.composer textarea')
                 ?.focus({ preventScroll: true });
         });
     }, [store, thread.key]);
@@ -1316,7 +1373,7 @@ const MessageRow = memo(function MessageRow({
     const menuItems: ContextMenuItem[] = eligibleForActions ? [
         { label: 'Reply', action: () => onReply(message.id) },
         ...((store.state.inbox.byId[threadId]?.threadIgId &&
-            (message.kind === 'text' || (message.kind === 'reel_share' && message.mediaType === 'reel' && message.mediaId))) ? [{
+            (message.kind === 'text' || (message.kind === 'reel_share' && message.mediaId))) ? [{
             label: 'Forward',
             action: () => {
                 forwardingReturnFocus = rowRef.current;

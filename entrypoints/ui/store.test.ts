@@ -1180,6 +1180,49 @@ test('forwarding sends comments first, retries partial targets safely, and prese
     store.destroy();
 });
 
+test('feed-post shares are eligible and retain their media identity when forwarded', async () => {
+    installWindowTimers();
+    const forwards: Parameters<CompleteUiRpc['forwardMessage']>[0][] = [];
+    const base = fakeRpc(async () => ({
+        ok: true,
+        value: { items: [thread('a'), thread('b')], hasNextPage: false },
+    }), async () => historyPage(0, 1, undefined, false));
+    const store = createFrontendStore({
+        ...base,
+        forwardMessage: async payload => {
+            forwards.push(payload);
+            return {
+                ok: true,
+                value: { messageId: 'forwarded-post', clientRequestId: payload.offlineThreadingId },
+            };
+        },
+    });
+    store.start();
+    await settle();
+    store.selectThread('a');
+    await settle();
+    store.state.histories.a.byId.m0 = {
+        kind: 'reel_share',
+        id: 'm0',
+        senderId: 'sender',
+        ts: 0,
+        mediaType: 'post',
+        shortcode: 'post-code',
+        mediaId: '3954299726581330343',
+        targetUrl: 'https://www.instagram.com/p/post-code/',
+        thumbUrl: 'https://example.com/post.jpg',
+        author: 'author',
+    };
+
+    assert.equal(store.openForwarding('a', 'm0'), true);
+    assert.equal(store.toggleForwardTarget('b'), true);
+    assert.equal(await store.submitForwarding(), true);
+    assert.deepEqual(forwards.map(payload => payload.content), [
+        { kind: 'post', mediaId: '3954299726581330343' },
+    ]);
+    store.destroy();
+});
+
 test('sending while genuinely away from newest preserves the viewport and history cursor', async () => {
     installWindowTimers();
     let resolveSend!: (result: Result<SentTextMessage>) => void;

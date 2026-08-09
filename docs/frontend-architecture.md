@@ -80,8 +80,10 @@ same immutable operation. Partial failures retain their selected targets and
 progress without changing `selectedThreadId` or target caches. Global notices
 are store-owned presentation state and render once at the app root so other
 features can reuse success, error, and informational notifications.
-The currently captured forward protocol covers text and reel-share messages
-with a numeric media ID; unsupported message content does not expose Forward.
+The currently captured forward protocol covers text, reel-share, and feed-post
+share messages with a numeric media ID; unsupported message content does not
+expose Forward. Feed posts use `IGDirectMediaShareMutation`; ordinary uploaded
+attachments use a distinct media-forward mutation and remain outside this flow.
 
 Cursor names are easy to confuse:
 

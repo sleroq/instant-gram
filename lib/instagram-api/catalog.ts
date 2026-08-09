@@ -284,6 +284,26 @@ export const INSTAGRAM_GRAPHQL_OPERATIONS = {
             },
         }),
     ),
+    IGDirectMediaShareMutation: mutation(
+        FRIENDLY_NAMES.forwardPost,
+        DOC_IDS.forwardPost,
+        (input: {
+            targetThreadFbid: string;
+            sourceThreadIgId: string;
+            sourceIsViewer: boolean;
+            offlineThreadingId: string;
+            mediaId: string;
+        }) => ({
+            send_data: {
+                forwarded_from_thread_id: input.sourceThreadIgId,
+                is_forwarded_from_own_message: input.sourceIsViewer,
+                offline_threading_id: input.offlineThreadingId,
+                recipient_users: null,
+                thread_id: input.targetThreadFbid,
+            },
+            data: { media_id: input.mediaId },
+        }),
+    ),
     IGDirectReactionSendMutation: mutation(
         FRIENDLY_NAMES.sendReaction,
         DOC_IDS.sendReaction,

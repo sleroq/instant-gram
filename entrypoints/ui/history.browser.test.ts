@@ -2725,6 +2725,53 @@ test('sending a reply while pinned keeps the reconciled outgoing message visible
     await page.close();
 });
 
+test('sending a reply while unpinned preserves the reader anchor through reconciliation', async () => {
+    const page = await openHarness({ width: 900, height: 520 });
+    await page.evaluate(() => window.historyHarness.mount('mutations'));
+    await page.locator('[data-message-id]').first().waitFor();
+    await page.evaluate(() => {
+        const scroller = document.querySelector<HTMLElement>('.messages')!;
+        scroller.scrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight - 300);
+        scroller.dispatchEvent(new Event('scroll'));
+    });
+    const replyId = await page.evaluate(() => {
+        const scroller = document.querySelector<HTMLElement>('.messages')!;
+        return [...scroller.querySelectorAll<HTMLElement>('[data-message-id]')]
+            .find(row => row.getBoundingClientRect().bottom > scroller.getBoundingClientRect().top)!
+            .dataset.messageId!;
+    });
+    const replyRow = page.locator(`[data-message-id="${replyId}"]`);
+    await replyRow.click({ button: 'right' });
+    await page.getByRole('menu', { name: 'Message actions' })
+        .getByRole('menuitem', { name: 'Reply' }).click();
+    await page.getByRole('button', { name: 'Cancel reply' }).waitFor();
+    const before = await page.evaluate(() => {
+        const scroller = document.querySelector<HTMLElement>('.messages')!;
+        const row = [...scroller.querySelectorAll<HTMLElement>('[data-message-id]')]
+            .find(item => item.getBoundingClientRect().bottom > scroller.getBoundingClientRect().top)!;
+        return {
+            id: row.dataset.messageId!,
+            top: row.getBoundingClientRect().top,
+            viewportIds: window.historyHarness.historyState('thread').viewportIds,
+        };
+    });
+    const composer = page.getByRole('textbox', { name: 'Message' });
+    await composer.fill('deferred');
+    await composer.press('Enter');
+    await page.evaluate(() => window.historyHarness.resolveSend());
+    await page.waitForFunction(() =>
+        window.historyHarness.historyState('thread').listedIds?.at(-1) === 'server-deferred');
+    assert.equal(await page.locator('[data-message-id="server-deferred"]').count(), 0);
+    const after = await page.locator(`[data-message-id="${before.id}"]`).evaluate(row =>
+        row.getBoundingClientRect().top);
+    assert.ok(Math.abs(after - before.top) < 1);
+    assert.deepEqual(
+        (await page.evaluate(() => window.historyHarness.historyState('thread'))).viewportIds,
+        before.viewportIds,
+    );
+    await page.close();
+});
+
 test('downward scrolling after deep reply navigation reveals normalized newer IDs', async () => {
     const page = await openHarness({ width: 900, height: 520 });
     await page.evaluate(() => window.historyHarness.mount('reply-navigation'));
@@ -2750,6 +2797,132 @@ test('downward scrolling after deep reply navigation reveals normalized newer ID
     assert.equal(await page.locator('[data-message-id="m119"]').count(), 1);
     assert.deepEqual(await page.evaluate(() => window.historyHarness.calls()),
         [undefined, 'c1', 'c2', 'c3', 'c4']);
+    await page.close();
+});
+
+test('compact both-edge history advances across repeated local newer slices without reversing', async () => {
+    const page = await openHarness({ width: 900, height: 520 });
+    await page.evaluate(() => window.historyHarness.mount('local-newer'));
+    assert.equal(await page.evaluate(() => window.historyHarness.navigateToReply('thread', 'm20')), true);
+    await page.waitForFunction(() => {
+        const state = window.historyHarness.historyState('thread');
+        return state.viewportIds?.at(-1) === 'm79' && !state.isReplacingViewport;
+    });
+
+    for (const expectedLast of ['m119', 'm159', 'm199', 'm239']) {
+        await page.evaluate(() => {
+            const scroller = document.querySelector<HTMLElement>('.messages')!;
+            scroller.scrollTop = scroller.scrollHeight;
+            scroller.dispatchEvent(new Event('scroll'));
+            // Repeated edge notifications in the same task must not erase or
+            // reverse the in-flight newer replacement.
+            scroller.dispatchEvent(new Event('scroll'));
+        });
+        await page.waitForFunction(expected => {
+            const state = window.historyHarness.historyState('thread');
+            return state.viewportIds?.at(-1) === expected && !state.isReplacingViewport;
+        }, expectedLast);
+        await page.waitForTimeout(50);
+        assert.equal(
+            (await page.evaluate(() => window.historyHarness.historyState('thread'))).viewportIds?.at(-1),
+            expectedLast,
+        );
+    }
+
+    const state = await page.evaluate(() => window.historyHarness.historyState('thread'));
+    assert.deepEqual(state.viewportIds, state.listedIds?.slice(-80));
+    assert.equal(await page.locator('[data-message-id]').count(), 80);
+    assert.deepEqual(await page.evaluate(() => window.historyHarness.calls()), [undefined]);
+    await page.close();
+});
+
+test('programmatic resize correction near the newer edge preserves its anchor and window', async () => {
+    const page = await openHarness({ width: 900, height: 520 });
+    await page.evaluate(() => window.historyHarness.mount('local-newer'));
+    await page.evaluate(() => window.historyHarness.navigateToReply('thread', 'm20'));
+    await page.waitForFunction(() =>
+        window.historyHarness.historyState('thread').viewportIds?.at(-1) === 'm79' &&
+        !window.historyHarness.historyState('thread').isReplacingViewport);
+    await page.evaluate(() => {
+        const scroller = document.querySelector<HTMLElement>('.messages')!;
+        scroller.scrollTop = scroller.scrollHeight;
+        scroller.dispatchEvent(new Event('scroll'));
+    });
+    await page.waitForFunction(() =>
+        window.historyHarness.historyState('thread').viewportIds?.at(-1) === 'm119' &&
+        !window.historyHarness.historyState('thread').isReplacingViewport);
+
+    const before = await page.evaluate(() => {
+        const scroller = document.querySelector<HTMLElement>('.messages')!;
+        const rows = [...scroller.querySelectorAll<HTMLElement>('[data-message-id]')];
+        const visible = rows.filter(row => row.getBoundingClientRect().bottom > scroller.getBoundingClientRect().top);
+        const anchor = visible[1] ?? visible[0];
+        return {
+            id: anchor.dataset.messageId!,
+            top: anchor.getBoundingClientRect().top,
+            scrollTop: scroller.scrollTop,
+            viewportIds: window.historyHarness.historyState('thread').viewportIds,
+        };
+    });
+    await page.evaluate(() => {
+        const row = document.querySelector<HTMLElement>('[data-message-id]')!;
+        row.style.height = `${row.getBoundingClientRect().height + 60}px`;
+    });
+    await page.waitForTimeout(100);
+    const after = await page.evaluate(id => {
+        const scroller = document.querySelector<HTMLElement>('.messages')!;
+        const row = document.querySelector<HTMLElement>(`[data-message-id="${id}"]`)!;
+        return {
+            top: row.getBoundingClientRect().top,
+            scrollTop: scroller.scrollTop,
+            viewportIds: window.historyHarness.historyState('thread').viewportIds,
+        };
+    }, before.id);
+    assert.ok(after.scrollTop > before.scrollTop, 'resize correction did not increase scrollTop');
+    assert.ok(Math.abs(after.top - before.top) < 1);
+    assert.deepEqual(after.viewportIds, before.viewportIds);
+    await page.close();
+});
+
+test('rapid thread switch discards old reply focus and newer replacement intent', async () => {
+    const page = await openHarness({ width: 900, height: 520 });
+    await page.evaluate(() => window.historyHarness.mount('local-newer'));
+    await page.locator('[data-message-id]').last().click({ button: 'right' });
+    await page.evaluate(() => {
+        document.querySelector<HTMLElement>('[role="menuitem"]')!.click();
+        window.historyHarness.select('second-thread');
+    });
+    await page.waitForFunction(() =>
+        document.querySelector('.conversation__header h2')?.textContent === 'Second history');
+    await page.waitForTimeout(50);
+    assert.equal(await page.evaluate(() => document.activeElement?.matches('.composer textarea')), false);
+    const destinationIds = await page.evaluate(() =>
+        window.historyHarness.historyState('second-thread').viewportIds);
+
+    await page.evaluate(() => window.historyHarness.select('thread'));
+    await page.waitForFunction(() =>
+        document.querySelector('.conversation__header h2')?.textContent === 'History harness');
+    await page.evaluate(() => window.historyHarness.navigateToReply('thread', 'm20'));
+    await page.waitForFunction(() =>
+        window.historyHarness.historyState('thread').viewportIds?.at(-1) === 'm79' &&
+        !window.historyHarness.historyState('thread').isReplacingViewport);
+    await page.evaluate(() => {
+        const scroller = document.querySelector<HTMLElement>('.messages')!;
+        scroller.scrollTop = scroller.scrollHeight;
+        scroller.dispatchEvent(new Event('scroll'));
+        window.historyHarness.select('second-thread');
+    });
+    await page.waitForFunction(() =>
+        document.querySelector('.conversation__header h2')?.textContent === 'Second history');
+    await page.waitForTimeout(100);
+    assert.deepEqual(
+        await page.evaluate(() => window.historyHarness.historyState('second-thread').viewportIds),
+        destinationIds,
+    );
+    assert.equal(
+        (await page.evaluate(() => window.historyHarness.historyState('thread'))).isReplacingViewport,
+        false,
+    );
     await page.close();
 });
 

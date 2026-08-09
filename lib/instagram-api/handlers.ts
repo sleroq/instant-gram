@@ -9,6 +9,7 @@ import type {
 import type { InstagramGraphqlOperationName } from './catalog.ts';
 import {
     parseInboxResponse,
+    parseForwardedPostResponse,
     parseForwardedReelResponse,
     parseMarkThreadReadResponse,
     parseMarkThreadReadValidationResponse,
@@ -401,6 +402,16 @@ function createInstagramHandlers(
                     mediaId: numericStringId(content.mediaId, 'forwarded media ID'),
                 }), offlineThreadingId);
             }
+            if (content.kind === 'post') {
+                exactKeys(content, ['kind', 'mediaId']);
+                return parseForwardedPostResponse(await execute('IGDirectMediaShareMutation', {
+                    targetThreadFbid,
+                    sourceThreadIgId,
+                    sourceIsViewer: payload.sourceIsViewer,
+                    offlineThreadingId,
+                    mediaId: numericStringId(content.mediaId, 'forwarded media ID'),
+                }), offlineThreadingId);
+            }
             throw new Error('Unsupported Instagram forwarding content');
         },
         async setReaction(value: unknown) {
@@ -603,6 +614,7 @@ export const INSTAGRAM_RPC_OPERATION_REACHABILITY = {
     useIGDMarkThreadAsReadValidationMutation: 'markThreadRead',
     IGDirectTextSendMutation: 'sendText',
     IGDirectReelShareMutation: 'forwardMessage',
+    IGDirectMediaShareMutation: 'forwardMessage',
     IGDirectReactionSendMutation: 'setReaction',
     PolarisAPILikePostMutation: 'setReelLiked',
     PolarisAPIUnlikePostMutation: 'setReelLiked',

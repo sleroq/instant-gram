@@ -216,7 +216,8 @@ export type SentMessage = {
 export type SentTextMessage = SentMessage & { timestampMs: number };
 export type ForwardMessageContent =
     | { kind: 'text'; text: string }
-    | { kind: 'reel'; mediaId: string };
+    | { kind: 'reel'; mediaId: string }
+    | { kind: 'post'; mediaId: string };
 export type SetReactionResult = {
     messageId: string;
     reactions: MessageReaction[];

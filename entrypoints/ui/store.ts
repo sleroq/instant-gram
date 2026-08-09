@@ -1216,6 +1216,9 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
         if (message.kind === 'reel_share' && message.mediaType === 'reel' && message.mediaId) {
             return { kind: 'reel' as const, mediaId: message.mediaId };
         }
+        if (message.kind === 'reel_share' && message.mediaType === 'post' && message.mediaId) {
+            return { kind: 'post' as const, mediaId: message.mediaId };
+        }
         return undefined;
     }
 

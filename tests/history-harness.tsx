@@ -11,7 +11,7 @@ type Scenario = 'continuous' | 'delayed' | 'resize' | 'resize-virtual' | 'select
     'older-send' | 'thread-state' | 'identity-pm' | 'identity-group' | 'outgoing-prepend' |
     'events' | 'vim-scroll' | 'reply-navigation' | 'reply-navigation-retry' |
     'reply-navigation-delayed' | 'reply-navigation-prefetch-resume' |
-    'reply-navigation-chain' | 'keyboard-actions' | 'reel-extremes' | 'post';
+    'reply-navigation-chain' | 'local-newer' | 'keyboard-actions' | 'reel-extremes' | 'post';
 
 let activeStore: ReturnType<typeof createFrontendStore> | undefined;
 let resolveVisible: ((result: Result<ThreadMessages>) => void) | undefined;
@@ -337,12 +337,13 @@ async function mount(scenario: Scenario) {
     postRefreshWithoutSoundtrack = false;
     document.querySelector('#history-harness-style')?.remove();
     if (
-        scenario === 'continuous' || scenario === 'reply-navigation-prefetch-resume' ||
+        scenario === 'continuous' || scenario === 'local-newer' ||
+        scenario === 'reply-navigation-prefetch-resume' ||
         scenario === 'reply-navigation-retry'
     ) {
         const style = document.createElement('style');
         style.id = 'history-harness-style';
-        style.textContent = scenario === 'continuous' ? `
+        style.textContent = scenario === 'continuous' || scenario === 'local-newer' ? `
             .messages { height: 80px; padding: 4px; flex: none; }
             .messages__content, .messages__rows { gap: 0; }
             .message { height: 6px; min-height: 6px; animation: none; }
@@ -354,7 +355,9 @@ async function mount(scenario: Scenario) {
         document.head.append(style);
     }
     const selectedThreadId = scenario === 'identity-pm' ? 'peer' : thread.key;
-    const initial = scenario === 'continuous'
+    const initial = scenario === 'local-newer'
+        ? page(0, 240, undefined, false, true)
+        : scenario === 'continuous'
         ? page(40, 60, 'c1', true)
         : scenario === 'outgoing-prepend'
             ? {
@@ -432,7 +435,8 @@ async function mount(scenario: Scenario) {
         getInbox: async () => ({
             ok: true,
             value: {
-                items: scenario === 'selection' || scenario === 'thread-state' || scenario === 'keyboard-actions'
+                items: scenario === 'selection' || scenario === 'thread-state' ||
+                    scenario === 'keyboard-actions' || scenario === 'local-newer'
                     ? [thread, secondThread]
                     : scenario === 'vim-scroll'
                         ? vimThreads
@@ -702,6 +706,7 @@ window.historyHarness = {
     reactionCalls: () => reactionCalls,
     select: (threadId: string) => activeStore?.selectThread(threadId),
     revealOlder: (threadId: string) => activeStore?.revealOlderHistory(threadId),
+    navigateToReply: (threadId: string, messageId: string) => activeStore?.navigateToReply(threadId, messageId),
     showInbox: () => activeStore?.showInbox(),
     applyIncoming: (threadId: string, id: string, ts: number) => activeStore?.applyIncomingSnapshot({
         kind: 'snapshot',
@@ -743,6 +748,7 @@ declare global {
             reactionCalls: () => Parameters<CompleteUiRpc['setReaction']>[0][];
             select: (threadId: string) => void;
             revealOlder: (threadId: string) => void;
+            navigateToReply: (threadId: string, messageId: string) => Promise<boolean> | undefined;
             showInbox: () => void;
             applyIncoming: (threadId: string, id: string, ts: number) => void;
             historyState: (threadId: string) => {

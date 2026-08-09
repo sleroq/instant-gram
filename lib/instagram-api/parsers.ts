@@ -766,6 +766,13 @@ export function parseForwardedReelResponse(json: unknown, clientRequestId: strin
     );
 }
 
+export function parseForwardedPostResponse(json: unknown, clientRequestId: string): SentMessage {
+    return sentMessage(
+        responseData(json)?.direct_media_share_with_slide_response,
+        clientRequestId,
+    );
+}
+
 function stickerImage(value: JsonObject | undefined) {
     const animated = objectProp(objectProp(value?.animated_info)?.webp);
     const still = objectProp(objectProp(value?.static_info)?.png);
