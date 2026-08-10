@@ -705,12 +705,18 @@ dialog-like surfaces suppress these bindings. Context-menu pin actions restore
 the invoking row after reordering only while the originating selection and focus
 intent remain current; focus/pane/thread changes, row teardown, and newer intent
 cancel the queued animation frames.
+Ctrl+O is the exception to editor suppression: when the down-arrow control is
+available, it triggers that control's current action (reply return first, then
+newest history) and prevents the browser's file-open command. Context menus,
+reaction pickers, and dialogs still suppress it so background history cannot move.
 
-On a keyboard-focused history row, Enter activates only an existing rendered
-shared-post action: a `reel_share` uses the same internal reel-preview button,
-while an `inline_share` with its parser-provided `targetUrl` uses the same
-`target="_blank"` link. Plain text, images without an action, activity, and
-unsupported rows do nothing; the UI neither derives nor invents Instagram URLs.
+On a keyboard-focused history row, Enter first activates an actionable reply
+preview through the same semantic button used by pointer input. Otherwise, it
+activates only an existing rendered shared-post action: a `reel_share` uses the
+same internal reel-preview button, while an `inline_share` with its
+parser-provided `targetUrl` uses the same `target="_blank"` link. Plain text,
+images without an action, activity, and unsupported rows do nothing; the UI
+neither derives nor invents Instagram URLs.
 Plain Space on a reaction-capable server row applies `❤`, the default reaction.
 If the viewer already has `❤`, Space removes it; a pending mutation remains
 single-flight. The row reads the current normalized mutation and reaction

@@ -64,6 +64,7 @@ type ReelVolumePreferenceRef = { current: ReelVolumePreference };
 export default function App({ store }: AppProps) {
     useStore(store);
     useVimNavigation(store);
+    useNewestMessageShortcut();
     const reelPlaybackMemory = useRef<ReelPlaybackMemory>(new Map());
     const [initialReelVolumePreference] = useState(readReelVolumePreference);
     const reelVolumePreference = useRef<ReelVolumePreference>(initialReelVolumePreference);
@@ -1350,6 +1351,12 @@ const MessageRow = memo(function MessageRow({
             document.querySelector('.context-menu, .reaction-picker, [role="dialog"], [aria-modal="true"]')) return;
 
         if (event.key === 'Enter') {
+            const replyAction = event.currentTarget.querySelector<HTMLButtonElement>('[data-reply-target-id]');
+            if (replyAction) {
+                event.preventDefault();
+                replyAction.click();
+                return;
+            }
             if (!isActionableSharedPost(message)) return;
             const action = event.currentTarget.querySelector<HTMLElement>('[data-shared-post-action]');
             if (!action) return;
@@ -3657,6 +3664,27 @@ function useVimNavigation(store: FrontendStore) {
             lastMessageByThreadRef.current.clear();
         };
     }, [store]);
+}
+
+function useNewestMessageShortcut() {
+    useEffect(() => {
+        const onKey = (event: globalThis.KeyboardEvent) => {
+            if (
+                !event.ctrlKey || event.altKey || event.metaKey || event.shiftKey ||
+                (event.code !== 'KeyO' && event.key.toLocaleLowerCase() !== 'o')
+            ) return;
+            if (document.querySelector('.context-menu, .reaction-picker, [role="dialog"], [aria-modal="true"]')) {
+                return;
+            }
+            const newestButton = document.querySelector<HTMLButtonElement>('.newest-message:not(:disabled)');
+            if (!newestButton) return;
+            event.preventDefault();
+            newestButton.click();
+        };
+
+        document.addEventListener('keydown', onKey, true);
+        return () => document.removeEventListener('keydown', onKey, true);
+    }, []);
 }
 
 function restoreChatRowFocus(store: FrontendStore, threadId: string) {

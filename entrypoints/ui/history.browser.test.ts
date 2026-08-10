@@ -2172,12 +2172,13 @@ test('reply preview loads through older history and focuses the original in a bo
     await page.close();
 });
 
-test('reply preview supports keyboard activation and rerenders an explicit retry error', async () => {
+test('reply preview supports row and button keyboard activation and rerenders an explicit retry error', async () => {
     let page = await openHarness({ width: 900, height: 520 });
     const replyName = 'Go to original message: Original message 10';
 
     await page.evaluate(() => window.historyHarness.mount('reply-navigation'));
-    await page.getByRole('button', { name: replyName }).press('Enter');
+    await page.locator('[data-message-id="m119"]').focus();
+    await page.keyboard.press('Enter');
     await page.locator('[data-message-id="m10"]').waitFor();
 
     await page.evaluate(() => window.historyHarness.mount('reply-navigation'));
@@ -3483,6 +3484,35 @@ test('sending while scrolled up preserves the logical viewport and offers newest
         return scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
     });
     assert.ok(distance <= 2, `newest navigation ended ${distance}px from bottom`);
+    await page.close();
+});
+
+test('Ctrl+O triggers newest-message navigation from the composer', async () => {
+    const page = await openHarness({ width: 900, height: 520 });
+    await page.evaluate(() => window.historyHarness.mount('thread-state'));
+    await page.locator('[data-message-id]').first().waitFor();
+    await page.evaluate(() => {
+        const scroller = document.querySelector<HTMLElement>('.messages')!;
+        scroller.scrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight - 300);
+        scroller.dispatchEvent(new Event('scroll'));
+    });
+    const newest = page.getByRole('button', { name: 'Go to newest message' });
+    await newest.waitFor();
+
+    const allowed = await page.getByRole('textbox', { name: 'Message' }).evaluate(composer => {
+        (composer as HTMLElement).focus();
+        return composer.dispatchEvent(new KeyboardEvent('keydown', {
+            key: 'o', code: 'KeyO', ctrlKey: true, bubbles: true, cancelable: true,
+        }));
+    });
+
+    assert.equal(allowed, false);
+    await newest.waitFor({ state: 'detached' });
+    const distance = await page.evaluate(() => {
+        const scroller = document.querySelector<HTMLElement>('.messages')!;
+        return scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+    });
+    assert.ok(distance <= 2, `Ctrl+O navigation ended ${distance}px from bottom`);
     await page.close();
 });
 
