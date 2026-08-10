@@ -240,8 +240,8 @@ rejected as a whole so slide cardinality is never silently changed. Author
 profile metadata, caption/counts, liked/saved state, and download eligibility
 are parsed outside UI components.
 
-Media `music_metadata` is normalized at that same boundary into optional display
-music (title and artist), shown beneath the modal author for reels and posts.
+Feed `music_metadata` and reel `clips_metadata` are normalized at that same
+boundary into optional display music (required title and optional artist), shown beneath the modal author for reels and posts.
 Feed posts may additionally expose one attached-audio entity: source, identity,
 title/artist, duration, asset offset, and overlap duration. The modal keeps this soundtrack mounted across carousel
 slides, pauses it on close, and mutes slide videos while it is active so two
@@ -686,7 +686,8 @@ through the currently rendered bounded `viewportIds` rows without moving the
 window or requesting a page. `h` returns to the selected chat row and `l` enters
 the selected history, restoring a per-thread focused message ID when it remains
 rendered or otherwise choosing the newest rendered row. Every movement reveals
-the focused row with nearest-edge, non-animated scrolling. A short-lived DOM
+the focused row with nearest-edge, non-animated scrolling, keeping history rows
+clear of the floating conversation header. A short-lived DOM
 scroll intent lets inbox and history handlers distinguish this navigation from
 pagination intent, so keyboard movement neither fetches nor replaces a bounded
 history window. This focus memory is DOM navigation state, not a message cache.

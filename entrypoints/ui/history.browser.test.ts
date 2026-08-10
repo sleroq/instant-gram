@@ -544,6 +544,9 @@ test('reel preview and modal own playback, carousel, actions, comments, links, a
 
     const author = page.getByRole('link', { name: /Reel Author/ });
     assert.equal(await author.getAttribute('href'), 'https://www.instagram.com/reel_author/');
+    assert.match(await page.locator('.reel-author + .reel-details__music').textContent() ?? '',
+        /Music: Harness reel song by Harness reel artist/);
+    assert.equal(await page.locator('.reel-stage audio, .reel-stage--soundtrack').count(), 0);
     const download = page.getByRole('link', { name: 'Download' });
     assert.ok(await download.getAttribute('download') !== null);
     assert.equal(await download.locator('svg').count(), 1);
@@ -780,8 +783,8 @@ test('post carousel and soundtrack follow native playback state and clean up on 
     assert.equal(await page.locator('.reel-stage img[alt="Post image"]').getAttribute('src'),
         'data:image/gif;base64,R0lGODlhAQABAAAAACw=first');
     assert.equal(await page.getByRole('button', { name: 'Save post' }).count(), 1);
-    assert.equal(await page.locator('.reel-author + .reel-details__music').innerText(),
-        '♪\nHarness song\nHarness artist');
+    assert.match(await page.locator('.reel-author + .reel-details__music').textContent() ?? '',
+        /Music: Harness song by Harness artist/);
 
     const compactGeometry = await page.evaluate(() => {
         const dialogRect = document.querySelector<HTMLElement>('.reel-modal__dialog')!.getBoundingClientRect();
@@ -2423,6 +2426,21 @@ test('Vim keys navigate chats and bounded history, preserve thread focus, and re
     await page.keyboard.press('k');
     assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement)?.dataset.messageId), 'm80');
     assert.equal(await page.evaluate(() => window.historyHarness.calls().length), callsBeforeBoundary);
+
+    await page.evaluate(() => {
+        const scroller = document.querySelector<HTMLElement>('.messages')!;
+        const target = document.querySelector<HTMLElement>('[data-message-id="m90"]')!;
+        scroller.dataset.keyboardNavigationScroll = 'test';
+        scroller.scrollTop += target.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+        document.querySelector<HTMLElement>('[data-message-id="m91"]')!.focus({ preventScroll: true });
+    });
+    await page.keyboard.press('k');
+    const headerClearance = await page.evaluate(() => {
+        const row = document.querySelector<HTMLElement>('[data-message-id="m90"]')!;
+        const header = document.querySelector<HTMLElement>('.conversation__header')!;
+        return row.getBoundingClientRect().top - header.getBoundingClientRect().bottom;
+    });
+    assert.ok(headerClearance >= 7.5, `focused message cleared the floating header by ${headerClearance}px`);
 
     const composer = page.getByRole('textbox', { name: 'Message' });
     await composer.focus();

@@ -2751,8 +2751,9 @@ function ReelModal({
                                 <p className="reel-details__music">
                                     <span aria-hidden="true">♪</span>
                                     <span>
+                                        <span className="visually-hidden">Music: </span>
                                         <strong>{media.displayMusic.title}</strong>
-                                        {media.displayMusic.artist && <small>{media.displayMusic.artist}</small>}
+                                        {media.displayMusic.artist && <small><span className="visually-hidden"> by </span>{media.displayMusic.artist}</small>}
                                     </span>
                                 </p>
                             )}
@@ -3689,8 +3690,11 @@ function setKeyboardScrollTop(scroller: HTMLElement, scrollTop: number) {
 function revealInScroller(scroller: HTMLElement, row: HTMLElement) {
     const scrollerRect = scroller.getBoundingClientRect();
     const rowRect = row.getBoundingClientRect();
-    if (rowRect.top < scrollerRect.top) {
-        setKeyboardScrollTop(scroller, scroller.scrollTop + rowRect.top - scrollerRect.top);
+    const header = scroller.closest('.conversation')?.querySelector<HTMLElement>('.conversation__header');
+    const headerRect = header?.getBoundingClientRect();
+    const visibleTop = headerRect ? Math.max(scrollerRect.top, headerRect.bottom + 8) : scrollerRect.top;
+    if (rowRect.top < visibleTop) {
+        setKeyboardScrollTop(scroller, scroller.scrollTop + rowRect.top - visibleTop);
     } else if (rowRect.bottom > scrollerRect.bottom) {
         setKeyboardScrollTop(scroller, scroller.scrollTop + rowRect.bottom - scrollerRect.bottom);
     }

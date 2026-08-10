@@ -1046,7 +1046,9 @@ export function parseReelInfoResponse(
         throw new Error('Instagram reel carousel contained unavailable media');
     const caption = objectProp(item.caption);
     const musicMetadata = objectProp(item.music_metadata);
-    const musicInfo = objectProp(musicMetadata?.music_info);
+    const clipsMetadata = objectProp(item.clips_metadata);
+    const musicInfo = objectProp(musicMetadata?.music_info) ??
+        objectProp(clipsMetadata?.music_info);
     const musicAsset = objectProp(musicInfo?.music_asset_info);
     const musicConsumption = objectProp(musicInfo?.music_consumption_info);
     const attachedAudioUrl = stringProp(musicAsset?.progressive_download_url) ??

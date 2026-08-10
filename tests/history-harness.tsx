@@ -575,6 +575,7 @@ async function mount(scenario: Scenario) {
                 value: {
                 id: '9001', shortcode: 'reel-code', mediaType: 'reel',
                 author: { id: 'author-1', username: 'reel_author', fullName: 'Reel Author', picUrl: 'data:image/gif;base64,R0lGODlhAQABAAAAACw=', isVerified: true },
+                displayMusic: { title: 'Harness reel song', artist: 'Harness reel artist' },
                 caption: 'Harness reel caption', items: [
                     { id: 'video-slide', kind: 'video', videoUrl: `data:video/mp4;base64,${suffix}`, variants: [
                         { url: `data:video/mp4;base64,${suffix}`, type: 101, width: scenario === 'reel-delayed' ? 1600 : 540, height: scenario === 'reel-delayed' ? 900 : 960 },

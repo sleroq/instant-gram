@@ -506,7 +506,7 @@ test('reel info exposes visible licensed music without attaching a soundtrack', 
     };
     const media = parseReelInfoResponse({ items: [{
         ...base,
-        music_metadata: { music_info: {
+        clips_metadata: { music_info: {
             music_asset_info: {
                 audio_asset_id: '169754582898981',
                 title: 'Redbone (Gloopy)',
