@@ -240,9 +240,10 @@ rejected as a whole so slide cardinality is never silently changed. Author
 profile metadata, caption/counts, liked/saved state, and download eligibility
 are parsed outside UI components.
 
-Feed-post `music_metadata` is normalized at that same boundary into one optional
-attached-audio entity: source, identity, title/artist, duration, asset offset,
-and overlap duration. The modal keeps this soundtrack mounted across carousel
+Media `music_metadata` is normalized at that same boundary into optional display
+music (title and artist), shown beneath the modal author for reels and posts.
+Feed posts may additionally expose one attached-audio entity: source, identity,
+title/artist, duration, asset offset, and overlap duration. The modal keeps this soundtrack mounted across carousel
 slides, pauses it on close, and mutes slide videos while it is active so two
 audio sources cannot overlap. Its bottom-right control follows the native audio
 element's actual paused and mute state: blocked autoplay first presents Play,

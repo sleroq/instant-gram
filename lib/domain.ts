@@ -148,6 +148,10 @@ export type ReelMedia = {
     hasSaved: boolean;
     canSave: boolean;
     canDownload: boolean;
+    displayMusic?: {
+        title: string;
+        artist?: string;
+    };
     attachedAudio?: AttachedAudio;
 };
 export type ReelComment = {

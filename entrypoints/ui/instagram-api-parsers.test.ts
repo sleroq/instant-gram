@@ -482,6 +482,7 @@ test('feed post shares use the modal media path and normalize attached music', (
         } },
     }] }, { shortcode: 'Dbcvq9_MYOc', mediaId: '3953244233886958492' });
     assert.equal(media.mediaType, 'post');
+    assert.deepEqual(media.displayMusic, { title: 'cloud city', artist: 'frutiger pm' });
     assert.deepEqual(media.attachedAudio, {
         id: '1525098932292312',
         url: 'https://cdn.example/music.mp4',
@@ -491,6 +492,39 @@ test('feed post shares use the modal media path and normalize attached music', (
         startTimeSec: 3,
         playDurationSec: 30,
     });
+});
+
+test('reel info exposes visible licensed music without attaching a soundtrack', () => {
+    const base = {
+        pk: '3959981606806396400',
+        code: 'Db0rkpexp3w',
+        media_type: 2,
+        product_type: 'clips',
+        original_width: 1080,
+        original_height: 1920,
+        video_versions: [{ url: 'https://cdn.example/reel.mp4', width: 1080, height: 1920 }],
+    };
+    const media = parseReelInfoResponse({ items: [{
+        ...base,
+        music_metadata: { music_info: {
+            music_asset_info: {
+                audio_asset_id: '169754582898981',
+                title: 'Redbone (Gloopy)',
+                display_artist: 'kaemvn',
+                progressive_download_url: 'https://cdn.example/music.mp4',
+            },
+            music_consumption_info: { audio_asset_start_time_in_ms: 14500 },
+        } },
+    }] }, { shortcode: 'Db0rkpexp3w' });
+
+    assert.deepEqual(media.displayMusic, {
+        title: 'Redbone (Gloopy)',
+        artist: 'kaemvn',
+    });
+    assert.equal(media.attachedAudio, undefined);
+
+    const withoutMusic = parseReelInfoResponse({ items: [base] }, { shortcode: 'Db0rkpexp3w' });
+    assert.equal(withoutMusic.displayMusic, undefined);
 });
 
 test('attachment-less photos and future types retain safe normalized diagnostics', () => {

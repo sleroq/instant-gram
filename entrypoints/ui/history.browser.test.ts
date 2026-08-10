@@ -780,6 +780,8 @@ test('post carousel and soundtrack follow native playback state and clean up on 
     assert.equal(await page.locator('.reel-stage img[alt="Post image"]').getAttribute('src'),
         'data:image/gif;base64,R0lGODlhAQABAAAAACw=first');
     assert.equal(await page.getByRole('button', { name: 'Save post' }).count(), 1);
+    assert.equal(await page.locator('.reel-author + .reel-details__music').innerText(),
+        '♪\nHarness song\nHarness artist');
 
     const compactGeometry = await page.evaluate(() => {
         const dialogRect = document.querySelector<HTMLElement>('.reel-modal__dialog')!.getBoundingClientRect();

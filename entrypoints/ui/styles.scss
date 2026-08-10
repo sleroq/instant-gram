@@ -2192,6 +2192,38 @@ body.is-resizing-sidebar * {
     span { color: var(--color-text-muted); font-size: 12px; }
 }
 
+.reel-details__music {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 10px;
+    margin: -6px 0 0;
+    color: var(--color-text-muted);
+
+    > span:first-child {
+        flex: none;
+        color: var(--color-text);
+        font-size: 20px;
+        line-height: 1;
+    }
+
+    > span:last-child {
+        display: flex;
+        min-width: 0;
+        flex-direction: column;
+    }
+
+    strong,
+    small {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    strong { color: var(--color-text); font-size: 13px; }
+    small { font-size: 12px; }
+}
+
 .reel-details__caption { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
 
 .reel-actions {

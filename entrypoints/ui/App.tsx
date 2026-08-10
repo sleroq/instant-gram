@@ -2747,6 +2747,15 @@ function ReelModal({
                                     <span>@{media.author.username}{media.author.isVerified ? ' · Verified' : ''}</span>
                                 </a>
                             </header>
+                            {media.displayMusic && (
+                                <p className="reel-details__music">
+                                    <span aria-hidden="true">♪</span>
+                                    <span>
+                                        <strong>{media.displayMusic.title}</strong>
+                                        {media.displayMusic.artist && <small>{media.displayMusic.artist}</small>}
+                                    </span>
+                                </p>
+                            )}
                             {media.caption && <p className="reel-details__caption">{media.caption}</p>}
                             <div className="reel-actions">
                                 <button

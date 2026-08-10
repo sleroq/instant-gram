@@ -1054,10 +1054,15 @@ export function parseReelInfoResponse(
         stringProp(musicAsset?.web_30s_preview_download_url);
     const attachedAudioId = stringProp(musicAsset?.audio_asset_id) ?? stringProp(musicAsset?.id);
     const mediaType = stringProp(item.product_type) === 'clips' ? 'reel' : 'post';
+    const musicTitle = stringProp(musicAsset?.title);
+    const displayMusic = musicTitle ? {
+        title: musicTitle,
+        artist: stringProp(musicAsset?.display_artist),
+    } : undefined;
     const attachedAudio = mediaType === 'post' && attachedAudioUrl && attachedAudioId ? {
         id: attachedAudioId,
         url: attachedAudioUrl,
-        title: stringProp(musicAsset?.title),
+        title: musicTitle,
         artist: stringProp(musicAsset?.display_artist),
         durationSec: (numberProp(musicAsset?.duration_in_ms) ?? 0) / 1_000,
         startTimeSec: (numberProp(musicConsumption?.audio_asset_start_time_in_ms) ?? 0) / 1_000,
@@ -1082,6 +1087,7 @@ export function parseReelInfoResponse(
             false,
         canSave: booleanProp(item.can_viewer_save) ?? true,
         canDownload,
+        displayMusic,
         attachedAudio,
     };
 }
