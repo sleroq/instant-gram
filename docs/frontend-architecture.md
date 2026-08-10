@@ -524,7 +524,9 @@ only after success. Its accessible name reports the remaining return depth. Once
 the stack is empty, the same icon goes to the exact newest 40-ID window and its
 DOM bottom. Merely rendering the latest ID in an 80-row target window does not
 hide the control while its bottom is offscreen; manually reaching that window's
-DOM bottom does hide it because there are no newer messages left to reveal.
+DOM bottom does hide it because there are no newer messages left to reveal. The
+same applies when keyboard row navigation reaches the latest message with its
+intentional 8px edge inset.
 
 The pinned Telegram Web A clean-room review (`message/hooks/useInnerHandlers.ts`
 and `global/actions/ui/messages.ts` at `a323b1f`) showed that a reply click is

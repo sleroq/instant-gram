@@ -2321,7 +2321,7 @@ test('delayed reply navigation cannot alter the old pane after returning to inbo
     await page.close();
 });
 
-test('reply chain near latest hides down navigation when manually scrolled to the newest message', async () => {
+test('reply chain near latest hides down navigation when keyboard or manual movement reaches newest', async () => {
     const page = await openHarness({ width: 900, height: 520 });
     await page.evaluate(() => window.historyHarness.mount('reply-navigation-chain'));
 
@@ -2341,6 +2341,18 @@ test('reply chain near latest hides down navigation when manually scrolled to th
     const newest = page.getByRole('button', { name: 'Go to newest message' });
     await newest.waitFor();
     assert.equal(await page.locator('[data-message-id="m119"]').count(), 1);
+
+    await page.locator('[data-message-id="m118"]').focus();
+    await page.keyboard.press('j');
+    await page.waitForFunction(() => document.activeElement?.getAttribute('data-message-id') === 'm119');
+    await newest.waitFor({ state: 'detached' });
+
+    await page.evaluate(() => {
+        const scroller = document.querySelector<HTMLElement>('.messages')!;
+        scroller.scrollTop = Math.max(0, scroller.scrollTop - 200);
+        scroller.dispatchEvent(new Event('scroll'));
+    });
+    await newest.waitFor();
 
     await page.evaluate(() => {
         const scroller = document.querySelector<HTMLElement>('.messages')!;

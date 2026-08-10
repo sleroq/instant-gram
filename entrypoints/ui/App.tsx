@@ -3886,7 +3886,10 @@ function cssEscape(value: string) {
 }
 
 function isAtBottom(scroller: HTMLDivElement) {
-    return scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= 2;
+    // Keyboard navigation keeps the focused row slightly inset from the edge.
+    // Treat that intentional breathing room, plus rounding tolerance, as bottom.
+    return scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <=
+        KEYBOARD_ROW_EDGE_GAP + 2;
 }
 
 function updateResizeAnchor(
