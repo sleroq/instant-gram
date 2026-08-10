@@ -719,6 +719,11 @@ parser-provided target URL additionally offer Copy post URL. Reactions remain
 available through the row's hover/focus reaction rail and full chooser, not the
 context menu. A failed local send offers retry/remove. The reaction picker marks the
 viewer's current choice and serializes through the existing store action.
+Media rows also surface icon-only Reply and, when the normalized forwarding
+contract supports that message, Forward controls beside the existing reaction
+control on row hover or focus. Uploaded images and generic inline attachments do
+not claim forwarding support because their distinct Instagram mutation is not in
+the closed UI RPC contract.
 The same parser-provided URL follows the explicit open intent into the shared
 reel/post modal, where an accessible icon-only Copy post action writes it to the
 clipboard without reconstructing an Instagram URL in the component.

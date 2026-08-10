@@ -1328,8 +1328,16 @@ const MessageRow = memo(function MessageRow({
     const groupedReactions = groupReactions(message, viewerId);
     const viewerReaction = message.reactions?.find(reaction => reaction.senderId === viewerId)?.reaction;
     const sharedPostUrl = isSharedPost ? message.targetUrl : undefined;
+    const canForward = Boolean(store.state.inbox.byId[threadId]?.threadIgId && (
+        message.kind === 'text' || (message.kind === 'reel_share' && message.mediaId)
+    ));
     const hasFailedActions = Boolean(failed);
     const ownsContextMenu = eligibleForActions || hasFailedActions;
+
+    const openForwarding = () => {
+        forwardingReturnFocus = rowRef.current;
+        store.openForwarding(threadId, message.id);
+    };
 
     const handleRowShortcut = (event: KeyboardEvent<HTMLDivElement>) => {
         const isSpace = event.key === ' ' || event.code === 'Space';
@@ -1401,13 +1409,9 @@ const MessageRow = memo(function MessageRow({
 
     const menuItems: ContextMenuItem[] = eligibleForActions ? [
         { label: 'Reply', action: () => onReply(message.id) },
-        ...((store.state.inbox.byId[threadId]?.threadIgId &&
-            (message.kind === 'text' || (message.kind === 'reel_share' && message.mediaId))) ? [{
+        ...(canForward ? [{
             label: 'Forward',
-            action: () => {
-                forwardingReturnFocus = rowRef.current;
-                store.openForwarding(threadId, message.id);
-            },
+            action: openForwarding,
         }] : []),
         ...(sharedPostUrl ? [{
             label: 'Copy post URL',
@@ -1505,6 +1509,34 @@ const MessageRow = memo(function MessageRow({
                                     <span>{reaction.count}</span>
                                 </button>
                             ))}
+                        </div>
+                    )}
+                    {eligibleForActions && isMediaMessage && (
+                        <div className="message__media-actions" aria-label="Message actions">
+                            <button
+                                type="button"
+                                aria-label="Reply"
+                                title="Reply"
+                                onClick={() => onReply(message.id)}
+                            >
+                                <svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true">
+                                    <path d="M9.5 7 4 12l5.5 5" />
+                                    <path d="M4.5 12H14a6 6 0 0 1 6 6" />
+                                </svg>
+                            </button>
+                            {canForward && (
+                                <button
+                                    type="button"
+                                    aria-label="Forward"
+                                    title="Forward"
+                                    onClick={openForwarding}
+                                >
+                                    <svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true">
+                                        <path d="m14.5 7 5.5 5-5.5 5" />
+                                        <path d="M19.5 12H10a6 6 0 0 0-6 6" />
+                                    </svg>
+                                </button>
+                            )}
                         </div>
                     )}
                     {eligibleForActions && (
@@ -2641,7 +2673,11 @@ function ReelModal({
                 aria-modal="true"
                 aria-label={media ? `${mediaLabel === 'reel' ? 'Reel' : 'Post'} by ${media.author.fullName || media.author.username}` : 'Instagram media'}
             >
-                <button type="button" className="reel-modal__close" onClick={close} aria-label={`Close ${mediaLabel}`}>×</button>
+                <button type="button" className="reel-modal__close" onClick={close} aria-label={`Close ${mediaLabel}`}>
+                    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+                        <path d="M6 6l12 12M18 6 6 18" />
+                    </svg>
+                </button>
                 {!media && reel.status === 'loading' && <ListState label="Loading Instagram media…" spinner />}
                 {!media && reel.status === 'error' && (
                     <ListState
