@@ -2825,11 +2825,11 @@ test('compact both-edge history advances across repeated local newer slices with
         return state.viewportIds?.at(-1) === 'm79' && !state.isReplacingViewport;
     });
 
+    await page.locator('.messages').hover();
     for (const expectedLast of ['m119', 'm159', 'm199', 'm239']) {
+        await page.mouse.wheel(0, 100);
         await page.evaluate(() => {
             const scroller = document.querySelector<HTMLElement>('.messages')!;
-            scroller.scrollTop = scroller.scrollHeight;
-            scroller.dispatchEvent(new Event('scroll'));
             // Repeated edge notifications in the same task must not erase or
             // reverse the in-flight newer replacement.
             scroller.dispatchEvent(new Event('scroll'));
@@ -2837,7 +2837,16 @@ test('compact both-edge history advances across repeated local newer slices with
         await page.waitForFunction(expected => {
             const state = window.historyHarness.historyState('thread');
             return state.viewportIds?.at(-1) === expected && !state.isReplacingViewport;
-        }, expectedLast);
+        }, expectedLast, { timeout: 2_000 }).catch(async error => {
+            console.log(expectedLast, await page.evaluate(() => ({
+                state: window.historyHarness.historyState('thread'),
+                top: document.querySelector<HTMLElement>('.messages')?.scrollTop,
+                height: document.querySelector<HTMLElement>('.messages')?.scrollHeight,
+                client: document.querySelector<HTMLElement>('.messages')?.clientHeight,
+                dataset: document.querySelector<HTMLElement>('.messages')?.dataset,
+            })));
+            throw error;
+        });
         await page.waitForTimeout(50);
         assert.equal(
             (await page.evaluate(() => window.historyHarness.historyState('thread'))).viewportIds?.at(-1),
@@ -2864,7 +2873,7 @@ test('programmatic resize correction near the newer edge preserves its anchor an
         !window.historyHarness.historyState('thread').isReplacingViewport);
     await page.evaluate(() => {
         const scroller = document.querySelector<HTMLElement>('.messages')!;
-        scroller.scrollTop = scroller.scrollHeight;
+        scroller.scrollTop += 100;
         scroller.dispatchEvent(new Event('scroll'));
     });
     await page.waitForFunction(() =>
@@ -2928,7 +2937,7 @@ test('rapid thread switch discards old reply focus and newer replacement intent'
         !window.historyHarness.historyState('thread').isReplacingViewport);
     await page.evaluate(() => {
         const scroller = document.querySelector<HTMLElement>('.messages')!;
-        scroller.scrollTop = scroller.scrollHeight;
+        scroller.scrollTop += 100;
         scroller.dispatchEvent(new Event('scroll'));
         window.historyHarness.select('second-thread');
     });
