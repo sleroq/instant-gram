@@ -322,7 +322,8 @@ Reel shares are buttons, never outbound reel links. They read the normalized
 shortcode cache and open one modal over the application shell; the shell becomes
 inert and hidden from assistive technology until close, background scrolling is
 locked, focus is contained, and close by button, backdrop, or Escape restores the
-invoking preview. The modal owns only presentation state (the stable carousel
+invoking preview, or the message row when its Enter shortcut opened the preview.
+The modal owns only presentation state (the stable carousel
 index and native media element state). The application root retains a small
 session-only playback record keyed by shortcode and media-item ID: current time
 plus explicit user-paused intent. Media volume and explicit mute intent are one
@@ -680,11 +681,13 @@ the thread identity so transient state cannot survive a switch between histories
 that happen to contain the same message ID; optimistic/server reconciliation
 within one thread still uses `rowKeyByMessageId` unchanged.
 
-Plain `j`/`k` keys move within the active pane. In the inbox they clamp through
+The physical `KeyJ`/`KeyK` keys move within the active pane, independent of the
+active keyboard layout. In the inbox they clamp through
 `orderedThreadIds()` and select the focused conversation; with no current chat,
 either key establishes the first loaded conversation. In history they clamp
 through the currently rendered bounded `viewportIds` rows without moving the
-window or requesting a page. `h` returns to the selected chat row and `l` enters
+window or requesting a page. Physical `KeyH` returns to the selected chat row
+and `KeyL` enters
 the selected history, restoring a per-thread focused message ID when it remains
 rendered or otherwise choosing the newest rendered row. Every movement reveals
 the focused row with inset nearest-edge, non-animated scrolling, keeping history

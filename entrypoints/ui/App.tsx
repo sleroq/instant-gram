@@ -1356,6 +1356,7 @@ const MessageRow = memo(function MessageRow({
             if (!action) return;
             event.preventDefault();
             action.click();
+            reelReturnFocus = event.currentTarget;
             return;
         }
 
@@ -3585,8 +3586,12 @@ function useVimNavigation(store: FrontendStore) {
         };
 
         const onKey = (event: globalThis.KeyboardEvent) => {
-            if (!['j', 'k', 'h', 'l'].includes(event.key) ||
-                event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+            const key = event.code === 'KeyJ' ? 'j'
+                : event.code === 'KeyK' ? 'k'
+                    : event.code === 'KeyH' ? 'h'
+                        : event.code === 'KeyL' ? 'l'
+                            : undefined;
+            if (!key || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
             const target = event.target;
             if (target instanceof Element && (
                 isEditableTarget(target) ||
@@ -3594,14 +3599,14 @@ function useVimNavigation(store: FrontendStore) {
             )) return;
             if (document.querySelector('.context-menu, .reaction-picker, [role="dialog"], [aria-modal="true"]')) return;
 
-            if (event.key === 'h') {
+            if (key === 'h') {
                 const selected = store.state.selectedThreadId;
                 if (!selected || activePaneRef.current === 'chats') return;
                 event.preventDefault();
                 focusChat(selected, false);
                 return;
             }
-            if (event.key === 'l') {
+            if (key === 'l') {
                 if (activePaneRef.current !== 'chats') return;
                 event.preventDefault();
                 focusHistory();
@@ -3618,7 +3623,7 @@ function useVimNavigation(store: FrontendStore) {
                 const current = focused ?? store.state.selectedThreadId;
                 const currentIndex = current ? ids.indexOf(current) : -1;
                 const nextIndex = currentIndex < 0 ? 0 : Math.max(0, Math.min(
-                    ids.length - 1, currentIndex + (event.key === 'j' ? 1 : -1),
+                    ids.length - 1, currentIndex + (key === 'j' ? 1 : -1),
                 ));
                 focusChat(ids[nextIndex], ids[nextIndex] !== store.state.selectedThreadId);
                 return;
@@ -3637,7 +3642,7 @@ function useVimNavigation(store: FrontendStore) {
                 : rememberedIndex >= 0 ? rememberedIndex : rows.length - 1;
             const nextIndex = Math.max(0, Math.min(
                 rows.length - 1,
-                currentIndex + (event.key === 'j' ? 1 : -1),
+                currentIndex + (key === 'j' ? 1 : -1),
             ));
             const row = rows[nextIndex];
             row.focus({ preventScroll: true });

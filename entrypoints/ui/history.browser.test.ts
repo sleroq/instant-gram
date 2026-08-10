@@ -1281,6 +1281,29 @@ test('reel playback remembers each video and separates Space taps from holds', a
     await page.close();
 });
 
+test('Escape restores a keyboard-opened reel to its message row so Space reacts', async () => {
+    const page = await openHarness();
+    await page.evaluate(() => window.historyHarness.mount('reel'));
+
+    const row = page.locator('[data-message-id="reel-message"]');
+    await row.focus();
+    await page.keyboard.press('Enter');
+    const dialog = page.getByRole('dialog', { name: 'Reel by Reel Author' });
+    await dialog.waitFor();
+
+    await page.keyboard.press('Escape');
+    await dialog.waitFor({ state: 'detached' });
+    await page.waitForFunction(() =>
+        (document.activeElement as HTMLElement | null)?.dataset.messageId === 'reel-message');
+    await page.keyboard.press('Space');
+
+    assert.deepEqual((await page.evaluate(() => window.historyHarness.reactionCalls())).at(-1), {
+        threadFbid: '1001', messageId: 'reel-message', emoji: '❤', remove: false,
+    });
+    assert.equal(await dialog.count(), 0, 'Space must not reopen the reel after focus restoration');
+    await page.close();
+});
+
 test('modal retries expired cached video and current carousel image with refreshed URLs', async () => {
     const page = await openHarness({ width: 1100, height: 760 });
     await page.evaluate(() => window.historyHarness.mount('reel'));
@@ -2389,7 +2412,9 @@ test('Vim keys navigate chats and bounded history, preserve thread focus, and re
 
     await page.keyboard.press('k');
     assert.equal(await page.evaluate(() => window.historyHarness.historyState('thread').selected), 'thread');
-    await page.keyboard.press('j');
+    await selectedChat.evaluate(row => row.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'о', code: 'KeyJ', bubbles: true, cancelable: true,
+    })));
     await page.waitForFunction(() => window.historyHarness.historyState('thread').selected === 'second-thread');
     assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement)?.dataset.threadId), 'second-thread');
     await page.keyboard.press('j');
