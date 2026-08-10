@@ -241,7 +241,8 @@ profile metadata, caption/counts, liked/saved state, and download eligibility
 are parsed outside UI components.
 
 Feed `music_metadata` and reel `clips_metadata` are normalized at that same
-boundary into optional display music (required title and optional artist), shown beneath the modal author for reels and posts.
+boundary into optional display music (required title and optional artist), shown beneath the modal author for reels and posts. Reel original-audio attribution is
+used when licensed music metadata is absent.
 Feed posts may additionally expose one attached-audio entity: source, identity,
 title/artist, duration, asset offset, and overlap duration. The modal keeps this soundtrack mounted across carousel
 slides, pauses it on close, and mutes slide videos while it is active so two

@@ -525,6 +525,18 @@ test('reel info exposes visible licensed music without attaching a soundtrack', 
 
     const withoutMusic = parseReelInfoResponse({ items: [base] }, { shortcode: 'Db0rkpexp3w' });
     assert.equal(withoutMusic.displayMusic, undefined);
+
+    const originalAudio = parseReelInfoResponse({ items: [{
+        ...base,
+        clips_metadata: { original_sound_info: {
+            original_audio_title: 'Original audio',
+            ig_artist: { username: 'reel_author', full_name: 'Reel Author' },
+        } },
+    }] }, { shortcode: 'Db0rkpexp3w' });
+    assert.deepEqual(originalAudio.displayMusic, {
+        title: 'Original audio',
+        artist: 'Reel Author',
+    });
 });
 
 test('attachment-less photos and future types retain safe normalized diagnostics', () => {

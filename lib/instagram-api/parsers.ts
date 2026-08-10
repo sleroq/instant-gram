@@ -1047,24 +1047,29 @@ export function parseReelInfoResponse(
     const caption = objectProp(item.caption);
     const musicMetadata = objectProp(item.music_metadata);
     const clipsMetadata = objectProp(item.clips_metadata);
-    const musicInfo = objectProp(musicMetadata?.music_info) ??
-        objectProp(clipsMetadata?.music_info);
+    const musicInfo = objectProp(clipsMetadata?.music_info) ??
+        objectProp(musicMetadata?.music_info);
     const musicAsset = objectProp(musicInfo?.music_asset_info);
     const musicConsumption = objectProp(musicInfo?.music_consumption_info);
+    const originalSound = objectProp(clipsMetadata?.original_sound_info);
+    const originalArtist = objectProp(originalSound?.ig_artist);
     const attachedAudioUrl = stringProp(musicAsset?.progressive_download_url) ??
         stringProp(musicAsset?.fast_start_progressive_download_url) ??
         stringProp(musicAsset?.web_30s_preview_download_url);
     const attachedAudioId = stringProp(musicAsset?.audio_asset_id) ?? stringProp(musicAsset?.id);
     const mediaType = stringProp(item.product_type) === 'clips' ? 'reel' : 'post';
-    const musicTitle = stringProp(musicAsset?.title);
-    const displayMusic = musicTitle ? {
-        title: musicTitle,
-        artist: stringProp(musicAsset?.display_artist),
+    const licensedMusicTitle = stringProp(musicAsset?.title);
+    const displayMusicTitle = licensedMusicTitle ?? stringProp(originalSound?.original_audio_title);
+    const displayMusic = displayMusicTitle ? {
+        title: displayMusicTitle,
+        artist: licensedMusicTitle
+            ? stringProp(musicAsset?.display_artist)
+            : stringProp(originalArtist?.full_name) ?? stringProp(originalArtist?.username),
     } : undefined;
     const attachedAudio = mediaType === 'post' && attachedAudioUrl && attachedAudioId ? {
         id: attachedAudioId,
         url: attachedAudioUrl,
-        title: musicTitle,
+        title: licensedMusicTitle,
         artist: stringProp(musicAsset?.display_artist),
         durationSec: (numberProp(musicAsset?.duration_in_ms) ?? 0) / 1_000,
         startTimeSec: (numberProp(musicConsumption?.audio_asset_start_time_in_ms) ?? 0) / 1_000,
