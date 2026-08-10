@@ -1051,11 +1051,10 @@ function MessagePane({
         });
     };
 
-    const newestWindow = history ? history.listedIds.slice(-40) : [];
-    const isNewestWindow = Boolean(history) &&
-        newestWindow.length === history!.viewportIds.length &&
-        newestWindow.every((id, index) => history!.viewportIds[index] === id);
-    const hasNewerMessages = Boolean(history && (!isNewestWindow || !isViewportAtBottom));
+    const latestId = history?.listedIds.at(-1);
+    const hasNewerMessages = Boolean(history && (
+        !latestId || history.viewportIds.at(-1) !== latestId || !isViewportAtBottom
+    ));
     const selectReply = useCallback((messageId: string) => {
         const scroller = scrollerRef.current;
         const originThreadKey = thread.key;
@@ -1356,7 +1355,7 @@ const MessageRow = memo(function MessageRow({
             if (!action) return;
             event.preventDefault();
             action.click();
-            reelReturnFocus = event.currentTarget;
+            if (action.dataset.sharedPostAction === 'reel') reelReturnFocus = event.currentTarget;
             return;
         }
 

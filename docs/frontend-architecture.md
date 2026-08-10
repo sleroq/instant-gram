@@ -522,9 +522,9 @@ failed, stale, duplicate-top, and self navigation do not. The down-arrow control
 unwinds the stack through the same load/reveal/focus action, committing each pop
 only after success. Its accessible name reports the remaining return depth. Once
 the stack is empty, the same icon goes to the exact newest 40-ID window and its
-DOM bottom. Merely having the latest ID somewhere in an 80-row target window is
-not newest state, and a rendered newest window remains actionable while its
-bottom is offscreen.
+DOM bottom. Merely rendering the latest ID in an 80-row target window does not
+hide the control while its bottom is offscreen; manually reaching that window's
+DOM bottom does hide it because there are no newer messages left to reveal.
 
 The pinned Telegram Web A clean-room review (`message/hooks/useInnerHandlers.ts`
 and `global/actions/ui/messages.ts` at `a323b1f`) showed that a reply click is

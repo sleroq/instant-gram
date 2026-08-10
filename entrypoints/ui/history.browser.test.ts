@@ -1290,6 +1290,7 @@ test('Escape restores a keyboard-opened reel to its message row so Space reacts'
     await page.keyboard.press('Enter');
     const dialog = page.getByRole('dialog', { name: 'Reel by Reel Author' });
     await dialog.waitFor();
+    await page.waitForTimeout(50);
 
     await page.keyboard.press('Escape');
     await dialog.waitFor({ state: 'detached' });
@@ -2320,7 +2321,7 @@ test('delayed reply navigation cannot alter the old pane after returning to inbo
     await page.close();
 });
 
-test('reply chain near latest keeps down navigation until newest window reaches DOM bottom', async () => {
+test('reply chain near latest hides down navigation when manually scrolled to the newest message', async () => {
     const page = await openHarness({ width: 900, height: 520 });
     await page.evaluate(() => window.historyHarness.mount('reply-navigation-chain'));
 
@@ -2340,6 +2341,20 @@ test('reply chain near latest keeps down navigation until newest window reaches 
     const newest = page.getByRole('button', { name: 'Go to newest message' });
     await newest.waitFor();
     assert.equal(await page.locator('[data-message-id="m119"]').count(), 1);
+
+    await page.evaluate(() => {
+        const scroller = document.querySelector<HTMLElement>('.messages')!;
+        scroller.scrollTop = scroller.scrollHeight;
+        scroller.dispatchEvent(new Event('scroll'));
+    });
+    await newest.waitFor({ state: 'detached' });
+
+    await page.evaluate(() => {
+        const scroller = document.querySelector<HTMLElement>('.messages')!;
+        scroller.scrollTop = Math.max(0, scroller.scrollTop - 200);
+        scroller.dispatchEvent(new Event('scroll'));
+    });
+    await newest.waitFor();
     await newest.click();
     await newest.waitFor({ state: 'detached' });
     const distance = await page.evaluate(() => {
