@@ -620,6 +620,7 @@ export const INSTAGRAM_RPC_OPERATION_REACHABILITY = {
     PolarisAPIUnlikePostMutation: 'setReelLiked',
     PolarisAPISavePostMutation: 'setReelSaved',
     PolarisAPIUnsavePostMutation: 'setReelSaved',
+    PolarisUserHoverCardContentV2Query: 'getReelMedia',
     IGDEmojiPickerQuery: 'executeInstagramGraphql',
     IGDComposerRichContentTray_AvatarAvailableQuery: 'executeInstagramGraphql',
     IGDComposerRichContentStickersV2Query: 'executeInstagramGraphql',

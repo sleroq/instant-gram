@@ -153,6 +153,8 @@ export type ReelMedia = {
         artist?: string;
     };
     attachedAudio?: AttachedAudio;
+    /** Top named likers whose viewer-following relationships were independently verified. */
+    followedLikers?: ReelAuthor[];
 };
 export type ReelComment = {
     id: string;
@@ -163,7 +165,10 @@ export type ReelComment = {
     childCommentCount: number;
     author: ReelAuthor;
 };
-export type ReelComments = Page<ReelComment>;
+export type ReelComments = Page<ReelComment> & {
+    /** Ranked index-zero comment candidate; presentation must verify its author is followed. */
+    featuredCommentId?: string;
+};
 export type ReelLikeReceipt = { mediaId: string; hasLiked: boolean };
 export type ReelSaveReceipt = { mediaId: string; hasSaved: boolean };
 export type Page<T> = { items: T[]; cursor?: string; hasNextPage: boolean };

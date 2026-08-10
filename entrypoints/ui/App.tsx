@@ -2589,6 +2589,13 @@ function ReelModal({
     const items = media?.items ?? [];
     const current = items[Math.min(slide, Math.max(0, items.length - 1))];
     const mediaLabel = media?.mediaType ?? 'reel';
+    const followedAccounts = media?.followedLikers ?? [];
+    const featuredCommentCandidate = reel.comments.featuredCommentId
+        ? reel.comments.byId[reel.comments.featuredCommentId]
+        : undefined;
+    const featuredComment = featuredCommentCandidate && followedAccounts.some(account =>
+        account.id === featuredCommentCandidate.author.id
+    ) ? featuredCommentCandidate : undefined;
     const close = () => store.closeReel();
     const move = (delta: number) => setSlide(index => Math.max(0, Math.min(items.length - 1, index + delta)));
     const scheduleControlsHide = (delay: number) => {
@@ -2737,6 +2744,34 @@ function ReelModal({
                             )}
                             {items.length > 1 && (
                                 <div className="reel-stage__position" role="status">{slide + 1} / {items.length}</div>
+                            )}
+                            {followedAccounts.length > 0 && (
+                                <div
+                                    className={`reel-social-cue${current.kind === 'video' ? ' reel-social-cue--with-controls' : ''}`}
+                                >
+                                    {followedAccounts.map(account => {
+                                        const comment = featuredComment?.author.id === account.id ? featuredComment : undefined;
+                                        const context = comment ? `commented: ${comment.text}` : `liked this ${mediaLabel}`;
+                                        return (
+                                            <a
+                                                key={account.id}
+                                                className={`reel-social-cue__account${comment ? ' reel-social-cue__account--comment' : ''}`}
+                                                href={`https://www.instagram.com/${encodeURIComponent(account.username)}/`}
+                                                target="_blank"
+                                                rel="noreferrer"
+                                                aria-label={`Open @${account.username} profile — ${context}`}
+                                            >
+                                                <span className="reel-social-cue__picture">
+                                                    {account.picUrl
+                                                        ? <img src={account.picUrl} alt="" width="38" height="38" />
+                                                        : <span className="reel-social-cue__avatar" aria-hidden="true">{initials(account.username)}</span>}
+                                                    {!comment && <span className="reel-social-cue__heart" aria-hidden="true">♥</span>}
+                                                </span>
+                                                {comment && <span className="reel-social-cue__comment">{comment.text}</span>}
+                                            </a>
+                                        );
+                                    })}
+                                </div>
                             )}
                         </section>
                         <aside

@@ -336,7 +336,17 @@ paused by the user remains paused when revisited. Each carousel video therefore
 has independent progress without becoming a second media/entity cache. Author,
 comments, mutation state, and ordered media remain store-owned. Comments
 therefore appear only after open and
-retain the store's explicit retry path. Modal image/video decode or CDN failures
+retain the store's explicit retry path. The modal's bottom-left social cue also
+stays on this normalized boundary. Media info identifies the first five named
+likers by matching ordered `top_likers` to `facepile_top_likers`; the anchor then
+performs at most five captured hover-card queries for those exact numeric user IDs
+and exposes only accounts whose `friendship_status.following` is explicitly true. A ranked
+index-zero comment takes precedence only when its author ID matches that proven
+followed liker. Thus an arbitrary ranked commenter or named liker never paints.
+This bounded correlation can miss a followed commenter who is not also the
+named top liker; no captured comments request provides friendship state, so the
+client prefers omission to an unprovable cue. Optional cue avatars cross the
+same bounded trusted-image proxy as the media author. Modal image/video decode or CDN failures
 retain cached media and metadata, show an accessible retry over the current
 carousel item, and force the existing store-owned single-flight refresh. The
 local failure indication clears only when the item/source changes; refreshed

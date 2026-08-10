@@ -503,7 +503,7 @@ test('every closed catalog operation has a semantic or secondary RPC route', () 
         Object.keys(INSTAGRAM_RPC_OPERATION_REACHABILITY).sort(),
         Object.keys(INSTAGRAM_GRAPHQL_OPERATIONS).sort(),
     );
-    assert.equal(Object.keys(INSTAGRAM_RPC_OPERATION_REACHABILITY).length, 37);
+    assert.equal(Object.keys(INSTAGRAM_RPC_OPERATION_REACHABILITY).length, 38);
     assert.equal(
         INSTAGRAM_RPC_OPERATION_REACHABILITY.IGDirectCutoutStickerShareMutation,
         'sendCutoutSticker',

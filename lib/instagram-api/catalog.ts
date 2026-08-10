@@ -361,6 +361,11 @@ export const INSTAGRAM_GRAPHQL_OPERATIONS = {
             },
         }),
     ),
+    PolarisUserHoverCardContentV2Query: query(
+        FRIENDLY_NAMES.userHoverCard,
+        DOC_IDS.userHoverCard,
+        (input: { userId: string }) => ({ userID: input.userId }),
+    ),
     IGDEmojiPickerQuery: query(
         FRIENDLY_NAMES.emojiPicker,
         DOC_IDS.emojiPicker,

@@ -1086,3 +1086,55 @@ test('reel comments retain the captured opaque pagination cursor', () => {
         xig_media_save: { media: { id: '3953224267254190889_5654194264' } },
     } }, true), { mediaId: '3953224267254190889', hasSaved: true });
 });
+
+test('reel social context requires proven viewer-following and explicit ranked-comment markers', async () => {
+    const media = {
+        pk: '3953224267254190889', code: 'ABC', media_type: 1, product_type: 'feed',
+        original_width: 1080, original_height: 1080,
+        image_versions2: { candidates: [{ url: 'https://cdn.example/post.jpg', width: 1080, height: 1080 }] },
+        user: { pk: 'owner', username: 'owner' },
+        top_likers: ['friend-1', 'friend-2', 'friend-3', 'friend-4', 'friend-5', 'friend-6'],
+        facepile_top_likers: ['friend-6', 'friend-5', 'friend-4', 'friend-3', 'friend-2', 'friend-1'].map(username => ({
+            pk: `${username}-id`, username, full_name: username, profile_pic_url: `https://cdn.example/${username}.jpg`,
+        })),
+    };
+    const requestedIds: string[] = [];
+    const followed = await loadReelMedia({ shortcode: 'ABC', mediaId: media.pk }, async () => ({ items: [media] }), async userId => {
+        requestedIds.push(userId);
+        return { data: { xig_user_by_igid_v2: { user_dict: {
+            pk: userId, friendship_status: { following: true },
+        } } } };
+    });
+    assert.deepEqual(requestedIds, ['friend-1-id', 'friend-2-id', 'friend-3-id', 'friend-4-id', 'friend-5-id']);
+    assert.deepEqual(followed.followedLikers?.map(user => user.id), requestedIds);
+    const notFollowed = await loadReelMedia({ shortcode: 'ABC', mediaId: media.pk }, async () => ({ items: [media] }), async userId => ({
+        data: { xig_user_by_igid_v2: { user_dict: {
+            pk: userId, friendship_status: { following: false },
+        } } },
+    }));
+    assert.equal(notFollowed.followedLikers, undefined);
+    const mismatchedUser = await loadReelMedia({ shortcode: 'ABC', mediaId: media.pk }, async () => ({ items: [media] }), async () => ({
+        data: { xig_user_by_igid_v2: { user_dict: {
+            pk: 'different-user', friendship_status: { following: true },
+        } } },
+    }));
+    assert.equal(mismatchedUser.followedLikers, undefined);
+    const unavailableFriendship = await loadReelMedia(
+        { shortcode: 'ABC', mediaId: media.pk },
+        async () => ({ items: [media] }),
+        async () => { throw new Error('Hover card unavailable'); },
+    );
+    assert.equal(unavailableFriendship.followedLikers, undefined);
+    assert.equal(unavailableFriendship.id, media.pk);
+
+    const rankedComment = {
+        pk: 'ranked', text: 'A friend was here', comment_index: 0, is_ranked_comment: true,
+        user: { pk: 'friend-id', username: 'friend' },
+    };
+    assert.equal(parseReelCommentsResponse({
+        is_ranked: true, comments: [rankedComment],
+    }).featuredCommentId, 'ranked');
+    assert.equal(parseReelCommentsResponse({
+        is_ranked: false, comments: [rankedComment],
+    }).featuredCommentId, undefined);
+});

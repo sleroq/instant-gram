@@ -207,6 +207,21 @@ test('reel like and save mutations match captured documents and variables', () =
     ]);
 });
 
+test('hover-card friendship lookup uses the captured liker identity request', () => {
+    const operation = operations.PolarisUserHoverCardContentV2Query;
+    assert.deepEqual([
+        operation.friendlyName,
+        operation.docId,
+        operation.kind,
+        operation.buildVariables({ userId: '35122899956' }, context),
+    ], [
+        'PolarisUserHoverCardContentV2Query',
+        '27756568060663620',
+        'query',
+        { userID: '35122899956' },
+    ]);
+});
+
 test('conversation pin and unpin use distinct current web documents and exact variables', () => {
     const pin = operations.useIGDPinThreadMutation;
     const unpin = operations.useIGDUnpinThreadMutation;
@@ -221,7 +236,7 @@ test('conversation pin and unpin use distinct current web documents and exact va
 });
 
 test('catalog is a closed DM allowlist', () => {
-    assert.equal(Object.keys(operations).length, 37);
+    assert.equal(Object.keys(operations).length, 38);
     assert.equal(isInstagramGraphqlOperationName('IGDirectReactionSendMutation'), true);
     for (const shellOperation of [
         'PolarisFeedTimelinePaginationQuery',

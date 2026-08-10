@@ -575,6 +575,7 @@ async function mount(scenario: Scenario) {
                 value: {
                 id: '9001', shortcode: 'reel-code', mediaType: 'reel',
                 author: { id: 'author-1', username: 'reel_author', fullName: 'Reel Author', picUrl: 'data:image/gif;base64,R0lGODlhAQABAAAAACw=', isVerified: true },
+                followedLikers: [1, 2, 3, 4, 5].map(index => ({ id: `liker-${index}`, username: `followed_liker_${index}`, fullName: `Followed Liker ${index}`, picUrl: 'data:image/gif;base64,R0lGODlhAQABAAAAACw=', isVerified: false })),
                 displayMusic: { title: 'Harness reel song', artist: 'Harness reel artist' },
                 caption: 'Harness reel caption', items: [
                     { id: 'video-slide', kind: 'video', videoUrl: `data:video/mp4;base64,${suffix}`, variants: [
@@ -594,7 +595,7 @@ async function mount(scenario: Scenario) {
             reelCommentCalls++;
             if (scenario === 'post') return { ok: true, value: { items: [], hasNextPage: false } };
             if (scenario === 'reel' && reelCommentCalls === 1) return { ok: false, error: { message: 'Harness comments failure' } };
-            return { ok: true, value: { items: [{ id: 'comment-1', text: 'Great reel', createdAtMs: 2_000, likeCount: 0, hasLiked: false, childCommentCount: 0, author: { id: 'commenter', username: 'commenter', fullName: 'Commenter', picUrl: null, isVerified: false } }], hasNextPage: false } };
+            return { ok: true, value: { items: [{ id: 'comment-1', text: 'Great reel', createdAtMs: 2_000, likeCount: 0, hasLiked: false, childCommentCount: 0, author: { id: 'liker-2', username: 'followed_liker_2', fullName: 'Followed Liker 2', picUrl: null, isVerified: false } }], featuredCommentId: 'comment-1', hasNextPage: false } };
         },
         setReelLiked: async payload => {
             reelLikeCalls++;

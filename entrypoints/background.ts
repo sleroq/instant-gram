@@ -1,7 +1,7 @@
 import '../lib/bridge';
 import { defineBackground } from 'wxt/utils/define-background';
 import browser from 'webextension-polyfill';
-import type { ReelMedia, Result, RpcMap } from '../lib/domain';
+import type { ReelAuthor, ReelMedia, Result, RpcMap } from '../lib/domain';
 import { createSerialTaskQueue } from '../lib/errors';
 import { loadTrustedProfileImageDataUrl } from '../lib/media-proxy';
 
@@ -38,6 +38,17 @@ type DirectRemoteRpcName = Exclude<RemoteRpcName, 'togglePin'>;
 type RpcPayload<K extends keyof RpcMap> = Parameters<RpcMap[K]>[0];
 type RpcResult<K extends keyof RpcMap> = Awaited<ReturnType<RpcMap[K]>>;
 
+async function proxyOptionalProfileImage(author: ReelAuthor): Promise<ReelAuthor> {
+    if (!author.picUrl) return author;
+    let picUrl: string | null = null;
+    try {
+        picUrl = await loadTrustedProfileImageDataUrl(author.picUrl);
+    } catch {
+        // Optional profile media must not discard otherwise valid API data.
+    }
+    return { ...author, picUrl };
+}
+
 const REMOTE_RPC_NAMES = [
     'getInbox',
     'getThread',
@@ -65,24 +76,23 @@ async function routeToAnchor<K extends RemoteRpcName>(
         payload as never,
         `content-script@${tabId}`,
     )) as RpcResult<K>;
-    if (name !== 'getReelMedia') return result;
-
-    const mediaResult = result as Result<ReelMedia>;
-    const source = mediaResult.ok ? mediaResult.value.author.picUrl : null;
-    if (!mediaResult.ok || !source) return result;
-    let picUrl: string | null = null;
-    try {
-        picUrl = await loadTrustedProfileImageDataUrl(source);
-    } catch {
-        // A failed optional avatar must not discard otherwise valid reel media.
+    if (name === 'getReelMedia') {
+        const mediaResult = result as Result<ReelMedia>;
+        if (!mediaResult.ok) return result;
+        const [author, followedLikers] = await Promise.all([
+            proxyOptionalProfileImage(mediaResult.value.author),
+            Promise.all((mediaResult.value.followedLikers ?? []).map(proxyOptionalProfileImage)),
+        ]);
+        return {
+            ok: true,
+            value: {
+                ...mediaResult.value,
+                author,
+                ...(followedLikers.length ? { followedLikers } : {}),
+            },
+        } as RpcResult<K>;
     }
-    return {
-        ok: true,
-        value: {
-            ...mediaResult.value,
-            author: { ...mediaResult.value.author, picUrl },
-        },
-    } as RpcResult<K>;
+    return result;
 }
 
 export default defineBackground(() => {

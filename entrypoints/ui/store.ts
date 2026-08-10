@@ -119,6 +119,7 @@ export type ReelState = {
     comments: {
         byId: Record<string, ReelComment>;
         listedIds: string[];
+        featuredCommentId?: string;
         cursor?: string;
         hasNextPage: boolean;
         status: Status;
@@ -1871,6 +1872,7 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
             }
             reel.comments.cursor = result.value.cursor;
             reel.comments.hasNextPage = result.value.hasNextPage;
+            if (!isLoadingMore) reel.comments.featuredCommentId = result.value.featuredCommentId;
             reel.comments.status = 'ready';
             reel.comments.failedCursor = undefined;
             return true;

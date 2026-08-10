@@ -13,6 +13,7 @@ import type {
     Page,
     ReelComment,
     ReelComments,
+    ReelAuthor,
     ReelLikeReceipt,
     ReelMedia,
     ReelMediaItem,
@@ -1099,6 +1100,36 @@ export function parseReelInfoResponse(
     };
 }
 
+export function parseTopLikerCandidates(json: unknown): ReelAuthor[] {
+    const root = objectProp(json);
+    const item = Array.isArray(root?.items) ? objectProp(root.items[0]) : undefined;
+    if (!item) return [];
+    const topLikers = Array.isArray(item.top_likers)
+        ? item.top_likers.map(stringProp).filter((username): username is string => Boolean(username))
+        : [];
+    const facepile = Array.isArray(item.facepile_top_likers)
+        ? item.facepile_top_likers.map(objectProp).filter((user): user is JsonObject => Boolean(user))
+        : [];
+    // A facepile entry alone is presentation data, not proof that the account
+    // liked the media. Require the independently returned top-liker username.
+    const candidates = topLikers.map(username => facepile.find(user =>
+        stringProp(user.username) === username
+    )).filter((user): user is JsonObject => Boolean(user)).map(reelAuthor);
+    return candidates.filter((candidate, index) =>
+        candidates.findIndex(item => item.id === candidate.id) === index
+    ).slice(0, 5);
+}
+
+export function parseViewerFollowingResponse(json: unknown, expectedUserId: string): boolean {
+    const root = objectProp(json);
+    const data = objectProp(root?.data);
+    const result = objectProp(data?.xig_user_by_igid_v2);
+    const user = objectProp(result?.user_dict);
+    const userId = stringProp(user?.pk) ?? stringProp(user?.id);
+    const friendship = objectProp(user?.friendship_status);
+    return userId === expectedUserId && booleanProp(friendship?.following) === true;
+}
+
 export function parseReelCommentsResponse(json: unknown): ReelComments {
     const root = objectProp(json);
     if (!root || !Array.isArray(root.comments))
@@ -1118,9 +1149,18 @@ export function parseReelCommentsResponse(json: unknown): ReelComments {
         };
     }).filter((comment): comment is ReelComment => Boolean(comment));
     const cursor = stringProp(root.next_min_id);
+    const featuredCommentId = booleanProp(root.is_ranked) === true
+        ? root.comments.map(objectProp).find(comment =>
+            booleanProp(comment?.is_ranked_comment) === true && numberProp(comment?.comment_index) === 0
+        )
+        : undefined;
+    const featuredId = stringProp(featuredCommentId?.pk) ?? stringProp(featuredCommentId?.id);
     return {
         items,
         ...(cursor ? { cursor } : {}),
+        ...(featuredId && items.some(comment => comment.id === featuredId)
+            ? { featuredCommentId: featuredId }
+            : {}),
         // Captured continuation pages report has_more_comments=false while still
         // returning a usable next_min_id, so cursor presence is authoritative.
         hasNextPage: Boolean(cursor),

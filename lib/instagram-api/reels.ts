@@ -1,5 +1,9 @@
 import type { ReelMedia } from '../domain.ts';
-import { parseReelInfoResponse } from './parsers.ts';
+import {
+    parseReelInfoResponse,
+    parseTopLikerCandidates,
+    parseViewerFollowingResponse,
+} from './parsers.ts';
 
 type ReelPayload = { shortcode: string; mediaId?: string };
 
@@ -32,8 +36,22 @@ export function validateReelPayload(value: unknown): ReelPayload {
 export async function loadReelMedia(
     value: unknown,
     fetchInfo: (mediaId: string) => Promise<unknown>,
+    fetchFriendship?: (userId: string) => Promise<unknown>,
 ): Promise<ReelMedia> {
     const payload = validateReelPayload(value);
     const mediaId = payload.mediaId ?? instagramMediaIdFromShortcode(payload.shortcode);
-    return parseReelInfoResponse(await fetchInfo(mediaId), { ...payload, mediaId });
+    const info = await fetchInfo(mediaId);
+    const media = parseReelInfoResponse(info, { ...payload, mediaId });
+    const candidates = parseTopLikerCandidates(info);
+    if (!candidates.length || !fetchFriendship) return media;
+    const followedLikers = (await Promise.all(candidates.map(async candidate => {
+        try {
+            const friendship = await fetchFriendship(candidate.id);
+            return parseViewerFollowingResponse(friendship, candidate.id) ? candidate : undefined;
+        } catch {
+            // Friendship context is optional enrichment and must not hide valid media.
+            return undefined;
+        }
+    }))).filter((candidate): candidate is NonNullable<typeof candidate> => Boolean(candidate));
+    return followedLikers.length ? { ...media, followedLikers } : media;
 }

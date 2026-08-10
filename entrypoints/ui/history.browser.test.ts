@@ -536,11 +536,21 @@ test('reel preview and modal own playback, carousel, actions, comments, links, a
     const dialog = page.getByRole('dialog', { name: 'Reel by Reel Author' });
     await dialog.waitFor();
     await page.getByRole('alert').filter({ hasText: 'Harness comments failure' }).waitFor();
+    const socialCue = page.locator('.reel-social-cue');
+    assert.equal(await socialCue.locator('.reel-social-cue__account').count(), 5);
+    assert.equal(await socialCue.locator('.reel-social-cue__heart').count(), 5);
+    assert.match(await socialCue.locator('img').first().getAttribute('src') ?? '', /^data:image\/gif;base64,/);
+    assert.equal(await socialCue.locator('.reel-social-cue__account').first().getAttribute('href'),
+        'https://www.instagram.com/followed_liker_1/');
     assert.deepEqual(await page.evaluate(() => window.historyHarness.reelMetrics()), {
         reelCommentCalls: 1, reelMediaCalls: 1, reelLikeCalls: 0, reelSaveCalls: 0,
     });
     await page.getByRole('button', { name: 'Retry comments' }).click();
-    await page.getByText('Great reel').waitFor();
+    await page.getByLabel('Comments').getByText('Great reel', { exact: true }).waitFor();
+    assert.equal(await socialCue.locator('.reel-social-cue__heart').count(), 4);
+    assert.equal(await socialCue.locator('.reel-social-cue__comment').textContent(), 'Great reel');
+    assert.equal(await socialCue.getByRole('link', { name: /followed_liker_2.*commented: Great reel/ }).getAttribute('href'),
+        'https://www.instagram.com/followed_liker_2/');
 
     const author = page.getByRole('link', { name: /Reel Author/ });
     assert.equal(await author.getAttribute('href'), 'https://www.instagram.com/reel_author/');

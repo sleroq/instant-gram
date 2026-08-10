@@ -221,7 +221,9 @@ async function fetchReelInfo(mediaId: string): Promise<unknown> {
 }
 
 async function getReelMedia(value: unknown) {
-    return loadReelMedia(value, fetchReelInfo);
+    return loadReelMedia(value, fetchReelInfo, userId =>
+        executeOperation('PolarisUserHoverCardContentV2Query', { userId })
+    );
 }
 
 function validateReelCommentsPayload(value: unknown): ReelCommentsPayload {

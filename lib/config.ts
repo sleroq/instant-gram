@@ -37,6 +37,7 @@ export const DOC_IDS = {
     unlikeReel: '37071567952434061',
     saveReel: '27326721586982367',
     unsaveReel: '27203919972607144',
+    userHoverCard: '27756568060663620',
 } as const;
 
 export const FRIENDLY_NAMES = {
@@ -79,6 +80,7 @@ export const FRIENDLY_NAMES = {
     unlikeReel: 'PolarisAPIUnlikePostMutation',
     saveReel: 'PolarisAPISavePostMutation',
     unsaveReel: 'PolarisAPIUnsavePostMutation',
+    userHoverCard: 'PolarisUserHoverCardContentV2Query',
 } as const;
 
 export const INSTAGRAM_GRAPHQL_FLAGS = {

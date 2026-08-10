@@ -204,3 +204,44 @@ REST info path. Prefer a numeric DM media-ID hint and use that deterministic
 decode only when the hint is absent. The former plan/live-bundle-derived
 `PolarisPostActionLoadPostQueryQuery` was not captured and is no longer called.
 Always validate REST `items[0].pk` and `items[0].code` before caching media.
+
+## 7. Followed-account engagement social context
+
+`reel-with-following-account-comment.har` captures the same media ID in two
+authenticated REST reads:
+
+```txt
+GET /api/v1/media/3934570309998833710/comments/
+    ?can_support_threading=true&permalink_enabled=false
+GET /api/v1/media/3934570309998833710/info/
+```
+
+The comments response is base64-encoded in the HAR. After decoding, the root has
+`is_ranked: true`; comment `17959665483171459` has `comment_index: 0`,
+`is_ranked_comment: true`, its text, and a complete user identity including
+username `mezzanine.proxy`, numeric user ID `35122899956`, and
+`profile_pic_url`. The response does **not** include `user.friendship_status`
+or another following flag, so ranking alone does not prove the requested cue.
+
+The info response separately has `top_likers: ["mezzanine.proxy"]` and a matching
+`facepile_top_likers` user with the same numeric ID. `social_context` and
+`preview_comments` are both empty. Those two REST responses prove like and
+comment engagement by the same account, but still not viewer-following.
+
+`more-requests.har` captures the missing correlation in the same navigation.
+The comments and info reads start at `21:40:01.827Z` and `21:40:01.828Z`. At
+`21:40:03.128Z`, request `PolarisUserHoverCardContentV2Query` uses document
+`27756568060663620` with exactly `{"userID":"35122899956"}`. Its response
+returns the same `pk`/username and `friendship_status.following: true`. A second
+hover-card request at `21:40:03.281Z` targets media author `70358899590` and
+returns `following: false`; it must not be correlated to the comment merely
+because it occurs nearby. The numeric user IDs, not timing or rank, join the
+three responses.
+
+ICR therefore accepts the first five ordered `top_likers`/facepile matches,
+executes the captured user-ID query for each after media info, and exposes only
+accounts whose response IDs match and whose `following` value is exactly true.
+The ranked index-zero comment cue is further gated to one of those proven account
+IDs. This bounds friendship enrichment to five lookups per media load. A followed
+commenter who is not also a named top liker remains undetectable from these
+captures and is intentionally omitted rather than guessed.
