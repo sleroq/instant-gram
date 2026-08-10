@@ -45,6 +45,7 @@ const DEFAULT_REACTION = REACTION_EMOJIS[0];
 const EMOJI_RENDER_BATCH = 240;
 const MEDIA_CONTROLS_IDLE_DELAY_MS = 10_000;
 const MEDIA_CONTROLS_LEAVE_DELAY_MS = 1_500;
+const KEYBOARD_ROW_EDGE_GAP = 8;
 let keyboardScrollSequence = 0;
 let reelReturnFocus: HTMLElement | undefined;
 let forwardingReturnFocus: HTMLElement | undefined;
@@ -3692,11 +3693,14 @@ function revealInScroller(scroller: HTMLElement, row: HTMLElement) {
     const rowRect = row.getBoundingClientRect();
     const header = scroller.closest('.conversation')?.querySelector<HTMLElement>('.conversation__header');
     const headerRect = header?.getBoundingClientRect();
-    const visibleTop = headerRect ? Math.max(scrollerRect.top, headerRect.bottom + 8) : scrollerRect.top;
+    const visibleTop = headerRect
+        ? Math.max(scrollerRect.top, headerRect.bottom + KEYBOARD_ROW_EDGE_GAP)
+        : scrollerRect.top + KEYBOARD_ROW_EDGE_GAP;
+    const visibleBottom = scrollerRect.bottom - KEYBOARD_ROW_EDGE_GAP;
     if (rowRect.top < visibleTop) {
         setKeyboardScrollTop(scroller, scroller.scrollTop + rowRect.top - visibleTop);
-    } else if (rowRect.bottom > scrollerRect.bottom) {
-        setKeyboardScrollTop(scroller, scroller.scrollTop + rowRect.bottom - scrollerRect.bottom);
+    } else if (rowRect.bottom > visibleBottom) {
+        setKeyboardScrollTop(scroller, scroller.scrollTop + rowRect.bottom - visibleBottom);
     }
 }
 

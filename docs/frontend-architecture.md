@@ -687,11 +687,13 @@ through the currently rendered bounded `viewportIds` rows without moving the
 window or requesting a page. `h` returns to the selected chat row and `l` enters
 the selected history, restoring a per-thread focused message ID when it remains
 rendered or otherwise choosing the newest rendered row. Every movement reveals
-the focused row with nearest-edge, non-animated scrolling, keeping history rows
-clear of the floating conversation header. A short-lived DOM
+the focused row with inset nearest-edge, non-animated scrolling, keeping history
+rows clear of the floating conversation header and bottom edge. A short-lived DOM
 scroll intent lets inbox and history handlers distinguish this navigation from
 pagination intent, so keyboard movement neither fetches nor replaces a bounded
-history window. This focus memory is DOM navigation state, not a message cache.
+history window. The visible keyboard focus ring follows the message bubble rather
+than its full-width anchor row. This focus memory is DOM navigation state, not a
+message cache.
 Inputs, textareas, selects, DOM-editable hosts and descendants (respecting
 `contenteditable="false"`), modifier chords, context menus, reaction pickers, and
 dialog-like surfaces suppress these bindings. Context-menu pin actions restore

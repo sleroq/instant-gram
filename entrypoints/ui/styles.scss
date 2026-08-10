@@ -918,8 +918,14 @@ body.is-resizing-sidebar * {
     }
 
     &:focus-visible {
-        outline: 2px solid var(--color-focus);
-        outline-offset: 2px;
+        > .message .message__bubble {
+            outline: 2px solid var(--color-focus);
+            outline-offset: 2px;
+        }
+
+        > .message .message__bubble--media {
+            border-radius: 12px !important;
+        }
     }
 }
 

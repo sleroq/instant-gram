@@ -2420,6 +2420,22 @@ test('Vim keys navigate chats and bounded history, preserve thread focus, and re
     await page.waitForFunction(() =>
         (document.activeElement as HTMLElement)?.dataset.messageId === 'm118');
     assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement)?.dataset.messageId), 'm118');
+    const focusedMessageStyle = await page.locator('[data-message-id="m118"]').evaluate(row => {
+        const bubble = row.querySelector<HTMLElement>('.message__bubble')!;
+        const rowStyle = getComputedStyle(row);
+        const bubbleStyle = getComputedStyle(bubble);
+        return {
+            rowOutline: rowStyle.outlineStyle,
+            bubbleOutline: bubbleStyle.outlineStyle,
+            bubbleRadius: bubbleStyle.borderRadius,
+            rowWidth: row.getBoundingClientRect().width,
+            bubbleWidth: bubble.getBoundingClientRect().width,
+        };
+    });
+    assert.equal(focusedMessageStyle.rowOutline, 'none');
+    assert.equal(focusedMessageStyle.bubbleOutline, 'solid');
+    assert.notEqual(focusedMessageStyle.bubbleRadius, '0px');
+    assert.ok(focusedMessageStyle.bubbleWidth < focusedMessageStyle.rowWidth);
 
     await page.locator('[data-message-id="m80"]').focus();
     const callsBeforeBoundary = await page.evaluate(() => window.historyHarness.calls().length);
@@ -2441,6 +2457,21 @@ test('Vim keys navigate chats and bounded history, preserve thread focus, and re
         return row.getBoundingClientRect().top - header.getBoundingClientRect().bottom;
     });
     assert.ok(headerClearance >= 7.5, `focused message cleared the floating header by ${headerClearance}px`);
+
+    await page.evaluate(() => {
+        const scroller = document.querySelector<HTMLElement>('.messages')!;
+        const target = document.querySelector<HTMLElement>('[data-message-id="m90"]')!;
+        scroller.dataset.keyboardNavigationScroll = 'test';
+        scroller.scrollTop += target.getBoundingClientRect().bottom - scroller.getBoundingClientRect().bottom;
+        document.querySelector<HTMLElement>('[data-message-id="m89"]')!.focus({ preventScroll: true });
+    });
+    await page.keyboard.press('j');
+    const bottomClearance = await page.evaluate(() => {
+        const row = document.querySelector<HTMLElement>('[data-message-id="m90"]')!;
+        const scroller = document.querySelector<HTMLElement>('.messages')!;
+        return scroller.getBoundingClientRect().bottom - row.getBoundingClientRect().bottom;
+    });
+    assert.ok(bottomClearance >= 7.5, `focused message cleared the bottom edge by ${bottomClearance}px`);
 
     const composer = page.getByRole('textbox', { name: 'Message' });
     await composer.focus();
