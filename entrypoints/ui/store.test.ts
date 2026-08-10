@@ -1362,7 +1362,7 @@ test('reactions are server-only, per-thread single-flight, authoritative, and ro
         value: {
             items: [{
                 kind: 'text', id: 'same', senderId: 'sender', ts: 1, text: 'message',
-                reactions: [{ senderId: 'viewer', reaction: '❤' }],
+                reactions: [{ senderId: 'viewer', reaction: '❤️' }],
             }],
             hasNextPage: false,
             viewerId: 'viewer',
@@ -1382,7 +1382,7 @@ test('reactions are server-only, per-thread single-flight, authoritative, and ro
     const removeFlight = store.setReaction('a', 'same', '❤');
     assert.deepEqual(store.state.histories.a.byId.same.reactions, []);
     assert.deepEqual(reactionCalls[0], {
-        threadFbid: '1', messageId: 'same', emoji: '❤', remove: true,
+        threadFbid: '1', messageId: 'same', emoji: '❤️', remove: true,
     });
     resolvers[0]({ ok: true, value: { messageId: 'same', reactions: [] } });
     assert.equal(await removeFlight, true);

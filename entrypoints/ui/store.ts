@@ -1318,8 +1318,10 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
         if (history.pendingSends[messageId] || history.failedSends[messageId] || messageId.startsWith('local:')) {
             return false;
         }
-        const remove = message.reactions?.some(reaction =>
-            reaction.senderId === viewerId && reaction.reaction === emoji) ?? false;
+        const viewerReaction = message.reactions?.find(reaction => reaction.senderId === viewerId)?.reaction;
+        const remove = Boolean(viewerReaction &&
+            viewerReaction.replaceAll('\uFE0F', '') === emoji.replaceAll('\uFE0F', ''));
+        const requestEmoji = remove ? viewerReaction! : emoji;
         const previous = message.reactions ? [...message.reactions] : undefined;
         const optimistic: MessageReaction[] = (message.reactions ?? [])
             .filter(reaction => reaction.senderId !== viewerId);
@@ -1329,7 +1331,7 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
         reactionRequests.set(key, request);
         history.byId[messageId] = { ...message, reactions: optimistic };
         history.reactionMutations[messageId] = {
-            emoji,
+            emoji: requestEmoji,
             status: 'pending',
             rollbackReactions: previous,
         };
@@ -1339,7 +1341,7 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
             const result = await rpc.setReaction({
                 threadFbid: thread.threadFbid,
                 messageId,
-                emoji,
+                emoji: requestEmoji,
                 remove,
             });
             if (
@@ -1354,7 +1356,7 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
                     reactions: mutation?.rollbackReactions,
                 };
                 history.reactionMutations[messageId] = {
-                    emoji,
+                    emoji: requestEmoji,
                     status: 'error',
                     error: result.error.message,
                 };
@@ -1367,7 +1369,7 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
                     reactions: mutation?.rollbackReactions,
                 };
                 history.reactionMutations[messageId] = {
-                    emoji,
+                    emoji: requestEmoji,
                     status: 'error',
                     error: 'Reaction receipt did not match the target message',
                 };
@@ -1395,7 +1397,7 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
                     reactions: mutation?.rollbackReactions,
                 };
                 history.reactionMutations[messageId] = {
-                    emoji,
+                    emoji: requestEmoji,
                     status: 'error',
                     error: errorMessage(error),
                 };

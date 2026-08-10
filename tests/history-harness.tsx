@@ -11,7 +11,8 @@ type Scenario = 'continuous' | 'delayed' | 'resize' | 'resize-virtual' | 'select
     'older-send' | 'thread-state' | 'identity-pm' | 'identity-group' | 'outgoing-prepend' |
     'events' | 'vim-scroll' | 'reply-navigation' | 'reply-navigation-retry' |
     'reply-navigation-delayed' | 'reply-navigation-prefetch-resume' |
-    'reply-navigation-chain' | 'local-newer' | 'keyboard-actions' | 'reel-extremes' | 'post';
+    'reply-navigation-chain' | 'local-newer' | 'local-newer-resize' |
+    'keyboard-actions' | 'reel-extremes' | 'post';
 
 let activeStore: ReturnType<typeof createFrontendStore> | undefined;
 let resolveVisible: ((result: Result<ThreadMessages>) => void) | undefined;
@@ -213,7 +214,7 @@ const keyboardActionMessages: Message[] = [
     },
     {
         kind: 'text', id: 'keyboard-already', senderId: 'sender', ts: 3_000, text: 'Already hearted',
-        reactions: [{ senderId: 'viewer', reaction: '❤' }],
+        reactions: [{ senderId: 'viewer', reaction: '❤️' }],
     },
     { kind: 'text', id: 'keyboard-failure', senderId: 'sender', ts: 4_000, text: 'Reaction will fail' },
     { kind: 'text', id: 'keyboard-target', senderId: 'sender', ts: 5_000, text: 'React once' },
@@ -355,7 +356,7 @@ async function mount(scenario: Scenario) {
         document.head.append(style);
     }
     const selectedThreadId = scenario === 'identity-pm' ? 'peer' : thread.key;
-    const initial = scenario === 'local-newer'
+    const initial = scenario === 'local-newer' || scenario === 'local-newer-resize'
         ? page(0, 240, undefined, false, true)
         : scenario === 'continuous'
         ? page(40, 60, 'c1', true)
@@ -436,7 +437,8 @@ async function mount(scenario: Scenario) {
             ok: true,
             value: {
                 items: scenario === 'selection' || scenario === 'thread-state' ||
-                    scenario === 'keyboard-actions' || scenario === 'local-newer'
+                    scenario === 'keyboard-actions' || scenario === 'local-newer' ||
+                    scenario === 'local-newer-resize'
                     ? [thread, secondThread]
                     : scenario === 'vim-scroll'
                         ? vimThreads
@@ -518,7 +520,8 @@ async function mount(scenario: Scenario) {
         }),
         setReaction: async payload => {
             reactionCalls.push(payload);
-            if (scenario === 'keyboard-actions' && payload.messageId === 'keyboard-target' && !payload.remove) {
+            if ((scenario === 'keyboard-actions' && payload.messageId === 'keyboard-target' && !payload.remove) ||
+                (scenario === 'mutations' && payload.messageId === 'm0' && payload.emoji === '🧑🏿‍🤝‍🧑🏻')) {
                 return new Promise(resolve => {
                     resolveReaction = () => resolve({
                         ok: true,
@@ -706,6 +709,7 @@ window.historyHarness = {
     reactionCalls: () => reactionCalls,
     select: (threadId: string) => activeStore?.selectThread(threadId),
     revealOlder: (threadId: string) => activeStore?.revealOlderHistory(threadId),
+    revealNewer: (threadId: string) => activeStore?.revealNewerHistory(threadId),
     navigateToReply: (threadId: string, messageId: string) => activeStore?.navigateToReply(threadId, messageId),
     showInbox: () => activeStore?.showInbox(),
     applyIncoming: (threadId: string, id: string, ts: number) => activeStore?.applyIncomingSnapshot({
@@ -748,6 +752,7 @@ declare global {
             reactionCalls: () => Parameters<CompleteUiRpc['setReaction']>[0][];
             select: (threadId: string) => void;
             revealOlder: (threadId: string) => void;
+            revealNewer: (threadId: string) => boolean | undefined;
             navigateToReply: (threadId: string, messageId: string) => Promise<boolean> | undefined;
             showInbox: () => void;
             applyIncoming: (threadId: string, id: string, ts: number) => void;
@@ -766,6 +771,7 @@ declare global {
                     status: 'loading' | 'ready' | 'error';
                     pagesLoaded?: number;
                     messagesLoaded?: number;
+                    isPositioned?: boolean;
                     error?: string;
                 };
                 replyReturnStack?: string[];

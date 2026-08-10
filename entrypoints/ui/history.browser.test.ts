@@ -586,15 +586,20 @@ test('reel preview and modal own playback, carousel, actions, comments, links, a
     await page.waitForFunction(() => document.fullscreenElement?.classList.contains('reel-media'));
     const fullscreenGeometry = await modalVideo.evaluate(video => {
         const wrapper = video.parentElement!.getBoundingClientRect();
+        const videoRect = video.getBoundingClientRect();
         const style = getComputedStyle(video);
         return {
             wrapper: { width: wrapper.width, height: wrapper.height },
+            video: { width: videoRect.width, height: videoRect.height },
             viewport: { width: innerWidth, height: innerHeight },
             objectFit: style.objectFit,
+            position: style.position,
         };
     });
     assert.deepEqual(fullscreenGeometry.wrapper, fullscreenGeometry.viewport);
+    assert.deepEqual(fullscreenGeometry.video, fullscreenGeometry.viewport);
     assert.equal(fullscreenGeometry.objectFit, 'contain');
+    assert.equal(fullscreenGeometry.position, 'absolute');
     await page.getByRole('button', { name: 'Exit fullscreen' }).click();
     await page.waitForFunction(() => document.fullscreenElement === null);
     await modalVideo.evaluate(video => {
@@ -1105,6 +1110,53 @@ test('tall reel modal keeps custom video controls inside the capped stage', asyn
     assert.ok(geometry.stage.bottom <= geometry.dialog.bottom, JSON.stringify(geometry));
     assert.ok(geometry.player.bottom <= geometry.viewport.height, JSON.stringify(geometry));
     assert.equal(await page.getByRole('slider', { name: 'Seek reel' }).isVisible(), true);
+    await page.close();
+});
+
+test('reel, post, and soundtrack controls hide after inactivity or leaving the stage', async () => {
+    const page = await openHarness({ width: 1100, height: 760 });
+    await page.evaluate(() => {
+        const nativeSetTimeout = window.setTimeout.bind(window);
+        window.setTimeout = ((handler: TimerHandler, delay?: number, ...args: unknown[]) =>
+            nativeSetTimeout(handler, delay === 10_000 ? 100 : delay === 1_500 ? 50 : delay, ...args)
+        ) as typeof window.setTimeout;
+        window.historyHarness.mount('reel');
+    });
+
+    await page.getByRole('button', { name: 'Open reel from reel_author' }).click();
+    const stage = page.locator('.reel-stage');
+    const player = page.locator('.reel-player');
+    await player.waitFor();
+    await page.waitForTimeout(300);
+    assert.equal(await player.evaluate(element => getComputedStyle(element).visibility), 'hidden');
+
+    await stage.dispatchEvent('pointermove');
+    await page.waitForTimeout(30);
+    assert.equal(await player.evaluate(element => getComputedStyle(element).visibility), 'visible');
+    await stage.dispatchEvent('mouseleave');
+    await page.waitForTimeout(250);
+    assert.equal(await player.evaluate(element => getComputedStyle(element).visibility), 'hidden');
+
+    await stage.dispatchEvent('pointermove');
+    await page.waitForTimeout(30);
+    const mute = page.getByRole('button', { name: 'Mute reel' });
+    await mute.focus();
+    await page.waitForTimeout(300);
+    assert.equal(await player.evaluate(element => getComputedStyle(element).visibility), 'visible',
+        'keyboard focus must keep the controls available');
+    await page.getByRole('button', { name: 'Close reel' }).focus();
+    await page.waitForTimeout(250);
+    assert.equal(await player.evaluate(element => getComputedStyle(element).visibility), 'hidden');
+
+    await page.getByRole('button', { name: 'Close reel' }).click();
+    await page.evaluate(() => window.historyHarness.mount('post'));
+    const row = page.locator('[data-message-id="post-message"]');
+    await row.focus();
+    await page.keyboard.press('Enter');
+    const soundtrackControls = page.locator('.reel-stage__soundtrack-controls');
+    await soundtrackControls.waitFor();
+    await page.waitForTimeout(300);
+    assert.equal(await soundtrackControls.evaluate(element => getComputedStyle(element).visibility), 'hidden');
     await page.close();
 });
 
@@ -1697,6 +1749,154 @@ test('composer keyboard behavior sends without remounting the reconciled product
     await page.close();
 });
 
+test('reaction picker batches only on intent, navigates its tail, and blocks modal click-through', async () => {
+    const page = await openHarness({ width: 900, height: 700 });
+    await page.evaluate(() => window.historyHarness.mount('mutations'));
+    const expander = page.locator('[data-message-id="m0"] .message__reaction-expander');
+    await expander.evaluate(element => (element as HTMLElement).click());
+    let picker = page.getByRole('dialog', { name: 'Choose a reaction' });
+    await picker.waitFor();
+    assert.equal(await picker.getAttribute('aria-modal'), 'true');
+
+    await picker.getByRole('button', { name: 'People & body, 2418 emoji' }).click();
+    await page.waitForFunction(() => document.querySelectorAll('.reaction-picker [role="option"]').length === 240);
+    assert.equal(await picker.getByRole('status').textContent(), '2418 emoji');
+    await page.evaluate(() => new Promise<void>(resolve =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    assert.equal(await picker.getByRole('option').count(), 240, 'the initial batch expanded while idle');
+
+    const body = picker.locator('.reaction-picker__body');
+    await body.evaluate(element => { element.scrollTop = element.scrollHeight; });
+    await page.waitForFunction(() => document.querySelectorAll('.reaction-picker [role="option"]').length === 480);
+    await page.evaluate(() => new Promise<void>(resolve =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    assert.equal(await picker.getByRole('option').count(), 480, 'one scroll expanded more than one batch');
+    await body.evaluate(element => { element.scrollTop = element.scrollHeight; });
+    await page.waitForFunction(() => document.querySelectorAll('.reaction-picker [role="option"]').length === 720);
+    await page.evaluate(() => new Promise<void>(resolve =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    assert.equal(await picker.getByRole('option').count(), 720, 'repeated near-end growth was not one batch');
+
+    const animals = picker.getByRole('button', { name: 'Animals & nature, 160 emoji' });
+    const people = picker.getByRole('button', { name: 'People & body, 2418 emoji' });
+    await animals.click();
+    await page.waitForFunction(() => document.querySelectorAll('.reaction-picker [role="option"]').length === 160);
+    await people.click();
+    await page.waitForFunction(() => document.querySelectorAll('.reaction-picker [role="option"]').length === 240);
+    assert.equal(await body.evaluate(element => element.scrollTop), 0);
+    assert.equal(await picker.getAttribute('data-window-start'), '0');
+    assert.equal(await picker.getByRole('option').first().getAttribute('tabindex'), '0');
+
+    await picker.getByRole('option').last().focus();
+    await page.keyboard.press('ArrowRight');
+    await page.waitForFunction(() => document.querySelectorAll('.reaction-picker [role="option"]').length === 480);
+    assert.equal(await picker.locator('[role="option"]:focus').getAttribute('data-result-index'), '240');
+
+    await animals.click();
+    await people.click();
+    await page.waitForFunction(() => document.querySelectorAll('.reaction-picker [role="option"]').length === 240);
+    await picker.getByRole('option').last().focus();
+    await page.keyboard.press('ArrowDown');
+    await page.waitForFunction(() => document.querySelectorAll('.reaction-picker [role="option"]').length === 480);
+    assert.ok(Number(await picker.locator('[role="option"]:focus').getAttribute('data-result-index')) > 239);
+
+    await page.keyboard.press('End');
+    await page.waitForFunction(() => document.querySelector('.reaction-picker')?.getAttribute('data-window-start') === '2178');
+    assert.equal(await picker.getByRole('option').count(), 240);
+    assert.equal(await picker.locator('[role="option"]:focus').getAttribute('aria-posinset'), '2418');
+    assert.equal(await picker.getByRole('status').textContent(), '2418 emoji');
+
+    await picker.getByRole('option').first().focus();
+    await page.keyboard.press('ArrowLeft');
+    await page.waitForFunction(() =>
+        document.querySelector('.reaction-picker')?.getAttribute('data-window-start') === '1938');
+    assert.equal(await picker.getByRole('option').count(), 240, 'backward tail navigation exceeded its window');
+    assert.equal(await picker.locator('[role="option"]:focus').getAttribute('data-result-index'), '2177');
+
+    await page.keyboard.press('ArrowRight');
+    await page.waitForFunction(() =>
+        document.querySelector('.reaction-picker')?.getAttribute('data-window-start') === '2178');
+    assert.equal(await picker.getByRole('option').count(), 240, 'forward tail navigation exceeded its window');
+    assert.equal(await picker.locator('[role="option"]:focus').getAttribute('data-result-index'), '2178');
+
+    await page.keyboard.press('End');
+    await page.waitForFunction(() =>
+        document.querySelector('.reaction-picker')?.getAttribute('data-window-start') === '2178');
+    await picker.getByRole('option').first().focus();
+    await page.keyboard.press('ArrowUp');
+    await page.waitForFunction(() =>
+        document.querySelector('.reaction-picker')?.getAttribute('data-window-start') === '1938');
+    assert.equal(await picker.getByRole('option').count(), 240, 'backward row navigation exceeded its window');
+    assert.ok(Number(await picker.locator('[role="option"]:focus').getAttribute('data-result-index')) < 2178);
+
+    const search = picker.getByRole('searchbox', { name: 'Search emoji reactions' });
+    await search.fill('a');
+    await page.waitForFunction(() => {
+        const status = document.querySelector('.reaction-picker [role="status"]')?.textContent ?? '';
+        return Number.parseInt(status, 10) > 240 &&
+            document.querySelectorAll('.reaction-picker [role="option"]').length === 240;
+    });
+    const broadCount = Number.parseInt(await picker.getByRole('status').textContent() ?? '', 10);
+    assert.ok(broadCount > 240);
+    await page.evaluate(() => new Promise<void>(resolve =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    assert.equal(await picker.getByRole('option').count(), 240, 'broad search expanded while idle');
+    assert.equal(await picker.getAttribute('data-window-start'), '0');
+    assert.equal(await body.evaluate(element => element.scrollTop), 0);
+    assert.equal(await picker.getByRole('option').first().getAttribute('tabindex'), '0');
+
+    await picker.getByRole('option').first().click();
+    await picker.waitFor({ state: 'detached' });
+    await expander.evaluate(element => (element as HTMLElement).click());
+    picker = page.getByRole('dialog', { name: 'Choose a reaction' });
+    await picker.waitFor();
+    await page.setViewportSize({ width: 320, height: 180 });
+    const compactGeometry = await picker.evaluate(element => {
+        const pickerRect = element.getBoundingClientRect();
+        const pickerBody = element.querySelector<HTMLElement>('.reaction-picker__body')!;
+        return {
+            left: pickerRect.left,
+            top: pickerRect.top,
+            right: pickerRect.right,
+            bottom: pickerRect.bottom,
+            bodyHeight: pickerBody.clientHeight,
+            bodyScrollHeight: pickerBody.scrollHeight,
+            hasFooter: Boolean(element.querySelector('.reaction-picker__note')),
+        };
+    });
+    assert.ok(compactGeometry.left >= 0 && compactGeometry.top >= 0);
+    assert.ok(compactGeometry.right <= 320 && compactGeometry.bottom <= 180,
+        `compact picker escaped viewport: ${JSON.stringify(compactGeometry)}`);
+    assert.ok(compactGeometry.bodyHeight > 0 && compactGeometry.bodyScrollHeight > compactGeometry.bodyHeight);
+    assert.equal(compactGeometry.hasFooter, true);
+    await page.setViewportSize({ width: 900, height: 700 });
+    await page.waitForTimeout(50);
+    if (!await picker.count()) {
+        await expander.evaluate(element => (element as HTMLElement).click());
+        picker = page.getByRole('dialog', { name: 'Choose a reaction' });
+        await picker.waitFor();
+    }
+
+    await page.evaluate(() => {
+        const target = document.createElement('button');
+        target.id = 'picker-outside-target';
+        target.textContent = 'Background action';
+        target.style.cssText = 'position:fixed;right:4px;bottom:4px;z-index:999999';
+        target.addEventListener('click', () => { target.dataset.activations = '1'; });
+        document.body.append(target);
+    });
+    await page.locator('#picker-outside-target').click();
+    await picker.waitFor({ state: 'detached' });
+    assert.equal(await page.locator('#picker-outside-target').getAttribute('data-activations'), null);
+    assert.equal(await page.getByRole('dialog', { name: 'Choose a reaction' }).count(), 0);
+    await page.waitForFunction(() => document.activeElement?.classList.contains('message__reaction-expander'));
+    assert.equal(await expander.evaluate(element => element === document.activeElement), true);
+    await page.locator('#picker-outside-target').click();
+    assert.equal(await page.locator('#picker-outside-target').getAttribute('data-activations'), '1',
+        'the first click after outside dismissal was swallowed');
+    await page.close();
+});
+
 test('reply selection, failed-send recovery, and bounded reaction picker are accessible', async () => {
     const page = await openHarness({ width: 900, height: 700 });
     await page.evaluate(() => window.historyHarness.mount('mutations'));
@@ -1731,10 +1931,27 @@ test('reply selection, failed-send recovery, and bounded reaction picker are acc
     assert.equal(incomingAlignment.buttonColumns, 7);
     assert.ok(incomingAlignment.railWidth > incomingAlignment.railHeight);
     await reactionAffordance.click();
-    await page.getByRole('menu', { name: 'Choose a reaction' }).waitFor();
+    const initialPicker = page.getByRole('dialog', { name: 'Choose a reaction' });
+    await initialPicker.waitFor();
+    const initialSearch = initialPicker.getByRole('searchbox', { name: 'Search emoji reactions' });
+    assert.equal(await initialSearch.evaluate(element => element === document.activeElement), true);
+    await page.keyboard.press('Shift+Tab');
+    assert.equal(await initialPicker.evaluate(element => element.contains(document.activeElement)), true,
+        'backward Tab must remain inside the open dialog');
+    await page.keyboard.press('Tab');
+    assert.equal(await initialSearch.evaluate(element => element === document.activeElement), true);
+    await page.locator('.conversation__header').click();
+    await initialPicker.waitFor({ state: 'detached' });
+    await reactionAffordance.evaluate(element => (element as HTMLElement).click());
+    await page.getByRole('dialog', { name: 'Choose a reaction' }).waitFor();
     await page.keyboard.press('Escape');
+    await page.waitForFunction(() => document.activeElement?.classList.contains('message__reaction-expander'));
+    assert.equal(await reactionAffordance.evaluate(element => element === document.activeElement), true);
     await page.mouse.move(0, 0);
     await page.locator('[data-message-id="m0"]').focus();
+    await page.waitForFunction(() => getComputedStyle(
+        document.querySelector('[data-message-id="m0"] .message__reaction-rail')!,
+    ).opacity === '1');
     assert.equal(await reactionRail.evaluate(element => getComputedStyle(element).opacity), '1');
     assert.equal(await reactionRail.locator('button:visible').count(), 1);
     await page.keyboard.press('Tab');
@@ -1755,48 +1972,106 @@ test('reply selection, failed-send recovery, and bounded reaction picker are acc
     assert.equal((await page.evaluate(() => window.historyHarness.historyState('thread'))).replyTargetId, undefined);
 
     await reactionAffordance.evaluate(element => (element as HTMLElement).click());
-    const picker = page.getByRole('menu', { name: 'Choose a reaction' });
+    const picker = page.getByRole('dialog', { name: 'Choose a reaction' });
     await picker.waitFor();
-    assert.equal(await picker.getByRole('menuitemradio').count(), 18);
-    assert.deepEqual(await picker.getByRole('group').allTextContents(), [
-        'Faces😂😮😢😡🥰😱',
-        'Gestures👍👏🙌🙏💪👎',
-        'Symbols❤🔥✨🎉💯💔',
-    ]);
-    await picker.getByRole('menuitemradio', { name: 'React with 😂' }).press('Enter');
+    assert.equal(await picker.getAttribute('data-catalog-size'), '3944');
+    assert.equal(await picker.getByRole('navigation', { name: 'Reaction categories' }).getByRole('button').count(), 9);
+    assert.equal(await picker.getByRole('option').count(), 171);
+    const search = picker.getByRole('searchbox', { name: 'Search emoji reactions' });
+    await search.fill('Wales');
+    await page.waitForFunction(() => document.querySelectorAll('.reaction-picker [role="option"]').length === 1);
+    assert.equal(await picker.getByRole('option').count(), 1);
+    assert.equal(await picker.getByRole('status').textContent(), '1 emoji');
+    assert.equal(await picker.locator('[data-emoji="🏴󠁧󠁢󠁷󠁬󠁳󠁿"]').count(), 1);
+    await search.fill('not an emoji name');
+    await picker.getByRole('status').filter({ hasText: '0 emoji' }).waitFor();
+    assert.equal(await picker.getByRole('status').textContent(), '0 emoji');
+    await picker.getByText('No emoji found').waitFor();
+    await search.fill('');
+    await page.waitForFunction(() => document.querySelectorAll('.reaction-picker [role="option"]').length === 171);
+    const animalsCategory = picker.getByRole('button', { name: 'Animals & nature, 160 emoji' });
+    await animalsCategory.focus();
+    await animalsCategory.press('Enter');
+    await page.waitForFunction(() => document.querySelectorAll('.reaction-picker [role="option"]').length === 160);
+    assert.equal(await picker.getByRole('status').textContent(), '160 emoji');
+    await search.fill('');
+    await search.press('ArrowDown');
+    const firstEmoji = picker.getByRole('option').first();
+    assert.equal(await firstEmoji.evaluate(element => element === document.activeElement), true);
+    await firstEmoji.press('ArrowRight');
+    const secondEmoji = picker.getByRole('option').nth(1);
+    assert.equal(await secondEmoji.evaluate(element => element === document.activeElement), true);
+    const beforeDown = await secondEmoji.boundingBox();
+    await secondEmoji.press('ArrowDown');
+    const afterDown = await picker.locator('[role="option"]:focus').boundingBox();
+    assert.ok(beforeDown && afterDown && afterDown.y > beforeDown.y && Math.abs(afterDown.x - beforeDown.x) < 3);
+    await page.keyboard.press('End');
+    assert.equal(await picker.getByRole('option').last().evaluate(element => element === document.activeElement), true);
+    await page.keyboard.press('Home');
+    assert.equal(await firstEmoji.evaluate(element => element === document.activeElement), true);
+    await search.fill('😂');
+    await picker.getByRole('option', { name: /React with 😂/ }).press('Enter');
     await page.locator('.reaction-chip--viewer').first().waitFor();
+    assert.equal(await page.locator('[data-message-id="m0"]').evaluate(row =>
+        document.activeElement === row ||
+        (document.activeElement as HTMLElement)?.classList.contains('message__reaction-expander')), true,
+    'keyboard selection must restore a stable message action target');
     assert.match(
         await page.locator('.reaction-chip--viewer').first().getAttribute('aria-label') ?? '',
         /Remove your/,
     );
     await reactionAffordance.evaluate(element => (element as HTMLElement).click());
-    const currentReaction = page.getByRole('menuitemradio', { name: 'Remove reaction 😂' });
+    const currentPicker = page.getByRole('dialog', { name: 'Choose a reaction' });
+    await currentPicker.getByRole('searchbox', { name: 'Search emoji reactions' }).fill('😂');
+    const currentReaction = currentPicker.getByRole('option', { name: /Remove reaction 😂/ });
     await currentReaction.waitFor();
-    assert.equal(await currentReaction.getAttribute('aria-checked'), 'true');
+    assert.equal(await currentReaction.getAttribute('aria-selected'), 'true');
     assert.equal(await currentReaction.isDisabled(), false);
-    const earlierReaction = page.getByRole('menuitemradio', { name: 'React with 😮' });
-    const laterReaction = page.getByRole('menuitemradio', { name: 'React with 😢' });
-    await earlierReaction.press('ArrowRight');
-    assert.equal(await laterReaction.evaluate(element => element === document.activeElement), true);
-    await laterReaction.press('ArrowLeft');
-    assert.equal(await earlierReaction.evaluate(element => element === document.activeElement), true);
-    await earlierReaction.press('ArrowDown');
-    assert.equal(await page.getByRole('menuitemradio', { name: 'React with 👏' }).evaluate(
-        element => element === document.activeElement,
-    ), true);
-    await page.keyboard.press('ArrowUp');
-    assert.equal(await earlierReaction.evaluate(element => element === document.activeElement), true);
-    await earlierReaction.press('End');
-    assert.equal(await page.getByRole('menuitemradio', { name: 'React with 💔' }).evaluate(
-        element => element === document.activeElement,
-    ), true);
-    await page.getByRole('menuitemradio', { name: 'React with 👍' }).press('Home');
-    assert.equal(await currentReaction.evaluate(element => element === document.activeElement), true);
-    await currentReaction.press('ArrowRight');
-    assert.equal(await earlierReaction.evaluate(element => element === document.activeElement), true);
-    await earlierReaction.press('ArrowRight');
-    await laterReaction.press('Enter');
-    await page.waitForFunction(() => document.querySelector('.reaction-chip--viewer')?.textContent?.includes('😢'));
+    await currentReaction.press('Enter');
+    await page.waitForFunction(() => !document.querySelector('[data-message-id="m0"] .reaction-chip--viewer'));
+    assert.deepEqual((await page.evaluate(() => window.historyHarness.reactionCalls())).at(-1), {
+        threadFbid: '1001', messageId: 'm0', emoji: '😂', remove: true,
+    });
+    await page.locator('[data-message-id="m0"] .message__bubble').hover();
+    await page.locator('[data-message-id="m0"] .message__reaction-default').click();
+    await page.waitForFunction(() => document.querySelector('.reaction-chip--viewer')?.textContent?.includes('❤'));
+    await reactionAffordance.evaluate(element => (element as HTMLElement).click());
+    const heartPicker = page.getByRole('dialog', { name: 'Choose a reaction' });
+    await heartPicker.getByRole('searchbox', { name: 'Search emoji reactions' }).fill('red heart');
+    const qualifiedHeart = heartPicker.locator('[role="option"][data-emoji="❤️"]');
+    await qualifiedHeart.waitFor();
+    assert.equal(await qualifiedHeart.getAttribute('aria-selected'), 'true');
+    await qualifiedHeart.press('Enter');
+    await page.waitForFunction(() => {
+        const latest = window.historyHarness.reactionCalls().at(-1);
+        return latest?.emoji === '❤' && latest.remove === true;
+    });
+    await page.waitForFunction(() => !document.querySelector('[data-message-id="m0"] .reaction-chip--viewer'));
+    assert.deepEqual((await page.evaluate(() => window.historyHarness.reactionCalls())).at(-1), {
+        threadFbid: '1001', messageId: 'm0', emoji: '❤', remove: true,
+    });
+    await reactionAffordance.evaluate(element => (element as HTMLElement).click());
+    const replacementPicker = page.getByRole('dialog', { name: 'Choose a reaction' });
+    await replacementPicker.getByRole('searchbox', { name: 'Search emoji reactions' })
+        .fill('people holding hands: dark skin tone, light skin tone');
+    const longReaction = replacementPicker.locator('[role="option"][data-emoji="🧑🏿‍🤝‍🧑🏻"]');
+    await page.waitForFunction(() => !document.querySelector<HTMLButtonElement>(
+        '.reaction-picker [role="option"][data-emoji="🧑🏿‍🤝‍🧑🏻"]',
+    )?.disabled);
+    await longReaction.click();
+    await page.waitForFunction(() => document.querySelector('.reaction-chip--viewer')?.textContent?.includes('🧑🏿‍🤝‍🧑🏻'));
+    await page.waitForFunction(() => document.activeElement?.matches(
+        '[data-message-id="m0"], [data-message-id="m0"] .message__reaction-expander',
+    ));
+    assert.deepEqual((await page.evaluate(() => window.historyHarness.reactionCalls())).at(-1), {
+        threadFbid: '1001', messageId: 'm0', emoji: '🧑🏿‍🤝‍🧑🏻', remove: false,
+    });
+    assert.equal(await page.locator('[data-message-id="m0"]').evaluate(row => document.activeElement === row), true,
+        'pointer selection must fall back to the message row while the invoking expander is disabled');
+    await page.evaluate(() => window.historyHarness.resolveReaction());
+    await page.waitForFunction(() => !document.querySelector<HTMLButtonElement>(
+        '[data-message-id="m0"] .message__reaction-expander',
+    )?.disabled);
     const callsBeforeQuickReaction = (await page.evaluate(() => window.historyHarness.reactionCalls())).length;
     await page.locator('[data-message-id="m0"] .message__bubble').hover();
     await page.locator('[data-message-id="m0"] .message__reaction-default').hover();
@@ -2238,11 +2513,12 @@ test('focused message Enter opens only an existing share action and Space toggle
     });
 
     const already = page.locator('[data-message-id="keyboard-already"]');
+    assert.equal(await already.getByRole('button', { name: 'Remove reaction ❤' }).getAttribute('aria-pressed'), 'true');
     assert.equal(await already.evaluate(row => row.dispatchEvent(new KeyboardEvent('keydown', {
         key: ' ', code: 'Space', bubbles: true, cancelable: true,
     }))), false);
     assert.deepEqual((await page.evaluate(() => window.historyHarness.reactionCalls())).at(-1), {
-        threadFbid: '1001', messageId: 'keyboard-already', emoji: '❤', remove: true,
+        threadFbid: '1001', messageId: 'keyboard-already', emoji: '❤️', remove: true,
     });
 
     const failure = page.locator('[data-message-id="keyboard-failure"]');
@@ -2310,7 +2586,7 @@ test('focused message Enter opens only an existing share action and Space toggle
     await failure.getByRole('button', { name: 'React with ❤' }).focus();
     const reactionTrigger = failure.getByRole('button', { name: 'More reactions' });
     await reactionTrigger.evaluate(button => (button as HTMLButtonElement).click());
-    await page.getByRole('menu', { name: 'Choose a reaction' }).waitFor();
+    await page.getByRole('dialog', { name: 'Choose a reaction' }).waitFor();
     assert.equal(await failure.evaluate(row => row.dispatchEvent(new KeyboardEvent('keydown', {
         key: ' ', code: 'Space', bubbles: true, cancelable: true,
     }))), true);
@@ -2822,31 +3098,25 @@ test('compact both-edge history advances across repeated local newer slices with
     assert.equal(await page.evaluate(() => window.historyHarness.navigateToReply('thread', 'm20')), true);
     await page.waitForFunction(() => {
         const state = window.historyHarness.historyState('thread');
-        return state.viewportIds?.at(-1) === 'm79' && !state.isReplacingViewport;
+        return state.viewportIds?.at(-1) === 'm79' && !state.isReplacingViewport &&
+            state.replyNavigation?.isPositioned;
     });
 
-    await page.locator('.messages').hover();
     for (const expectedLast of ['m119', 'm159', 'm199', 'm239']) {
-        await page.mouse.wheel(0, 100);
         await page.evaluate(() => {
             const scroller = document.querySelector<HTMLElement>('.messages')!;
-            // Repeated edge notifications in the same task must not erase or
-            // reverse the in-flight newer replacement.
+            // First synchronize the browser event baseline at the committed
+            // anchor, then model continued downward movement and a repeated
+            // edge notification in the same task.
+            scroller.dispatchEvent(new Event('scroll'));
+            scroller.scrollTop += 100;
+            scroller.dispatchEvent(new Event('scroll'));
             scroller.dispatchEvent(new Event('scroll'));
         });
         await page.waitForFunction(expected => {
             const state = window.historyHarness.historyState('thread');
             return state.viewportIds?.at(-1) === expected && !state.isReplacingViewport;
-        }, expectedLast, { timeout: 2_000 }).catch(async error => {
-            console.log(expectedLast, await page.evaluate(() => ({
-                state: window.historyHarness.historyState('thread'),
-                top: document.querySelector<HTMLElement>('.messages')?.scrollTop,
-                height: document.querySelector<HTMLElement>('.messages')?.scrollHeight,
-                client: document.querySelector<HTMLElement>('.messages')?.clientHeight,
-                dataset: document.querySelector<HTMLElement>('.messages')?.dataset,
-            })));
-            throw error;
-        });
+        }, expectedLast);
         await page.waitForTimeout(50);
         assert.equal(
             (await page.evaluate(() => window.historyHarness.historyState('thread'))).viewportIds?.at(-1),
@@ -2866,20 +3136,18 @@ test('compact both-edge history advances across repeated local newer slices with
 
 test('programmatic resize correction near the newer edge preserves its anchor and window', async () => {
     const page = await openHarness({ width: 900, height: 520 });
-    await page.evaluate(() => window.historyHarness.mount('local-newer'));
+    await page.evaluate(() => window.historyHarness.mount('local-newer-resize'));
     await page.evaluate(() => window.historyHarness.navigateToReply('thread', 'm20'));
     await page.waitForFunction(() =>
         window.historyHarness.historyState('thread').viewportIds?.at(-1) === 'm79' &&
-        !window.historyHarness.historyState('thread').isReplacingViewport);
-    await page.evaluate(() => {
+        !window.historyHarness.historyState('thread').isReplacingViewport &&
+        window.historyHarness.historyState('thread').replyNavigation?.isPositioned);
+    await page.evaluate(async () => {
         const scroller = document.querySelector<HTMLElement>('.messages')!;
-        scroller.scrollTop += 100;
+        scroller.scrollTop = 420;
         scroller.dispatchEvent(new Event('scroll'));
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     });
-    await page.waitForFunction(() =>
-        window.historyHarness.historyState('thread').viewportIds?.at(-1) === 'm119' &&
-        !window.historyHarness.historyState('thread').isReplacingViewport);
-
     const before = await page.evaluate(() => {
         const scroller = document.querySelector<HTMLElement>('.messages')!;
         const rows = [...scroller.querySelectorAll<HTMLElement>('[data-message-id]')];
@@ -2889,13 +3157,14 @@ test('programmatic resize correction near the newer edge preserves its anchor an
             id: anchor.dataset.messageId!,
             top: anchor.getBoundingClientRect().top,
             scrollTop: scroller.scrollTop,
+            growth: Math.max(60, scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight - 500),
             viewportIds: window.historyHarness.historyState('thread').viewportIds,
         };
     });
-    await page.evaluate(() => {
+    await page.evaluate(growth => {
         const row = document.querySelector<HTMLElement>('[data-message-id]')!;
-        row.style.height = `${row.getBoundingClientRect().height + 60}px`;
-    });
+        row.style.height = `${row.getBoundingClientRect().height + growth}px`;
+    }, before.growth);
     await page.waitForTimeout(100);
     const after = await page.evaluate(id => {
         const scroller = document.querySelector<HTMLElement>('.messages')!;
@@ -2906,7 +3175,8 @@ test('programmatic resize correction near the newer edge preserves its anchor an
             viewportIds: window.historyHarness.historyState('thread').viewportIds,
         };
     }, before.id);
-    assert.ok(after.scrollTop > before.scrollTop, 'resize correction did not increase scrollTop');
+    assert.ok(after.scrollTop >= before.scrollTop + before.growth - 1,
+        'resize correction did not increase scrollTop');
     assert.ok(Math.abs(after.top - before.top) < 1);
     assert.deepEqual(after.viewportIds, before.viewportIds);
     await page.close();
@@ -2936,9 +3206,7 @@ test('rapid thread switch discards old reply focus and newer replacement intent'
         window.historyHarness.historyState('thread').viewportIds?.at(-1) === 'm79' &&
         !window.historyHarness.historyState('thread').isReplacingViewport);
     await page.evaluate(() => {
-        const scroller = document.querySelector<HTMLElement>('.messages')!;
-        scroller.scrollTop += 100;
-        scroller.dispatchEvent(new Event('scroll'));
+        window.historyHarness.revealNewer('thread');
         window.historyHarness.select('second-thread');
     });
     await page.waitForFunction(() =>
@@ -3309,18 +3577,26 @@ test('controlled drafts and composer actions remain per-thread and operable at n
     await newestMessage.focus();
     await newestMessage.hover();
     await newestMessage.locator('.message__reaction-default').hover();
+    await newestMessage.locator('.message__reaction-default').click();
+    await newestMessage.locator('.reaction-chip--viewer').waitFor();
+    await newestMessage.hover();
+    await newestMessage.locator('.message__reaction-default').hover();
     await newestMessage.locator('.message__reaction-expander').click();
-    const picker = page.getByRole('menu', { name: 'Choose a reaction' });
+    const picker = page.getByRole('dialog', { name: 'Choose a reaction' });
     await picker.waitFor();
     const pickerFits = await picker.evaluate(element => {
-        const buttons = [...element.querySelectorAll('button')];
-        return buttons.length === 18 && buttons.every(button => {
-            const rect = button.getBoundingClientRect();
-            return rect.left >= 0 && rect.right <= innerWidth && rect.width > 0 && rect.height > 0;
-        });
+        const rect = element.getBoundingClientRect();
+        const body = element.querySelector<HTMLElement>('.reaction-picker__body')!;
+        return rect.left >= 0 && rect.right <= innerWidth && rect.top >= 0 && rect.bottom <= innerHeight &&
+            body.scrollHeight > body.clientHeight && getComputedStyle(element).overflowY === 'hidden';
     });
     assert.equal(pickerFits, true);
-    await picker.getByRole('menuitemradio', { name: 'React with 👍' }).click();
+    await picker.getByText('Choose the current reaction to remove it').waitFor();
+    const pickerTop = (await picker.boundingBox())!.y;
+    await picker.locator('.reaction-picker__body').evaluate(element => { element.scrollTop = 400; });
+    assert.equal((await picker.boundingBox())!.y, pickerTop);
+    await picker.getByRole('searchbox', { name: 'Search emoji reactions' }).fill('👍');
+    await picker.locator('[role="option"][data-emoji="👍"]').click();
     await page.locator('.reaction-chip--viewer').last().waitFor();
     await page.close();
 });

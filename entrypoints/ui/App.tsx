@@ -1,6 +1,7 @@
 import type {
     ChangeEvent,
     CSSProperties,
+    FocusEvent as ReactFocusEvent,
     FormEvent,
     KeyboardEvent,
     MouseEvent as ReactMouseEvent,
@@ -36,19 +37,21 @@ import {
 } from './sidebar-resize';
 import { computeChatWindow } from './virtual-list';
 import { fuzzyMatchScore } from './fuzzy-match';
+import { EMOJI_CATALOG, EMOJI_CATEGORIES, type EmojiCategoryId } from './emoji-catalog';
 
 const ROW_HEIGHT = 72;
 const REACTION_EMOJIS = ['❤', '😂', '😮', '😢', '😡', '👍'];
-const REACTION_CATEGORIES = [
-    { label: 'Faces', emojis: ['😂', '😮', '😢', '😡', '🥰', '😱'] },
-    { label: 'Gestures', emojis: ['👍', '👏', '🙌', '🙏', '💪', '👎'] },
-    { label: 'Symbols', emojis: ['❤', '🔥', '✨', '🎉', '💯', '💔'] },
-];
-const FULL_REACTION_EMOJIS = REACTION_CATEGORIES.flatMap(category => category.emojis);
 const DEFAULT_REACTION = REACTION_EMOJIS[0];
+const EMOJI_RENDER_BATCH = 240;
+const MEDIA_CONTROLS_IDLE_DELAY_MS = 10_000;
+const MEDIA_CONTROLS_LEAVE_DELAY_MS = 1_500;
 let keyboardScrollSequence = 0;
 let reelReturnFocus: HTMLElement | undefined;
 let forwardingReturnFocus: HTMLElement | undefined;
+
+function isSameEmojiReaction(left: string | undefined, right: string): boolean {
+    return left === right || Boolean(left && left.replaceAll('\uFE0F', '') === right.replaceAll('\uFE0F', ''));
+}
 
 type AppProps = { store: FrontendStore };
 
@@ -1120,7 +1123,12 @@ function MessagePane({
                     <p>{thread.isGroup ? `${thread.users.length} members` : 'Instagram'}</p>
                 </div>
             </header>
-            <div className="messages" data-history-thread-id={thread.key} ref={scrollerRef} onScroll={onScroll}>
+            <div
+                className="messages"
+                data-history-thread-id={thread.key}
+                ref={scrollerRef}
+                onScroll={onScroll}
+            >
                 {(!history || history.status === 'loading') && (
                     <ListState label="Loading recent messages…" spinner />
                 )}
@@ -1345,12 +1353,32 @@ const MessageRow = memo(function MessageRow({
         const currentHistory = store.state.histories[threadId];
         if (!eligibleForActions || currentHistory?.reactionMutations[message.id]?.status === 'pending') return;
         event.preventDefault();
-        void store.setReaction(threadId, message.id, DEFAULT_REACTION);
+        void store.setReaction(
+            threadId,
+            message.id,
+            isSameEmojiReaction(viewerReaction, DEFAULT_REACTION) ? viewerReaction! : DEFAULT_REACTION,
+        );
     };
 
-    const chooseReaction = (emoji: string) => {
+    const chooseReaction = (emoji: string, restorePickerFocus = false) => {
+        if (restorePickerFocus) rowRef.current?.focus({ preventScroll: true });
         setPickerPoint(undefined);
-        void store.setReaction(threadId, message.id, emoji);
+        void store.setReaction(
+            threadId,
+            message.id,
+            isSameEmojiReaction(viewerReaction, emoji) ? viewerReaction! : emoji,
+        );
+        if (restorePickerFocus) {
+            const restoreFocus = () => {
+                const expander = reactionRef.current;
+                const target = expander?.isConnected && !expander.disabled ? expander : rowRef.current;
+                target?.focus({ preventScroll: true });
+            };
+            requestAnimationFrame(() => {
+                restoreFocus();
+                requestAnimationFrame(restoreFocus);
+            });
+        }
     };
 
     const openActionsAt = (point: SurfacePoint) => {
@@ -1486,8 +1514,9 @@ const MessageRow = memo(function MessageRow({
                                     key={emoji}
                                     type="button"
                                     className={emoji === DEFAULT_REACTION ? 'message__reaction-default' : undefined}
-                                    aria-label={viewerReaction === emoji ? `Remove reaction ${emoji}` : `React with ${emoji}`}
-                                    aria-pressed={viewerReaction === emoji}
+                                    aria-label={isSameEmojiReaction(viewerReaction, emoji)
+                                        ? `Remove reaction ${emoji}` : `React with ${emoji}`}
+                                    aria-pressed={isSameEmojiReaction(viewerReaction, emoji)}
                                     disabled={reactionMutation?.status === 'pending'}
                                     onClick={() => chooseReaction(emoji)}
                                 ><span aria-hidden="true">{emoji}</span></button>
@@ -1497,7 +1526,7 @@ const MessageRow = memo(function MessageRow({
                                 type="button"
                                 className="message__reaction-expander"
                                 aria-label="More reactions"
-                                aria-haspopup="menu"
+                                aria-haspopup="dialog"
                                 aria-expanded={Boolean(pickerPoint)}
                                 aria-busy={reactionMutation?.status === 'pending'}
                                 disabled={reactionMutation?.status === 'pending'}
@@ -1524,7 +1553,7 @@ const MessageRow = memo(function MessageRow({
                             current={viewerReaction}
                             busy={reactionMutation?.status === 'pending'}
                             returnFocusRef={reactionRef}
-                            onChoose={chooseReaction}
+                            onChoose={emoji => chooseReaction(emoji, true)}
                             onClose={() => setPickerPoint(undefined)}
                         />
                     )}
@@ -1622,68 +1651,284 @@ function ReactionPicker({
     onClose: () => void;
 }) {
     const surfaceRef = useRef<HTMLDivElement>(null as unknown as HTMLDivElement);
-    useFloatingSurface(surfaceRef, point, returnFocusRef, onClose);
+    const [activeCategory, setActiveCategory] = useState<EmojiCategoryId>('smileys-emotion');
+    const [query, setQuery] = useState('');
+    const [renderWindow, setRenderWindow] = useState({
+        scope: 'smileys-emotion', start: 0, limit: EMOJI_RENDER_BATCH,
+    });
+    const pendingOptionFocusRef = useRef<number>();
+    const scrollBatchPendingRef = useRef(false);
+    useFloatingSurface(surfaceRef, point, returnFocusRef, onClose, {
+        initialFocusSelector: 'input',
+        hasInternalScroller: true,
+        trapFocus: true,
+        blockOutsidePointer: true,
+    });
+
+    const normalizedQuery = query.trim().toLocaleLowerCase();
+    const visibleEmoji = EMOJI_CATALOG.filter(([emoji, name, category]) => normalizedQuery
+        ? name.toLocaleLowerCase().includes(normalizedQuery) || emoji.includes(query.trim())
+        : category === activeCategory);
+    const resultScope = normalizedQuery ? `search:${normalizedQuery}` : activeCategory;
+    const effectiveWindow = renderWindow.scope === resultScope
+        ? renderWindow
+        : { scope: resultScope, start: 0, limit: EMOJI_RENDER_BATCH };
+    const renderedEmoji = visibleEmoji.slice(
+        effectiveWindow.start,
+        effectiveWindow.start + effectiveWindow.limit,
+    );
+    const activeCategoryDetails = EMOJI_CATEGORIES.find(category => category.id === activeCategory)!;
+    const tabbableEmoji = renderedEmoji.find(([emoji]) => isSameEmojiReaction(current, emoji)) ?? renderedEmoji[0];
+
+    useLayoutEffect(() => {
+        if (renderWindow.scope !== resultScope) {
+            setRenderWindow({ scope: resultScope, start: 0, limit: EMOJI_RENDER_BATCH });
+            pendingOptionFocusRef.current = undefined;
+            const body = surfaceRef.current.querySelector<HTMLElement>('.reaction-picker__body');
+            if (body) body.scrollTop = 0;
+        }
+    }, [resultScope, renderWindow.scope]);
+
+    useLayoutEffect(() => {
+        scrollBatchPendingRef.current = false;
+        const pendingIndex = pendingOptionFocusRef.current;
+        if (pendingIndex === undefined || pendingIndex < effectiveWindow.start ||
+            pendingIndex >= effectiveWindow.start + renderedEmoji.length) return;
+        pendingOptionFocusRef.current = undefined;
+        const options = surfaceRef.current.querySelectorAll<HTMLButtonElement>('[role="option"]:not(:disabled)');
+        const target = surfaceRef.current.querySelector<HTMLButtonElement>(
+            `[role="option"][data-result-index="${pendingIndex}"]:not(:disabled)`,
+        );
+        if (!target) return;
+        options.forEach(option => { option.tabIndex = -1; });
+        target.tabIndex = 0;
+        target.focus();
+    }, [resultScope, effectiveWindow.start, renderedEmoji.length]);
+
+    const focusMountedOption = (index: number) => {
+        const options = surfaceRef.current.querySelectorAll<HTMLButtonElement>('[role="option"]:not(:disabled)');
+        const target = surfaceRef.current.querySelector<HTMLButtonElement>(
+            `[role="option"][data-result-index="${index}"]:not(:disabled)`,
+        );
+        if (!target) return false;
+        options.forEach(option => { option.tabIndex = -1; });
+        target.tabIndex = 0;
+        target.focus();
+        return true;
+    };
+
+    const revealAndFocus = (index: number) => {
+        if (index >= effectiveWindow.start && index < effectiveWindow.start + renderedEmoji.length) {
+            return focusMountedOption(index);
+        }
+        pendingOptionFocusRef.current = index;
+        if (index < effectiveWindow.start) {
+            const start = Math.max(0, effectiveWindow.start - EMOJI_RENDER_BATCH);
+            setRenderWindow({
+                scope: resultScope,
+                start,
+                limit: Math.min(EMOJI_RENDER_BATCH, visibleEmoji.length - start),
+            });
+            return true;
+        }
+        if (effectiveWindow.start > 0) {
+            const start = Math.min(
+                effectiveWindow.start + EMOJI_RENDER_BATCH,
+                Math.max(0, visibleEmoji.length - EMOJI_RENDER_BATCH),
+            );
+            setRenderWindow({
+                scope: resultScope,
+                start,
+                limit: Math.min(EMOJI_RENDER_BATCH, visibleEmoji.length - start),
+            });
+            return true;
+        }
+        setRenderWindow({
+            scope: resultScope,
+            start: 0,
+            limit: Math.min(visibleEmoji.length, Math.max(effectiveWindow.limit + EMOJI_RENDER_BATCH, index + 1)),
+        });
+        return true;
+    };
 
     const moveFocus = (event: KeyboardEvent<HTMLDivElement>) => {
         if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
-        const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')];
-        const enabled = buttons.filter(button => !button.disabled);
-        if (!enabled.length) return;
+        const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="option"]:not(:disabled)')];
+        if (!buttons.length) return;
+        const target = event.target;
+        if (target instanceof HTMLInputElement) {
+            if (event.key !== 'ArrowDown') return;
+            event.preventDefault();
+            buttons[0].focus();
+            return;
+        }
         const currentIndex = buttons.indexOf(document.activeElement as HTMLButtonElement);
-        let next = event.key === 'Home'
-            ? buttons.indexOf(enabled[0])
-            : event.key === 'End'
-                ? buttons.indexOf(enabled[enabled.length - 1])
-                : currentIndex;
-        const step = event.key === 'ArrowLeft' ? -1
-            : event.key === 'ArrowRight' ? 1
-                : event.key === 'ArrowUp' ? -REACTION_CATEGORIES[0].emojis.length
-                    : event.key === 'ArrowDown' ? REACTION_CATEGORIES[0].emojis.length
-                        : 0;
-        if (step) {
-            do next = (next + step + buttons.length) % buttons.length;
-            while (buttons[next].disabled && next !== currentIndex);
+        if (currentIndex < 0) return;
+        if (event.key === 'End') {
+            event.preventDefault();
+            const lastIndex = visibleEmoji.length - 1;
+            if (focusMountedOption(lastIndex)) return;
+            pendingOptionFocusRef.current = lastIndex;
+            setRenderWindow({
+                scope: resultScope,
+                start: Math.max(0, visibleEmoji.length - EMOJI_RENDER_BATCH),
+                limit: Math.min(EMOJI_RENDER_BATCH, visibleEmoji.length),
+            });
+            return;
+        }
+        if (event.key === 'Home') {
+            event.preventDefault();
+            if (focusMountedOption(0)) return;
+            pendingOptionFocusRef.current = 0;
+            setRenderWindow({ scope: resultScope, start: 0, limit: EMOJI_RENDER_BATCH });
+            return;
+        }
+        const currentResultIndex = Number(buttons[currentIndex].dataset.resultIndex);
+        let next = currentIndex;
+        if (event.key === 'ArrowLeft') {
+            if (currentIndex === 0 && currentResultIndex > 0) {
+                event.preventDefault();
+                revealAndFocus(currentResultIndex - 1);
+                return;
+            }
+            next = Math.max(0, currentIndex - 1);
+        }
+        if (event.key === 'ArrowRight') {
+            if (currentIndex === buttons.length - 1 && currentResultIndex < visibleEmoji.length - 1) {
+                event.preventDefault();
+                revealAndFocus(currentResultIndex + 1);
+                return;
+            }
+            next = Math.min(buttons.length - 1, currentIndex + 1);
+        }
+        if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+            const currentRect = buttons[currentIndex].getBoundingClientRect();
+            const direction = event.key === 'ArrowUp' ? -1 : 1;
+            const candidates = buttons.map((button, index) => ({ index, rect: button.getBoundingClientRect() }))
+                .filter(candidate => direction * (candidate.rect.top - currentRect.top) > 1);
+            if (candidates.length) {
+                const targetTop = direction < 0
+                    ? Math.max(...candidates.map(candidate => candidate.rect.top))
+                    : Math.min(...candidates.map(candidate => candidate.rect.top));
+                next = candidates.filter(candidate => Math.abs(candidate.rect.top - targetTop) < 1)
+                    .sort((a, b) => Math.abs(a.rect.left - currentRect.left) - Math.abs(b.rect.left - currentRect.left))[0].index;
+            } else {
+                const firstTop = buttons[0].getBoundingClientRect().top;
+                const columns = buttons.filter(button =>
+                    Math.abs(button.getBoundingClientRect().top - firstTop) < 1).length;
+                const targetIndex = event.key === 'ArrowUp'
+                    ? Math.max(0, currentResultIndex - columns)
+                    : Math.min(visibleEmoji.length - 1, currentResultIndex + columns);
+                if ((targetIndex < effectiveWindow.start ||
+                    targetIndex >= effectiveWindow.start + renderedEmoji.length) &&
+                    targetIndex !== currentResultIndex) {
+                    event.preventDefault();
+                    revealAndFocus(targetIndex);
+                    return;
+                }
+            }
         }
         event.preventDefault();
-        if (currentIndex >= 0) buttons[currentIndex].tabIndex = -1;
+        buttons[currentIndex].tabIndex = -1;
         buttons[next].tabIndex = 0;
         buttons[next].focus();
     };
-
-    const firstEnabled = busy ? undefined : FULL_REACTION_EMOJIS.find(emoji => emoji !== current);
 
     return (
         <div
             ref={surfaceRef}
             className="reaction-picker"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Choose a reaction"
+            aria-busy={busy}
+            data-catalog-size={EMOJI_CATALOG.length}
+            data-window-start={effectiveWindow.start}
+            data-window-size={renderedEmoji.length}
+            onKeyDown={moveFocus}
         >
+            <div className="reaction-picker__header">
+                <label className="reaction-picker__search">
+                    <span className="visually-hidden">Search emoji reactions</span>
+                    <input
+                        type="search"
+                        value={query}
+                        placeholder="Search emoji"
+                        aria-label="Search emoji reactions"
+                        onChange={(event: ChangeEvent<HTMLInputElement>) => setQuery(event.currentTarget.value)}
+                    />
+                </label>
+                <nav className="reaction-picker__categories" aria-label="Reaction categories">
+                    {EMOJI_CATEGORIES.map(category => (
+                        <button
+                            key={category.id}
+                            type="button"
+                            aria-label={`${category.label}, ${category.count} emoji`}
+                            aria-pressed={!normalizedQuery && category.id === activeCategory}
+                            title={category.label}
+                            onClick={() => {
+                                setActiveCategory(category.id);
+                                setQuery('');
+                            }}
+                        ><span aria-hidden="true">{category.icon}</span></button>
+                    ))}
+                </nav>
+            </div>
             <div
-                className="reaction-picker__menu"
-                role="menu"
-                aria-label="Choose a reaction"
-                aria-busy={busy}
-                onKeyDown={moveFocus}
+                className="reaction-picker__body"
+                onScroll={event => {
+                    const body = event.currentTarget;
+                    if (body.scrollHeight - body.scrollTop - body.clientHeight > 160 ||
+                        effectiveWindow.start !== 0 ||
+                        effectiveWindow.limit >= visibleEmoji.length || scrollBatchPendingRef.current) return;
+                    scrollBatchPendingRef.current = true;
+                    setRenderWindow({
+                        scope: resultScope,
+                        start: 0,
+                        limit: Math.min(visibleEmoji.length, effectiveWindow.limit + EMOJI_RENDER_BATCH),
+                    });
+                }}
             >
-                {REACTION_CATEGORIES.map(category => (
-                    <div key={category.label} className="reaction-picker__category" role="group" aria-label={category.label}>
-                        <strong aria-hidden="true">{category.label}</strong>
-                        <span className="reaction-picker__grid">
-                            {category.emojis.map(emoji => (
-                                <button
-                                    key={emoji}
-                                    type="button"
-                                    role="menuitemradio"
-                                    aria-checked={current === emoji}
-                                    aria-label={current === emoji ? `Remove reaction ${emoji}` : `React with ${emoji}`}
-                                    className={current === emoji ? 'reaction-picker__current' : ''}
-                                    disabled={busy}
-                                    tabIndex={emoji === firstEnabled ? 0 : -1}
-                                    onClick={() => onChoose(emoji)}
-                                ><span aria-hidden="true">{emoji}</span></button>
-                            ))}
-                        </span>
+                <div className="reaction-picker__heading">
+                    <strong>{normalizedQuery ? 'Search results' : activeCategoryDetails.label}</strong>
+                    <span role="status" aria-live="polite" aria-atomic="true">
+                        {visibleEmoji.length} emoji
+                    </span>
+                </div>
+                {visibleEmoji.length ? (
+                    <div
+                        className="reaction-picker__grid"
+                        role="listbox"
+                        aria-label={normalizedQuery
+                        ? `Emoji matching ${query.trim()}`
+                        : `${activeCategoryDetails.label} emoji`}
+                    >
+                        {renderedEmoji.map(([emoji, name], offset) => {
+                            const resultIndex = effectiveWindow.start + offset;
+                            const isCurrent = isSameEmojiReaction(current, emoji);
+                            return (
+                            <button
+                                key={emoji}
+                                type="button"
+                                role="option"
+                                data-emoji={emoji}
+                                data-result-index={resultIndex}
+                                aria-posinset={resultIndex + 1}
+                                aria-setsize={visibleEmoji.length}
+                                aria-selected={isCurrent}
+                                aria-label={isCurrent
+                                    ? `Remove reaction ${emoji}, ${name}`
+                                    : `React with ${emoji}, ${name}`}
+                                className={isCurrent ? 'reaction-picker__current' : ''}
+                                disabled={busy}
+                                tabIndex={emoji === tabbableEmoji?.[0] ? 0 : -1}
+                                title={name}
+                                onClick={() => onChoose(isCurrent ? current! : emoji)}
+                            ><span aria-hidden="true">{emoji}</span></button>
+                            );
+                        })}
                     </div>
-                ))}
+                ) : <p className="reaction-picker__empty">No emoji found</p>}
             </div>
             {current && (
                 <span className="reaction-picker__note">Choose the current reaction to remove it</span>
@@ -1697,12 +1942,26 @@ function useFloatingSurface(
     point: SurfacePoint,
     returnFocusRef: FocusRef,
     onClose: () => void,
+    options: {
+        initialFocusSelector?: string;
+        hasInternalScroller?: boolean;
+        trapFocus?: boolean;
+        blockOutsidePointer?: boolean;
+    } = {},
 ) {
     useLayoutEffect(() => {
         const surface = surfaceRef.current;
         if (!surface) return;
         surface.setAttribute('popover', 'manual');
         surface.showPopover?.();
+        const returnFocus = returnFocusRef.current;
+        const returnFocusFallback = returnFocus?.closest<HTMLElement>('.message-row');
+        const restoreReturnFocus = () => {
+            const target = [returnFocus, returnFocusFallback].find(candidate =>
+                candidate?.isConnected && (!(candidate instanceof HTMLButtonElement) || !candidate.disabled));
+            target?.focus({ preventScroll: true });
+        };
+        let clearGestureBlock: (() => void) | undefined;
         const position = () => {
             const viewport = window.visualViewport;
             const viewportLeft = viewport?.offsetLeft ?? 0;
@@ -1712,7 +1971,7 @@ function useFloatingSurface(
             surface.style.minWidth = '0';
             surface.style.maxWidth = `${Math.max(0, viewportWidth - 16)}px`;
             surface.style.maxHeight = `${Math.max(0, viewportHeight - 16)}px`;
-            surface.style.overflowY = 'auto';
+            surface.style.overflowY = options.hasInternalScroller ? 'hidden' : 'auto';
             const width = surface.offsetWidth;
             const height = surface.offsetHeight;
             const requestedLeft = point.align === 'right' ? point.x - width : point.x;
@@ -1728,18 +1987,80 @@ function useFloatingSurface(
             surface.style.top = `${top}px`;
         };
         position();
-        surface.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus({ preventScroll: true });
+        surface.querySelector<HTMLElement>(
+            options.initialFocusSelector ?? 'button:not(:disabled)',
+        )?.focus({ preventScroll: true });
 
         const closeFromPointer = (event: PointerEvent) => {
-            if (!surface.contains(event.target as Node)) onClose();
+            if (surface.contains(event.target as Node)) return;
+            if (options.blockOutsidePointer) {
+                event.preventDefault();
+                event.stopImmediatePropagation();
+                clearGestureBlock?.();
+                const pointerId = event.pointerId;
+                let cleanupTimer = 0;
+                const blockPointerUp = (gestureEvent: PointerEvent) => {
+                    if (gestureEvent.pointerId !== pointerId) return;
+                    gestureEvent.preventDefault();
+                    gestureEvent.stopImmediatePropagation();
+                    document.removeEventListener('pointerup', blockPointerUp, true);
+                    document.removeEventListener('pointercancel', blockPointerCancel, true);
+                    cleanupTimer = window.setTimeout(() => clearGestureBlock?.(), 0);
+                };
+                const blockPointerCancel = (gestureEvent: PointerEvent) => {
+                    if (gestureEvent.pointerId !== pointerId) return;
+                    gestureEvent.preventDefault();
+                    gestureEvent.stopImmediatePropagation();
+                    clearGestureBlock?.();
+                };
+                clearGestureBlock = () => {
+                    document.removeEventListener('pointerup', blockPointerUp, true);
+                    document.removeEventListener('pointercancel', blockPointerCancel, true);
+                    document.removeEventListener('click', blockClick, true);
+                    window.clearTimeout(cleanupTimer);
+                    clearGestureBlock = undefined;
+                };
+                const blockClick = (gestureEvent: Event) => {
+                    gestureEvent.preventDefault();
+                    gestureEvent.stopImmediatePropagation();
+                    clearGestureBlock?.();
+                };
+                document.addEventListener('pointerup', blockPointerUp, true);
+                document.addEventListener('pointercancel', blockPointerCancel, true);
+                document.addEventListener('click', blockClick, true);
+                cleanupTimer = window.setTimeout(() => clearGestureBlock?.(), 1_000);
+            }
+            onClose();
+            restoreReturnFocus();
+            requestAnimationFrame(restoreReturnFocus);
         };
         const closeFromKey = (event: globalThis.KeyboardEvent) => {
+            if (event.key === 'Tab' && options.trapFocus) {
+                const tabbable = [...surface.querySelectorAll<HTMLElement>(
+                    'input:not(:disabled), button:not(:disabled):not([tabindex="-1"]), [tabindex]:not([tabindex="-1"])',
+                )];
+                if (!tabbable.length) return;
+                const first = tabbable[0];
+                const last = tabbable[tabbable.length - 1];
+                if (event.shiftKey && document.activeElement === first) {
+                    event.preventDefault();
+                    last.focus();
+                } else if (!event.shiftKey && document.activeElement === last) {
+                    event.preventDefault();
+                    first.focus();
+                }
+                return;
+            }
             if (event.key !== 'Escape') return;
             event.preventDefault();
+            surface.hidePopover?.();
+            returnFocus?.focus({ preventScroll: true });
             onClose();
-            requestAnimationFrame(() => returnFocusRef.current?.focus({ preventScroll: true }));
+            requestAnimationFrame(() => returnFocus?.focus({ preventScroll: true }));
         };
-        const closeFromViewport = () => onClose();
+        const closeFromViewport = (event: Event) => {
+            if (!surface.contains(event.target as Node)) onClose();
+        };
         document.addEventListener('pointerdown', closeFromPointer, true);
         document.addEventListener('keydown', closeFromKey, true);
         window.addEventListener('resize', closeFromViewport);
@@ -1747,6 +2068,7 @@ function useFloatingSurface(
         window.visualViewport?.addEventListener('resize', position);
         window.visualViewport?.addEventListener('scroll', position);
         return () => {
+            clearGestureBlock?.();
             surface.hidePopover?.();
             document.removeEventListener('pointerdown', closeFromPointer, true);
             document.removeEventListener('keydown', closeFromKey, true);
@@ -2219,13 +2541,27 @@ function ReelModal({
     volumePreference: ReelVolumePreferenceRef;
 }) {
     const modalRef = useRef<HTMLDivElement>(null as unknown as HTMLDivElement);
+    const stageRef = useRef<HTMLElement>(null as unknown as HTMLElement);
+    const controlsTimerRef = useRef<number>();
     const [slide, setSlide] = useState(0);
+    const [controlsVisible, setControlsVisible] = useState(true);
     const media = reel.media;
     const items = media?.items ?? [];
     const current = items[Math.min(slide, Math.max(0, items.length - 1))];
     const mediaLabel = media?.mediaType ?? 'reel';
     const close = () => store.closeReel();
     const move = (delta: number) => setSlide(index => Math.max(0, Math.min(items.length - 1, index + delta)));
+    const scheduleControlsHide = (delay: number) => {
+        window.clearTimeout(controlsTimerRef.current);
+        controlsTimerRef.current = window.setTimeout(() => {
+            if (stageRef.current?.contains(document.activeElement)) return;
+            setControlsVisible(false);
+        }, delay);
+    };
+    const showActiveControls = () => {
+        setControlsVisible(true);
+        scheduleControlsHide(MEDIA_CONTROLS_IDLE_DELAY_MS);
+    };
 
     useLayoutEffect(() => {
         const modal = modalRef.current;
@@ -2281,6 +2617,12 @@ function ReelModal({
         return () => document.removeEventListener('keydown', onKey, true);
     }, [slide, items.length]);
 
+    useEffect(() => {
+        setControlsVisible(true);
+        scheduleControlsHide(MEDIA_CONTROLS_IDLE_DELAY_MS);
+        return () => window.clearTimeout(controlsTimerRef.current);
+    }, [current?.id]);
+
     return (
         <div
             className="reel-modal"
@@ -2311,7 +2653,23 @@ function ReelModal({
                 )}
                 {media && current && (
                     <>
-                        <section className={`reel-stage${media.attachedAudio ? ' reel-stage--soundtrack' : ''}`} aria-label={`Slide ${slide + 1} of ${items.length}`}>
+                        <section
+                            ref={stageRef}
+                            className={`reel-stage${media.attachedAudio ? ' reel-stage--soundtrack' : ''}${controlsVisible ? '' : ' reel-stage--controls-hidden'}`}
+                            aria-label={`Slide ${slide + 1} of ${items.length}`}
+                            onMouseEnter={showActiveControls}
+                            onPointerMove={showActiveControls}
+                            onPointerDown={showActiveControls}
+                            onMouseLeave={() => scheduleControlsHide(MEDIA_CONTROLS_LEAVE_DELAY_MS)}
+                            onFocusCapture={() => {
+                                window.clearTimeout(controlsTimerRef.current);
+                                setControlsVisible(true);
+                            }}
+                            onBlurCapture={(event: ReactFocusEvent<HTMLElement>) => {
+                                if (!event.currentTarget.contains(event.relatedTarget as Node | null))
+                                    scheduleControlsHide(MEDIA_CONTROLS_LEAVE_DELAY_MS);
+                            }}
+                        >
                             <ReelMediaPlayer
                                 key={current.id}
                                 item={current}

@@ -14,6 +14,7 @@ frontend changes.
 | [`entrypoints/ui/store.ts`](../entrypoints/ui/store.ts) | Normalization, bounded history IDs, async actions, retries, generations, selection, pin ordering, warmups | DOM measurement or presentation |
 | [`entrypoints/ui/virtual-list.ts`](../entrypoints/ui/virtual-list.ts) | Pure fixed-row inbox window calculation | History geometry or fetching |
 | [`entrypoints/ui/history-window.ts`](../entrypoints/ui/history-window.ts) | Pure 40/80 history-window calculations | Fetching or DOM measurement |
+| [`entrypoints/ui/emoji-catalog.ts`](../entrypoints/ui/emoji-catalog.ts) | Unicode reaction strings, names, categories, and completeness counts | Picker state, mutation behavior, Instagram protocol details |
 | [`entrypoints/ui/App.tsx`](../entrypoints/ui/App.tsx) | Shell and sidebar-resize interaction, inbox DOM, bounded message pane, anchor measurement, store subscription | Instagram protocol details or a second cache |
 | [`entrypoints/ui/sidebar-resize.ts`](../entrypoints/ui/sidebar-resize.ts) | Pure sidebar width bounds and persisted-value parsing | DOM events or entity state |
 | [`entrypoints/ui/styles.scss`](../entrypoints/ui/styles.scss) | Tokens, layout, presentation, motion/reduced-motion | Data-dependent decisions |
@@ -199,6 +200,13 @@ edge, downward user scrolling advances by one 40-ID slice before newest
 navigation is needed. Instagram exposes only the older network cursor, so this
 newer direction is deliberately local; fresh tail messages continue to enter
 through incoming synchronization.
+Component-owned anchor, resize, reply-focus, and bottom-follow scroll writes
+synchronize the pane's direction baseline so their delayed native scroll events
+cannot masquerade as downward user movement. While a newer replacement commits,
+all older-sentinel reevaluation paths remain gated; older traversal resumes only
+after upward movement or a later out-of-range-to-in-range sentinel transition.
+Pending anchors, replacement direction, and reply-focus frames are thread-scoped
+and are discarded when selection changes.
 
 Accepted outgoing sends append one optimistic `local:<offlineThreadingId>` entity
 to `byId`/`listedIds`. They append to `viewportIds` only when the component's
@@ -339,6 +347,9 @@ the pre-hold rate on keyup, blur, pause, slide replacement, or modal teardown; i
 never toggles play. Releasing Space before that threshold is a tap and toggles
 play/pause exactly once. Cancelling a pending tap through blur or teardown does
 not toggle playback.
+Pointer movement over the media stage reveals the video and soundtrack controls.
+They fade after ten seconds of stage inactivity, or after 1.5 seconds when the
+pointer or focus leaves the stage. Keyboard focus keeps the controls visible.
 Comma and period move a paused video by one frame. Instagram's current reel
 contract exposes duration but no frame rate, so the UI uses a documented 1/30s
 fallback. Editable targets keep their native keys. Carousel arrows and Left/Right
@@ -724,9 +735,38 @@ an expander; moving through its children keeps it expanded for pointer and
 keyboard operation. It sits beyond the trailing edge for incoming messages and
 leading edge for outgoing messages, is absolutely positioned so message geometry
 and anchors do not change. The expander and contextual action
-open one categorized, clamped, keyboard-operable full chooser. Its menu owns
-labeled reaction groups containing radio menu items; Left/Right move by item and
-Up/Down move deterministically between category rows. Picker state is
+open one categorized, clamped, keyboard-operable full chooser. The chooser uses
+the 3,944 unique fully-qualified entries from Unicode Emoji 17.0
+`emoji-test.txt`, preserving all nine user-facing Unicode groups (components are
+not reactions). This catalog is generated data under the Unicode License v3;
+its source and required notice are recorded in
+[`unicode-license.md`](./unicode-license.md). No Telegram picker code, styles,
+icons, or data are used. Search matches Unicode names across the complete
+catalog, category buttons expose counts and switch the internally scrolling
+listbox, and only its body scrolls so the search and category controls remain
+fixed. The result count is announced politely, including zero. Options mount in
+240-entry batches and remain at the current bound while idle; only a near-end
+body scroll or keyboard movement beyond the mounted prefix adds one batch. End
+replaces that prefix with a 240-entry tail window and focuses the true final
+result instead of mounting every intermediate option. Moving backward from the
+first row of a bounded tail or middle window shifts one 240-entry window backward
+and restores the intended adjacent option after commit. Home restores the initial
+prefix. Category and query changes restore that prefix, scroll the body to its
+start, and reset option roving focus. This small localized window is not a
+generalized virtualizer. The announced result count remains the full match count,
+independent of the mounted window. Multi-codepoint sequences remain ordinary
+string values rather than being split or reconstructed.
+Left/Right traverse adjacent results, shifting a bounded window when needed;
+Up/Down use actual rendered row geometry to choose the closest item in the
+preceding/following row, which remains coherent when compact width changes the
+column count. Home moves to the first
+result; End mounts and focuses the true final result; ArrowDown enters results
+from search. Tab is contained within the modal dialog. Outside pointer dismissal
+consumes the dismissal gesture so it cannot activate background content. Escape restores the
+invoking expander; selection restores it when enabled and otherwise focuses the
+stable message row. VS16-equivalent values are treated as the same viewer choice
+through picker, quick rail, placed reactions, and Space, while removal always
+sends the exact server string. Picker query/category/render-batch state is
 presentation-only while optimistic single-flight/error state remains normalized.
 Context-menu keyboard handling lives on the focusable row itself; the browser
 menu is prevented only for rows whose custom menu owns real actions.
