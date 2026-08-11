@@ -37,11 +37,15 @@ getInbox({ cursor? }): Result<Page<Thread>>
 getThread({ threadKey, cursor? }): Result<ThreadMessages>
 getReelMedia({ shortcode, mediaId? }): Result<ReelMedia>
 getReelComments({ mediaId, cursor? }): Result<ReelComments>
+getReelCommentReplies({ mediaId, commentId, cursor? }): Result<ReelCommentReplies>
+createReelComment({ mediaId, text, replyToCommentId? }): Result<ReelComment>
+setReelCommentLiked({ commentId, liked }): Result<ReelCommentLikeReceipt>
 setReelLiked({ mediaId, liked }): Result<ReelLikeReceipt>
 setReelSaved({ mediaId, saved }): Result<ReelSaveReceipt>
 getPins(): { pinned: string[] }
 togglePin({ threadKey, threadFbid, pin }): Result<{ pinned, receipt }>
 sendText({ threadFbid, text, replyToMessageId?, offlineThreadingId }): Result<SentTextMessage>
+editText({ threadFbid, messageId, text, offlineThreadingId }): Result<EditedTextMessage>
 setReaction({ threadFbid, messageId, emoji }): Result<SetReactionResult>
 forwardMessage({ targetThreadFbid, sourceThreadIgId, sourceIsViewer, offlineThreadingId, content }): Result<SentMessage>
 markThreadRead({ threadIgId, messageId, messageTimestampMs }): Result<MutationSuccess>
@@ -49,9 +53,12 @@ markThreadRead({ threadIgId, messageId, messageTimestampMs }): Result<MutationSu
 
 `CompleteUiRpc` mechanically maps those signatures to promises. The read-only
 `UiRpc` subset keeps read dependencies narrow; the frontend store additionally
-requires only `sendText` and `setReaction`. `rpc.ts` sends each message to
-`background`; it does not interpret results. Keep the discriminated `Result<T>`
-check in actions at the store boundary.
+requires the DM and reel mutation capabilities it invokes. Reply reads use the
+captured child-comments REST cursor unchanged; comment creation supports one
+optional top-level parent, and comment like receipts report the requested final
+state. `rpc.ts` sends each
+message to `background`; it does not interpret results. Keep the discriminated
+`Result<T>` check in actions at the store boundary.
 
 The extension bridge is a closed capability list. DM and reel mutation RPCs
 above are routed through UI, background, and content script; the broader
@@ -141,6 +148,7 @@ type HistoryState = {
     scrollAnchor?: { id: string; offset: number };
     draft: string;
     replyTargetId?: string;
+    editing?: { messageId: string; savedDraft: string; savedReplyTargetId?: string; status: 'editing' | 'pending' | 'error'; offlineThreadingId?: string; error?: string };
     replyNavigation?: {
         requestId: number;
         targetId: string;
@@ -306,6 +314,33 @@ retaining an error mutation for accessible UI feedback. The unlike capture
 reported a stale `has_liked: true`; the operation-specific parser therefore
 uses the matched unlike receipt as authoritative `false` rather than exposing
 that contradictory field.
+
+Comment interaction is owned by the same normalized reel state. Top-level and
+reply entities share `comments.byId`; only their ordered indexes differ:
+`comments.listedIds` contains top-level comments and each
+`repliesByParent[parentId].listedIds` contains that parent's replies. Reply pages
+use the captured child-comments REST route with `is_chronological=true`,
+`paging_direction=view_more`, and opaque `next_min_child_cursor`/`min_id`
+pagination. Opening replies consumes already-normalized local children before a
+request, then uses one request per reel/parent and failure-gates a cursor until
+explicit retry. Comment likes and comment creation are store-owned
+single-flights with generation guards. Likes optimistically update the normalized
+boolean/count and accept only a matching receipt; failures restore the latest
+read baseline. Per-reel, per-comment receipt revisions prevent top-level or child
+reads started before an accepted like/unlike from replacing its boolean/count,
+while those reads still refresh all other normalized comment fields. Creation
+retains a controlled store draft, validates trimmed
+1–2200-character input, and installs the returned entity directly under the
+top-level or parent index without polling. The captured create reply field is
+`replied_to_comment_id`; wire fields and response aliases remain in the anchor
+parser. Successful creates advance store-local count receipt revisions: reel-info
+reads that started earlier cannot erase the incremented media comment count, and
+top-level pages that started earlier cannot erase an incremented parent's child
+count. Each create reconciles against the current media/comment entities so
+concurrent like, save, and pagination updates remain intact. The HAR captures
+`PolarisCommentActionsLikeMutation` but not its unlike
+counterpart; unlike uses Instagram's established authenticated web-comment
+unlike REST route rather than inventing a persisted-query document ID.
 
 Forced reel-info refreshes reconcile independently with those like/save flights.
 A refresh overlays pending intent while replacing its rollback baseline with the
@@ -609,6 +644,15 @@ remain gated until `retryOlderHistory(id)` explicitly clears that cursor.
 - `sendRequests` permits one attempt per thread/local ID. Failed retries reuse
   the original 19-digit signed-64-bit `offlineThreadingId` and row rather than
   appending another message; different threads may send concurrently.
+- `editRequests` permits one edit per thread/message pair. The composer retains
+  the edited input and its offline threading ID after failure, so retry is
+  recoverable and idempotent. Success updates the canonical normalized message
+  and matching inbox snippet. A receipt-backed text overlay survives reads that
+  start both before and after success until history echoes the edited text. The
+  API exposes no edit revision, so a mismatch is preserved for at most three
+  history merges or two minutes; this bounds how long a genuinely newer remote
+  edit can be hidden. Synthetic parser fallback IDs and threads without a
+  mutation ID are never edit eligible.
 - `reactionRequests` permits one mutation per thread/message pair. The store
   snapshots reactions, applies the viewer choice optimistically, installs the
   response array on success, and rolls back with visible error state on failure.
@@ -740,7 +784,11 @@ Menus expose only capabilities already owned by this frontend. Selected and
 unselected chat rows offer Pin conversation or Unpin conversation by right click,
 Context Menu/Shift+F10, or movement-cancelled touch hold. Pending actions are
 disabled and mutation failures are announced on the affected row. A
-loaded server message offers reply, and shared reel/post messages with a
+    loaded server message offers reply. An outgoing text message additionally
+    offers Edit through 15 minutes after its server timestamp; the exact boundary
+    is inclusive and the store action repeats eligibility at dispatch. Edit mode
+    temporarily owns the store draft while preserving any prior draft/reply
+    target for cancel or successful completion. Shared reel/post messages with a
 parser-provided target URL additionally offer Copy post URL. Reactions remain
 available through the row's hover/focus reaction rail and full chooser, not the
 context menu. A failed local send offers retry/remove. The reaction picker marks the

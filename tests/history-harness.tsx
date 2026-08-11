@@ -12,7 +12,7 @@ type Scenario = 'continuous' | 'delayed' | 'resize' | 'resize-virtual' | 'select
     'events' | 'vim-scroll' | 'reply-navigation' | 'reply-navigation-retry' |
     'reply-navigation-delayed' | 'reply-navigation-prefetch-resume' |
     'reply-navigation-chain' | 'local-newer' | 'local-newer-resize' |
-    'keyboard-actions' | 'reel-extremes' | 'post';
+    'keyboard-actions' | 'message-editing' | 'reel-extremes' | 'post';
 
 let activeStore: ReturnType<typeof createFrontendStore> | undefined;
 let resolveVisible: ((result: Result<ThreadMessages>) => void) | undefined;
@@ -220,6 +220,13 @@ const keyboardActionMessages: Message[] = [
     { kind: 'text', id: 'keyboard-target', senderId: 'sender', ts: 5_000, text: 'React once' },
 ];
 
+const editingTimestamp = Date.now() - 1_000;
+const editingMessages: Message[] = [
+    { kind: 'text', id: 'edit-received', senderId: 'sender', ts: editingTimestamp - 2, text: 'Received' },
+    { kind: 'text', id: 'edit-old', senderId: 'viewer', ts: editingTimestamp - 15 * 60 * 1_000, text: 'Too old' },
+    { kind: 'text', id: 'edit-current', senderId: 'viewer', ts: editingTimestamp, text: 'Original text' },
+];
+
 const identityUsers = [
     { id: 'bob', username: 'bob', fullName: 'Bob', picUrl: null },
     { id: 'ai', username: 'metaai', fullName: 'Meta AI', picUrl: 'data:image/gif;base64,R0lGODlhAQABAAAAACw=' },
@@ -398,6 +405,10 @@ async function mount(scenario: Scenario) {
                     ? { ok: true as const, value: {
                         items: keyboardActionMessages, hasNextPage: false, viewerId: 'viewer',
                     } }
+                : scenario === 'message-editing'
+                    ? { ok: true as const, value: {
+                        items: editingMessages, hasNextPage: false, viewerId: 'viewer',
+                    } }
                 : scenario === 'older-send' || scenario === 'thread-state'
                     ? page(0, 120, undefined, false, true)
                     : scenario === 'reply-navigation' || scenario === 'reply-navigation-retry' ||
@@ -514,6 +525,9 @@ async function mount(scenario: Scenario) {
                 },
             });
         },
+        editText: async payload => scenario === 'message-editing'
+            ? { ok: true, value: { messageId: payload.messageId, timestampMs: editingTimestamp } }
+            : { ok: false, error: { message: 'not used' } },
         forwardMessage: async payload => ({
             ok: true,
             value: { messageId: 'forwarded', clientRequestId: payload.offlineThreadingId },
@@ -597,6 +611,26 @@ async function mount(scenario: Scenario) {
             if (scenario === 'reel' && reelCommentCalls === 1) return { ok: false, error: { message: 'Harness comments failure' } };
             return { ok: true, value: { items: [{ id: 'comment-1', text: 'Great reel', createdAtMs: 2_000, likeCount: 0, hasLiked: false, childCommentCount: 0, author: { id: 'liker-2', username: 'followed_liker_2', fullName: 'Followed Liker 2', picUrl: null, isVerified: false } }], featuredCommentId: 'comment-1', hasNextPage: false } };
         },
+        getReelCommentReplies: async payload => ({
+            ok: true,
+            value: { parentCommentId: payload.commentId, items: [], hasNextPage: false },
+        }),
+        createReelComment: async payload => ({
+            ok: true,
+            value: {
+                id: 'created-comment', text: payload.text, createdAtMs: Date.now(),
+                likeCount: 0, hasLiked: false, childCommentCount: 0,
+                ...(payload.replyToCommentId ? {
+                    parentCommentId: payload.replyToCommentId,
+                    repliedToCommentId: payload.replyToCommentId,
+                } : {}),
+                author: { id: 'viewer', username: 'viewer', fullName: 'Viewer', picUrl: null, isVerified: false },
+            },
+        }),
+        setReelCommentLiked: async payload => ({
+            ok: true,
+            value: { commentId: payload.commentId, hasLiked: payload.liked },
+        }),
         setReelLiked: async payload => {
             reelLikeCalls++;
             return { ok: true, value: { mediaId: payload.mediaId, hasLiked: payload.liked } };

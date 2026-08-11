@@ -18,6 +18,7 @@ export const DOC_IDS = {
     markThreadRead: '27356881703909995',
     markThreadReadValidation: '35211594988486314',
     sendText: '26911679871773184',
+    editText: '32480262318254796',
     forwardReel: '26212720875066239',
     forwardPost: '27442850591982122',
     sendReaction: '24374451552236906',
@@ -38,6 +39,7 @@ export const DOC_IDS = {
     saveReel: '27326721586982367',
     unsaveReel: '27203919972607144',
     userHoverCard: '27756568060663620',
+    likeComment: '27184292767848867',
 } as const;
 
 export const FRIENDLY_NAMES = {
@@ -61,6 +63,7 @@ export const FRIENDLY_NAMES = {
     markThreadRead: 'useIGDMarkThreadAsReadMutation',
     markThreadReadValidation: 'useIGDMarkThreadAsReadValidationMutation',
     sendText: 'IGDirectTextSendMutation',
+    editText: 'IGDirectEditMessageMutation',
     forwardReel: 'IGDirectReelShareMutation',
     forwardPost: 'IGDirectMediaShareMutation',
     sendReaction: 'IGDirectReactionSendMutation',
@@ -81,6 +84,7 @@ export const FRIENDLY_NAMES = {
     saveReel: 'PolarisAPISavePostMutation',
     unsaveReel: 'PolarisAPIUnsavePostMutation',
     userHoverCard: 'PolarisUserHoverCardContentV2Query',
+    likeComment: 'PolarisCommentActionsLikeMutation',
 } as const;
 
 export const INSTAGRAM_GRAPHQL_FLAGS = {

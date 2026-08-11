@@ -103,13 +103,14 @@ function xmaPreviewDimensions(xma: JsonObject): { width: number; height: number 
     return width !== undefined && height !== undefined ? { width, height } : undefined;
 }
 
-function messageId(node: JsonObject): string {
-    return (
-        stringProp(node.message_id) ??
-        stringProp(node.item_id) ??
-        stringProp(node.id) ??
-        `${senderId(node)}:${messageTs(node)}:${stringProp(node.content_type) ?? 'UNKNOWN'}`
-    );
+function messageIdentity(node: JsonObject): { id: string; isSyntheticId?: true } {
+    const id = stringProp(node.message_id) ?? stringProp(node.item_id) ?? stringProp(node.id);
+    return id
+        ? { id }
+        : {
+            id: `${senderId(node)}:${messageTs(node)}:${stringProp(node.content_type) ?? 'UNKNOWN'}`,
+            isSyntheticId: true,
+        };
 }
 
 function messageTs(node: JsonObject): number {
@@ -261,7 +262,8 @@ export function parseMessage(value: unknown): Message | undefined {
     const contentType = stringProp(node.content_type) ?? 'UNKNOWN';
     if (contentType === 'REACTION_LOG_XMAT') return undefined;
 
-    const id = messageId(node);
+    const identity = messageIdentity(node);
+    const { id } = identity;
     const ts = messageTs(node);
     const sender = senderId(node);
     const content = objectProp(node.content);
@@ -270,7 +272,7 @@ export function parseMessage(value: unknown): Message | undefined {
         stringProp(node.replied_to_message_id) ??
         stringProp(repliedToMessage?.message_id);
     const common = {
-        id,
+        ...identity,
         senderId: sender,
         ts,
         reactions: parseReactions(node.reactions),
@@ -294,7 +296,7 @@ export function parseMessage(value: unknown): Message | undefined {
     if (contentType === 'ACTION_LOG' || contentType === 'REACTION_LOG')
         return {
             kind: 'reaction_log',
-            id,
+            ...identity,
             ts,
             reactions: common.reactions,
             isPinned: common.isPinned,
@@ -315,7 +317,7 @@ export function parseMessage(value: unknown): Message | undefined {
     if (contentType in activityLabels)
         return {
             kind: 'activity',
-            id,
+            ...identity,
             ts,
             reactions: common.reactions,
             isPinned: common.isPinned,
@@ -753,6 +755,18 @@ export function parseSentTextResponse(json: unknown, clientRequestId: string): S
     return { messageId, timestampMs, clientRequestId };
 }
 
+export function parseEditedTextResponse(json: unknown) {
+    const receipt = objectProp(
+        responseData(json)?.direct_edit_message_with_slide_messaging_response,
+    );
+    const messageId = stringProp(receipt?.message_id);
+    const id = stringProp(receipt?.id);
+    const timestampMs = parseTimestampMs(receipt?.timestamp_ms);
+    if (!messageId || id !== messageId || timestampMs === undefined)
+        throw new Error('Instagram edited message receipt was not returned');
+    return { messageId, timestampMs };
+}
+
 export function parseSentCutoutStickerResponse(json: unknown, clientRequestId: string): SentMessage {
     return sentMessage(
         responseData(json)?.ig_direct_cutout_sticker_share_with_slide_msg_response,
@@ -1130,24 +1144,41 @@ export function parseViewerFollowingResponse(json: unknown, expectedUserId: stri
     return userId === expectedUserId && booleanProp(friendship?.following) === true;
 }
 
+function reelComment(comment: JsonObject): ReelComment | undefined {
+    const id = stringProp(comment.pk) ?? stringProp(comment.id);
+    const text = stringProp(comment.text);
+    if (!id || text === undefined) return undefined;
+    const authorSource = objectProp(comment.user) ?? objectProp(comment.from);
+    if (!authorSource) return undefined;
+    const normalizedAuthor = objectProp(comment.from)
+        ? {
+            ...authorSource,
+            pk: stringProp(authorSource.id),
+            profile_pic_url: stringProp(authorSource.profile_picture),
+            is_verified: false,
+        }
+        : authorSource;
+    const parentCommentId = stringProp(comment.parent_comment_id);
+    const repliedToCommentId = stringProp(comment.replied_to_comment_id);
+    return {
+        id,
+        text,
+        createdAtMs: (numberProp(comment.created_at) ?? numberProp(comment.created_time) ?? 0) * 1_000,
+        likeCount: numberProp(comment.comment_like_count) ?? 0,
+        hasLiked: booleanProp(comment.has_liked_comment) ?? false,
+        childCommentCount: numberProp(comment.child_comment_count) ?? 0,
+        ...(parentCommentId ? { parentCommentId } : {}),
+        ...(repliedToCommentId ? { repliedToCommentId } : {}),
+        author: reelAuthor(normalizedAuthor),
+    };
+}
+
 export function parseReelCommentsResponse(json: unknown): ReelComments {
     const root = objectProp(json);
     if (!root || !Array.isArray(root.comments))
         throw new Error('Instagram reel comments were not returned');
-    const items = root.comments.map(objectProp).filter((comment): comment is JsonObject => Boolean(comment)).map((comment): ReelComment | undefined => {
-        const id = stringProp(comment.pk) ?? stringProp(comment.id);
-        const text = stringProp(comment.text);
-        if (!id || !text) return undefined;
-        return {
-            id,
-            text,
-            createdAtMs: (numberProp(comment.created_at) ?? 0) * 1_000,
-            likeCount: numberProp(comment.comment_like_count) ?? 0,
-            hasLiked: booleanProp(comment.has_liked_comment) ?? false,
-            childCommentCount: numberProp(comment.child_comment_count) ?? 0,
-            author: reelAuthor(comment.user),
-        };
-    }).filter((comment): comment is ReelComment => Boolean(comment));
+    const items = root.comments.map(objectProp).filter((comment): comment is JsonObject => Boolean(comment))
+        .map(reelComment).filter((comment): comment is ReelComment => Boolean(comment));
     const cursor = stringProp(root.next_min_id);
     const featuredCommentId = booleanProp(root.is_ranked) === true
         ? root.comments.map(objectProp).find(comment =>
@@ -1165,6 +1196,49 @@ export function parseReelCommentsResponse(json: unknown): ReelComments {
         // returning a usable next_min_id, so cursor presence is authoritative.
         hasNextPage: Boolean(cursor),
     };
+}
+
+export function parseReelCommentRepliesResponse(json: unknown, expectedParentId: string) {
+    const root = objectProp(json);
+    if (!root || !Array.isArray(root.child_comments) || stringProp(root.status) !== 'ok')
+        throw new Error('Instagram comment replies were not returned');
+    const parent = objectProp(root.parent_comment);
+    const parentId = stringProp(parent?.pk) ?? stringProp(parent?.id);
+    if (parentId !== expectedParentId)
+        throw new Error('Instagram comment replies did not match the parent');
+    const items = root.child_comments.map(objectProp)
+        .filter((comment): comment is JsonObject => Boolean(comment))
+        .map(reelComment).filter((comment): comment is ReelComment => Boolean(comment));
+    if (items.some(comment => comment.parentCommentId !== expectedParentId))
+        throw new Error('Instagram comment reply had an invalid parent');
+    const cursor = stringProp(root.next_min_child_cursor);
+    return {
+        parentCommentId: expectedParentId,
+        items,
+        ...(cursor ? { cursor } : {}),
+        hasNextPage: Boolean(cursor),
+    };
+}
+
+export function parseCreatedReelCommentResponse(json: unknown, replyToCommentId?: string): ReelComment {
+    const root = objectProp(json);
+    if (!root || stringProp(root.status) !== 'ok')
+        throw new Error('Instagram created comment was not returned');
+    const comment = reelComment({
+        ...root,
+        ...(replyToCommentId ? {
+            parent_comment_id: replyToCommentId,
+            replied_to_comment_id: replyToCommentId,
+        } : {}),
+    });
+    if (!comment) throw new Error('Instagram created comment was invalid');
+    return comment;
+}
+
+export function parseReelCommentLikeResponse(json: unknown): void {
+    const result = objectProp(responseData(json)?.xig_comment_like);
+    if (stringProp(result?.__typename) !== 'XIGCommentLikeMutationResponse')
+        throw new Error('Instagram comment like receipt was not returned');
 }
 
 export function parseReelLikeResponse(

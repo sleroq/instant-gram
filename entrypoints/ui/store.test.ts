@@ -5,7 +5,7 @@ import type {
 } from '../../lib/domain.ts';
 import { createSerialTaskQueue } from '../../lib/errors.ts';
 import type { CompleteUiRpc, UiRpc } from './rpc.ts';
-import { createFrontendStore } from './store.ts';
+import { createFrontendStore, isMessageEditable, MESSAGE_EDIT_WINDOW_MS } from './store.ts';
 import { computeChatWindow } from './virtual-list.ts';
 
 test('chat window remains bounded after long scrolls', () => {
@@ -17,6 +17,315 @@ test('chat window remains bounded after long scrolls', () => {
 test('chat window handles the top and exact end', () => {
     assert.deepEqual(computeChatWindow(0, 10), { start: 0, end: 10 });
     assert.deepEqual(computeChatWindow(72 * 999, 1_000), { start: 969, end: 1_000 });
+});
+
+test('message edit eligibility is outgoing text only and includes the exact boundary', () => {
+    const now = 2_000_000;
+    const editable: Message = {
+        kind: 'text', id: 'mid.$mine', senderId: 'viewer',
+        ts: now - MESSAGE_EDIT_WINDOW_MS, text: 'before',
+    };
+    assert.equal(isMessageEditable(editable, 'viewer', now), true);
+    assert.equal(isMessageEditable({ ...editable, ts: editable.ts - 1 }, 'viewer', now), false);
+    assert.equal(isMessageEditable({ ...editable, senderId: 'peer' }, 'viewer', now), false);
+    assert.equal(isMessageEditable({ ...editable, id: 'local:1' }, 'viewer', now), false);
+    assert.equal(isMessageEditable({ ...editable, isSyntheticId: true }, 'viewer', now), false);
+    assert.equal(isMessageEditable({ ...editable, ts: now + 1 }, 'viewer', now), false);
+    assert.equal(isMessageEditable({
+        kind: 'image', id: 'image', senderId: 'viewer', ts: now,
+        images: [{ url: 'https://example.test/image.jpg' }],
+    }, 'viewer', now), false);
+});
+
+test('message edit failure retains input and retry reconciles canonical history', async () => {
+    const timestamp = Date.now() - 1_000;
+    const original: Message = {
+        kind: 'text', id: 'mid.$mine', senderId: 'viewer', ts: timestamp, text: 'before',
+    };
+    const inboxThread = { ...thread('a'), lastActivityMs: timestamp, lastMessage: original };
+    let historyCalls = 0;
+    let resolveOlder!: (result: Result<ThreadMessages>) => void;
+    const rpc = fakeRpc(
+        async () => ({ ok: true, value: { items: [inboxThread], hasNextPage: false } }),
+        async () => {
+            historyCalls++;
+            if (historyCalls === 1) return {
+                ok: true as const,
+                value: {
+                    items: [original], cursor: 'older', hasNextPage: true, viewerId: 'viewer',
+                },
+            };
+            return new Promise(resolve => { resolveOlder = resolve; });
+        },
+    );
+    const offlineIds: string[] = [];
+    let attempt = 0;
+    rpc.editText = async payload => {
+        offlineIds.push(payload.offlineThreadingId);
+        attempt++;
+        return attempt === 1
+            ? { ok: false, error: { message: 'temporary failure' } }
+            : { ok: true, value: { messageId: payload.messageId, timestampMs: timestamp } };
+    };
+    const store = createFrontendStore(rpc, { incomingSync: false });
+    store.start();
+    await settle();
+    store.selectThread('a');
+    await settle();
+
+    assert.equal(store.startMessageEdit('a', original.id), true);
+    store.setDraft('a', 'after');
+    store.revealOlderHistory('a', true);
+    assert.equal(store.submitMessageEdit('a', 'after'), true);
+    await settle();
+    assert.equal(store.state.histories.a.editing?.status, 'error');
+    assert.equal(store.state.histories.a.editing?.error, 'temporary failure');
+    assert.equal(store.state.histories.a.draft, 'after');
+
+    assert.equal(store.submitMessageEdit('a', 'after'), true);
+    await settle();
+    assert.equal(store.state.histories.a.editing, undefined);
+    assert.equal(store.state.histories.a.byId[original.id].kind, 'text');
+    assert.equal((store.state.histories.a.byId[original.id] as Extract<Message, { kind: 'text' }>).text, 'after');
+    assert.equal((store.state.inbox.byId.a.lastMessage as Extract<Message, { kind: 'text' }>).text, 'after');
+    assert.deepEqual(offlineIds, [offlineIds[0], offlineIds[0]]);
+    resolveOlder({
+        ok: true,
+        value: {
+            items: [
+                { kind: 'text', id: 'older', senderId: 'peer', ts: timestamp - 1, text: 'older' },
+                original,
+            ],
+            hasNextPage: false,
+            viewerId: 'viewer',
+        },
+    });
+    await settle();
+    assert.equal(
+        (store.state.histories.a.byId[original.id] as Extract<Message, { kind: 'text' }>).text,
+        'after',
+        'a read started before the edit receipt must not restore stale text',
+    );
+
+    store.applyIncomingSnapshot({
+        kind: 'snapshot',
+        threads: [{ ...inboxThread, lastMessage: original }],
+        history: { threadId: 'a', messages: [original], viewerId: 'viewer' },
+    });
+    assert.equal(
+        (store.state.histories.a.byId[original.id] as Extract<Message, { kind: 'text' }>).text,
+        'after',
+        'a read started after the edit receipt must not restore stale text',
+    );
+    assert.equal(
+        (store.state.inbox.byId.a.lastMessage as Extract<Message, { kind: 'text' }>).text,
+        'after',
+    );
+
+    const acknowledged = { ...original, text: 'after' };
+    store.applyIncomingSnapshot({
+        kind: 'snapshot',
+        threads: [{ ...inboxThread, lastMessage: acknowledged }],
+        history: { threadId: 'a', messages: [acknowledged], viewerId: 'viewer' },
+    });
+    const newerRemote = { ...original, text: 'newer remote edit' };
+    store.applyIncomingSnapshot({
+        kind: 'snapshot',
+        threads: [{ ...inboxThread, lastMessage: newerRemote }],
+        history: { threadId: 'a', messages: [newerRemote], viewerId: 'viewer' },
+    });
+    assert.equal(
+        (store.state.histories.a.byId[original.id] as Extract<Message, { kind: 'text' }>).text,
+        'newer remote edit',
+        'an acknowledgement clears the overlay so a newer remote edit remains authoritative',
+    );
+    assert.equal(
+        (store.state.inbox.byId.a.lastMessage as Extract<Message, { kind: 'text' }>).text,
+        'newer remote edit',
+    );
+    store.destroy();
+});
+
+test('an inbox-only edit acknowledgement clears the overlay for later remote edits', async () => {
+    const { store, original, inboxThread } = await editedMessageStore();
+    const acknowledged = { ...original, text: 'after' };
+    store.applyIncomingSnapshot({
+        kind: 'snapshot',
+        threads: [{ ...inboxThread, lastMessage: acknowledged }],
+    });
+
+    const remoteEdit = { ...original, text: 'newer remote edit' };
+    store.applyIncomingSnapshot({
+        kind: 'snapshot',
+        threads: [{ ...inboxThread, lastMessage: remoteEdit }],
+    });
+    assert.equal(
+        (store.state.inbox.byId.a.lastMessage as Extract<Message, { kind: 'text' }>).text,
+        'newer remote edit',
+    );
+    store.destroy();
+});
+
+test('an inbox acknowledgement does not let stale history in the same snapshot regress text', async () => {
+    const { store, original, inboxThread } = await editedMessageStore();
+    const acknowledged = { ...original, text: 'after' };
+    store.applyIncomingSnapshot({
+        kind: 'snapshot',
+        threads: [{ ...inboxThread, lastMessage: acknowledged }],
+        history: { threadId: 'a', messages: [original], viewerId: 'viewer' },
+    });
+    assert.equal(
+        (store.state.histories.a.byId[original.id] as Extract<Message, { kind: 'text' }>).text,
+        'after',
+    );
+    assert.equal(
+        (store.state.inbox.byId.a.lastMessage as Extract<Message, { kind: 'text' }>).text,
+        'after',
+    );
+
+    const remoteEdit = { ...original, text: 'newer remote edit' };
+    store.applyIncomingSnapshot({
+        kind: 'snapshot',
+        threads: [],
+        history: { threadId: 'a', messages: [remoteEdit], viewerId: 'viewer' },
+    });
+    assert.equal(
+        (store.state.histories.a.byId[original.id] as Extract<Message, { kind: 'text' }>).text,
+        'newer remote edit',
+    );
+    store.destroy();
+});
+
+test('three stale authoritative history merges are protected and the next mismatch is accepted', async () => {
+    const { store, original } = await editedMessageStore();
+    for (let mismatch = 0; mismatch < 3; mismatch++) {
+        store.applyIncomingSnapshot({
+            kind: 'snapshot',
+            threads: [],
+            history: { threadId: 'a', messages: [original], viewerId: 'viewer' },
+        });
+        assert.equal(
+            (store.state.histories.a.byId[original.id] as Extract<Message, { kind: 'text' }>).text,
+            'after',
+        );
+    }
+
+    const remoteEdit = { ...original, text: 'newer remote edit' };
+    store.applyIncomingSnapshot({
+        kind: 'snapshot',
+        threads: [],
+        history: { threadId: 'a', messages: [remoteEdit], viewerId: 'viewer' },
+    });
+    assert.equal(
+        (store.state.histories.a.byId[original.id] as Extract<Message, { kind: 'text' }>).text,
+        'newer remote edit',
+    );
+    assert.equal(
+        (store.state.inbox.byId.a.lastMessage as Extract<Message, { kind: 'text' }>).text,
+        'newer remote edit',
+    );
+    store.destroy();
+});
+
+test('an inbox-only mismatch is accepted after the history mismatch budget is exhausted', async () => {
+    const { store, original, inboxThread } = await editedMessageStore();
+    for (let mismatch = 0; mismatch < 3; mismatch++) {
+        store.applyIncomingSnapshot({
+            kind: 'snapshot',
+            threads: [],
+            history: { threadId: 'a', messages: [original], viewerId: 'viewer' },
+        });
+    }
+
+    const remoteEdit = { ...original, text: 'newer remote edit' };
+    store.applyIncomingSnapshot({
+        kind: 'snapshot',
+        threads: [{ ...inboxThread, lastMessage: remoteEdit }],
+    });
+    assert.equal(
+        (store.state.inbox.byId.a.lastMessage as Extract<Message, { kind: 'text' }>).text,
+        'newer remote edit',
+    );
+    store.destroy();
+});
+
+test('an expired edit overlay accepts remote text and clears its receipt in every merge path', async () => {
+    const realNow = Date.now;
+    let now = realNow();
+    Date.now = () => now;
+    try {
+        const { store, original, inboxThread } = await editedMessageStore();
+        now += 2 * 60 * 1_000 + 1;
+        const remoteEdit = { ...original, text: 'newer remote edit' };
+        store.applyIncomingSnapshot({
+            kind: 'snapshot',
+            threads: [{ ...inboxThread, lastMessage: remoteEdit }],
+            history: { threadId: 'a', messages: [remoteEdit], viewerId: 'viewer' },
+        });
+        assert.equal(
+            (store.state.histories.a.byId[original.id] as Extract<Message, { kind: 'text' }>).text,
+            'newer remote edit',
+        );
+        assert.equal(
+            (store.state.inbox.byId.a.lastMessage as Extract<Message, { kind: 'text' }>).text,
+            'newer remote edit',
+        );
+
+        const laterEdit = { ...original, text: 'latest remote edit' };
+        store.applyIncomingSnapshot({
+            kind: 'snapshot',
+            threads: [{ ...inboxThread, lastMessage: laterEdit }],
+        });
+        assert.equal(
+            (store.state.inbox.byId.a.lastMessage as Extract<Message, { kind: 'text' }>).text,
+            'latest remote edit',
+        );
+        store.destroy();
+    } finally {
+        Date.now = realNow;
+    }
+});
+
+test('message editing requires a thread mutation ID and never enters pending without one', async () => {
+    const timestamp = Date.now() - 1_000;
+    const original: Message = {
+        kind: 'text', id: 'mid.$mine', senderId: 'viewer', ts: timestamp, text: 'before',
+    };
+    const withoutMutationId = { ...thread('a'), threadFbid: undefined, lastMessage: original };
+    const mutationCapable = { ...thread('b'), lastMessage: original };
+    const rpc = fakeRpc(
+        async () => ({
+            ok: true, value: { items: [withoutMutationId, mutationCapable], hasNextPage: false },
+        }),
+        async () => ({ ok: true, value: {
+            items: [original], hasNextPage: false, viewerId: 'viewer',
+        } }),
+    );
+    let edits = 0;
+    rpc.editText = async payload => {
+        edits++;
+        return { ok: true, value: { messageId: payload.messageId, timestampMs: timestamp } };
+    };
+    const store = createFrontendStore(rpc, { incomingSync: false });
+    store.start();
+    await settle();
+    store.selectThread('a');
+    await settle();
+
+    assert.equal(store.canEditMessage('a', original.id), false);
+    assert.equal(store.startMessageEdit('a', original.id), false);
+    assert.equal(store.state.histories.a.editing, undefined);
+
+    store.selectThread('b');
+    await settle();
+    assert.equal(store.startMessageEdit('b', original.id), true);
+    store.setDraft('b', 'after');
+    store.state.inbox.byId.b = { ...store.state.inbox.byId.b, threadFbid: undefined };
+    assert.equal(store.submitMessageEdit('b', 'after'), false);
+    assert.equal(store.state.histories.b.editing?.status, 'error');
+    assert.match(store.state.histories.b.editing?.error ?? '', /cannot edit/);
+    assert.equal(edits, 0);
+    store.destroy();
 });
 
 test('selecting an unread thread marks its latest message read once', async () => {
@@ -1699,6 +2008,324 @@ test('reel shares preload with a bounded deduped cache while comments and mutati
     store.destroy();
 });
 
+test('comment actions reconcile likes, replies, creation, and reply cursors in normalized reel state', async () => {
+    const rpc = fakeRpc(async () => ({ ok: true, value: { items: [], hasNextPage: false } }));
+    rpc.getReelMedia = async payload => ({
+        ok: true,
+        value: reelMedia(payload.shortcode, payload.mediaId ?? '900', 'https://cdn/comment-actions.mp4'),
+    });
+    const parent = {
+        id: '100', text: 'Parent', createdAtMs: 1, likeCount: 2, hasLiked: false,
+        childCommentCount: 2,
+        author: { id: 'author', username: 'author', fullName: 'Author', picUrl: null, isVerified: false },
+    };
+    rpc.getReelComments = async () => ({
+        ok: true,
+        value: { items: [parent], hasNextPage: false },
+    });
+    const replyCalls: Array<{ commentId: string; cursor?: string }> = [];
+    rpc.getReelCommentReplies = async payload => {
+        replyCalls.push({ commentId: payload.commentId, cursor: payload.cursor });
+        const reply = (id: string, text: string) => ({
+            id, text, createdAtMs: Number(id), likeCount: 0, hasLiked: false,
+            childCommentCount: 0, parentCommentId: '100', repliedToCommentId: '100',
+            author: { id: `author-${id}`, username: `reply${id}`, fullName: '', picUrl: null, isVerified: false },
+        });
+        return payload.cursor
+            ? { ok: true, value: { parentCommentId: '100', items: [reply('201', 'second')], hasNextPage: false } }
+            : { ok: true, value: { parentCommentId: '100', items: [reply('200', 'first')], cursor: 'next', hasNextPage: true } };
+    };
+    let resolveLike!: (value: Awaited<ReturnType<CompleteUiRpc['setReelCommentLiked']>>) => void;
+    rpc.setReelCommentLiked = async () => new Promise(resolve => { resolveLike = resolve; });
+    rpc.createReelComment = async payload => ({
+        ok: true,
+        value: {
+            id: '202', text: payload.text, createdAtMs: 202, likeCount: 0, hasLiked: false,
+            childCommentCount: 0, parentCommentId: payload.replyToCommentId,
+            repliedToCommentId: payload.replyToCommentId,
+            author: { id: 'viewer', username: 'viewer', fullName: 'Viewer', picUrl: null, isVerified: false },
+        },
+    });
+    const store = createFrontendStore(rpc);
+    assert.equal(await store.openReel('COMMENTS', '900'), true);
+
+    const liking = store.toggleReelCommentLiked('COMMENTS', '100');
+    assert.equal(store.state.reels.byId.COMMENTS.comments.byId['100'].hasLiked, true);
+    assert.equal(store.state.reels.byId.COMMENTS.comments.byId['100'].likeCount, 3);
+    assert.equal(await store.toggleReelCommentLiked('COMMENTS', '100'), false, 'like is single-flight');
+    resolveLike({ ok: true, value: { commentId: '100', hasLiked: true } });
+    assert.equal(await liking, true);
+
+    assert.equal(await store.openReelCommentReplies('COMMENTS', '100'), true);
+    assert.deepEqual(store.state.reels.byId.COMMENTS.comments.repliesByParent['100'].listedIds, ['200']);
+    assert.equal(await store.loadNextReelCommentReplies('COMMENTS', '100'), true);
+    assert.deepEqual(store.state.reels.byId.COMMENTS.comments.repliesByParent['100'].listedIds, ['200', '201']);
+    assert.deepEqual(replyCalls, [{ commentId: '100', cursor: undefined }, { commentId: '100', cursor: 'next' }]);
+
+    store.setReelCommentReplyTarget('COMMENTS', '100');
+    store.setReelCommentDraft('COMMENTS', ' A reply ');
+    assert.equal(await store.submitReelComment('COMMENTS'), true);
+    assert.deepEqual(store.state.reels.byId.COMMENTS.comments.repliesByParent['100'].listedIds, ['200', '201', '202']);
+    assert.equal(store.state.reels.byId.COMMENTS.comments.byId['202'].parentCommentId, '100');
+    assert.equal(store.state.reels.byId.COMMENTS.comments.draft, '');
+    assert.equal(store.state.reels.byId.COMMENTS.media?.commentCount, 1);
+    store.destroy();
+});
+
+test('comment creation preserves concurrent media mutations and survives an older media refresh', async () => {
+    const rpc = fakeRpc(async () => ({ ok: true, value: { items: [], hasNextPage: false } }));
+    let mediaCalls = 0;
+    let resolveRefresh!: (value: Awaited<ReturnType<CompleteUiRpc['getReelMedia']>>) => void;
+    rpc.getReelMedia = async payload => {
+        mediaCalls++;
+        const media = reelMedia(payload.shortcode, payload.mediaId ?? '900', 'https://cdn/race.mp4');
+        return mediaCalls === 1
+            ? { ok: true, value: media }
+            : new Promise(resolve => { resolveRefresh = resolve; });
+    };
+    rpc.getReelComments = async () => ({ ok: true, value: { items: [], hasNextPage: false } });
+    rpc.setReelLiked = async payload => ({
+        ok: true, value: { mediaId: payload.mediaId, hasLiked: payload.liked },
+    });
+    rpc.setReelSaved = async payload => ({
+        ok: true, value: { mediaId: payload.mediaId, hasSaved: payload.saved },
+    });
+    let resolveCreate!: (value: Awaited<ReturnType<CompleteUiRpc['createReelComment']>>) => void;
+    rpc.createReelComment = async () => new Promise(resolve => { resolveCreate = resolve; });
+    const store = createFrontendStore(rpc);
+    assert.equal(await store.openReel('CREATE-RACE', '900'), true);
+
+    const refresh = store.retryReel('CREATE-RACE');
+    store.setReelCommentDraft('CREATE-RACE', 'new comment');
+    const creating = store.submitReelComment('CREATE-RACE');
+    assert.equal(await store.toggleReelLiked('CREATE-RACE'), true);
+    assert.equal(await store.toggleReelSaved('CREATE-RACE'), true);
+    resolveCreate({ ok: true, value: {
+        id: 'created', text: 'new comment', createdAtMs: 2, likeCount: 0, hasLiked: false,
+        childCommentCount: 0,
+        author: { id: 'viewer', username: 'viewer', fullName: '', picUrl: null, isVerified: false },
+    } });
+    assert.equal(await creating, true);
+    assert.deepEqual({
+        liked: store.state.reels.byId['CREATE-RACE'].media?.hasLiked,
+        saved: store.state.reels.byId['CREATE-RACE'].media?.hasSaved,
+        comments: store.state.reels.byId['CREATE-RACE'].media?.commentCount,
+    }, { liked: true, saved: true, comments: 1 });
+
+    resolveRefresh({
+        ok: true,
+        value: reelMedia('CREATE-RACE', '900', 'https://cdn/refreshed-race.mp4'),
+    });
+    assert.ok(await refresh);
+    assert.deepEqual({
+        liked: store.state.reels.byId['CREATE-RACE'].media?.hasLiked,
+        saved: store.state.reels.byId['CREATE-RACE'].media?.hasSaved,
+        comments: store.state.reels.byId['CREATE-RACE'].media?.commentCount,
+    }, { liked: true, saved: true, comments: 1 });
+    store.destroy();
+});
+
+test('created replies survive older top-level and reply pages without losing the authoritative count', async () => {
+    const rpc = fakeRpc(async () => ({ ok: true, value: { items: [], hasNextPage: false } }));
+    rpc.getReelMedia = async payload => ({
+        ok: true, value: reelMedia(payload.shortcode, payload.mediaId ?? '900', 'https://cdn/reply-race.mp4'),
+    });
+    const parent = {
+        id: 'parent', text: 'Parent', createdAtMs: 1, likeCount: 0, hasLiked: false,
+        childCommentCount: 1,
+        author: { id: 'author', username: 'author', fullName: '', picUrl: null, isVerified: false },
+    };
+    let resolveTopPage!: (value: Awaited<ReturnType<CompleteUiRpc['getReelComments']>>) => void;
+    let commentCalls = 0;
+    rpc.getReelComments = async () => ++commentCalls === 1
+        ? { ok: true, value: { items: [parent], cursor: 'top-next', hasNextPage: true } }
+        : new Promise(resolve => { resolveTopPage = resolve; });
+    const existingReply = {
+        id: 'old-reply', text: 'Old', createdAtMs: 2, likeCount: 0, hasLiked: false,
+        childCommentCount: 0, parentCommentId: 'parent', repliedToCommentId: 'parent',
+        author: { id: 'reply-author', username: 'reply', fullName: '', picUrl: null, isVerified: false },
+    };
+    let resolveReplyPage!: (value: Awaited<ReturnType<CompleteUiRpc['getReelCommentReplies']>>) => void;
+    let replyCalls = 0;
+    rpc.getReelCommentReplies = async () => ++replyCalls === 1
+        ? { ok: true, value: {
+            parentCommentId: 'parent', items: [existingReply], cursor: 'reply-next', hasNextPage: true,
+        } }
+        : new Promise(resolve => { resolveReplyPage = resolve; });
+    rpc.createReelComment = async payload => ({ ok: true, value: {
+        id: 'new-reply', text: payload.text, createdAtMs: 3, likeCount: 0, hasLiked: false,
+        childCommentCount: 0, parentCommentId: 'parent', repliedToCommentId: 'parent',
+        author: { id: 'viewer', username: 'viewer', fullName: '', picUrl: null, isVerified: false },
+    } });
+    const store = createFrontendStore(rpc);
+    assert.equal(await store.openReel('REPLY-RACE', '900'), true);
+    assert.equal(await store.openReelCommentReplies('REPLY-RACE', 'parent'), true);
+    const topPage = store.loadNextReelComments('REPLY-RACE');
+    const replyPage = store.loadNextReelCommentReplies('REPLY-RACE', 'parent');
+    store.setReelCommentReplyTarget('REPLY-RACE', 'parent');
+    store.setReelCommentDraft('REPLY-RACE', 'new reply');
+    assert.equal(await store.submitReelComment('REPLY-RACE'), true);
+
+    resolveTopPage({ ok: true, value: { items: [parent], hasNextPage: false } });
+    resolveReplyPage({ ok: true, value: {
+        parentCommentId: 'parent', items: [existingReply], hasNextPage: false,
+    } });
+    assert.equal(await topPage, true);
+    assert.equal(await replyPage, true);
+    const reel = store.state.reels.byId['REPLY-RACE'];
+    assert.equal(reel.comments.byId.parent.childCommentCount, 2);
+    assert.deepEqual(
+        reel.comments.repliesByParent.parent.listedIds,
+        ['old-reply', 'new-reply'],
+    );
+    assert.equal(reel.media?.commentCount, 1);
+    store.destroy();
+});
+
+test('comment like failures restore the latest top-level and child read baselines', async () => {
+    const rpc = fakeRpc(async () => ({ ok: true, value: { items: [], hasNextPage: false } }));
+    rpc.getReelMedia = async payload => ({
+        ok: true, value: reelMedia(payload.shortcode, payload.mediaId ?? '900', 'https://cdn/like-race.mp4'),
+    });
+    const author = { id: 'author', username: 'author', fullName: '', picUrl: null, isVerified: false };
+    const parent = {
+        id: 'parent', text: 'Parent', createdAtMs: 1, likeCount: 1, hasLiked: false,
+        childCommentCount: 1, author,
+    };
+    let commentsCalls = 0;
+    rpc.getReelComments = async () => ++commentsCalls === 1
+        ? { ok: true, value: { items: [parent], cursor: 'next', hasNextPage: true } }
+        : { ok: true, value: { items: [{ ...parent, likeCount: 8, hasLiked: true }], hasNextPage: false } };
+    const child = {
+        id: 'child', text: 'Child', createdAtMs: 2, likeCount: 2, hasLiked: false,
+        childCommentCount: 0, parentCommentId: 'parent', repliedToCommentId: 'parent', author,
+    };
+    let repliesCalls = 0;
+    rpc.getReelCommentReplies = async () => ++repliesCalls === 1
+        ? { ok: true, value: {
+            parentCommentId: 'parent', items: [child], cursor: 'child-next', hasNextPage: true,
+        } }
+        : { ok: true, value: {
+            parentCommentId: 'parent', items: [{ ...child, likeCount: 6, hasLiked: true }], hasNextPage: false,
+        } };
+    let resolveParentLike!: (value: Awaited<ReturnType<CompleteUiRpc['setReelCommentLiked']>>) => void;
+    let rejectChildLike!: (error: Error) => void;
+    rpc.setReelCommentLiked = async payload => payload.commentId === 'parent'
+        ? new Promise(resolve => { resolveParentLike = resolve; })
+        : new Promise((_resolve, reject) => { rejectChildLike = reject; });
+    const store = createFrontendStore(rpc);
+    assert.equal(await store.openReel('LIKE-RACE', '900'), true);
+    assert.equal(await store.openReelCommentReplies('LIKE-RACE', 'parent'), true);
+
+    const parentLike = store.toggleReelCommentLiked('LIKE-RACE', 'parent');
+    assert.equal(await store.loadNextReelComments('LIKE-RACE'), true);
+    resolveParentLike({ ok: false, error: { message: 'parent failed' } });
+    assert.equal(await parentLike, false);
+    assert.deepEqual({
+        liked: store.state.reels.byId['LIKE-RACE'].comments.byId.parent.hasLiked,
+        count: store.state.reels.byId['LIKE-RACE'].comments.byId.parent.likeCount,
+    }, { liked: true, count: 8 });
+
+    const childLike = store.toggleReelCommentLiked('LIKE-RACE', 'child');
+    assert.equal(await store.loadNextReelCommentReplies('LIKE-RACE', 'parent'), true);
+    rejectChildLike(new Error('child failed'));
+    assert.equal(await childLike, false);
+    assert.deepEqual({
+        liked: store.state.reels.byId['LIKE-RACE'].comments.byId.child.hasLiked,
+        count: store.state.reels.byId['LIKE-RACE'].comments.byId.child.likeCount,
+    }, { liked: true, count: 6 });
+    store.destroy();
+});
+
+test('accepted top-level comment likes survive an older page while other fields refresh', async () => {
+    const rpc = fakeRpc(async () => ({ ok: true, value: { items: [], hasNextPage: false } }));
+    rpc.getReelMedia = async payload => ({
+        ok: true, value: reelMedia(payload.shortcode, payload.mediaId ?? '900', 'https://cdn/top-like-race.mp4'),
+    });
+    const author = { id: 'author', username: 'author', fullName: '', picUrl: null, isVerified: false };
+    const parent = {
+        id: 'parent', text: 'Before', createdAtMs: 1, likeCount: 1, hasLiked: false,
+        childCommentCount: 0, author,
+    };
+    let resolveOlderPage!: (value: Awaited<ReturnType<CompleteUiRpc['getReelComments']>>) => void;
+    let commentCalls = 0;
+    rpc.getReelComments = async () => ++commentCalls === 1
+        ? { ok: true, value: { items: [parent], cursor: 'next', hasNextPage: true } }
+        : new Promise(resolve => { resolveOlderPage = resolve; });
+    rpc.setReelCommentLiked = async payload => ({
+        ok: true, value: { commentId: payload.commentId, hasLiked: payload.liked },
+    });
+    const store = createFrontendStore(rpc);
+    assert.equal(await store.openReel('TOP-LIKE-RACE', '900'), true);
+
+    const olderPage = store.loadNextReelComments('TOP-LIKE-RACE');
+    assert.equal(await store.toggleReelCommentLiked('TOP-LIKE-RACE', 'parent'), true);
+    resolveOlderPage({ ok: true, value: {
+        items: [{ ...parent, text: 'Refreshed', childCommentCount: 3 }],
+        hasNextPage: false,
+    } });
+    assert.equal(await olderPage, true);
+
+    const refreshed = store.state.reels.byId['TOP-LIKE-RACE'].comments.byId.parent;
+    assert.deepEqual({
+        liked: refreshed.hasLiked,
+        count: refreshed.likeCount,
+        text: refreshed.text,
+        children: refreshed.childCommentCount,
+    }, { liked: true, count: 2, text: 'Refreshed', children: 3 });
+    store.destroy();
+});
+
+test('accepted child comment unlikes survive an older replies page while other fields refresh', async () => {
+    const rpc = fakeRpc(async () => ({ ok: true, value: { items: [], hasNextPage: false } }));
+    rpc.getReelMedia = async payload => ({
+        ok: true, value: reelMedia(payload.shortcode, payload.mediaId ?? '900', 'https://cdn/child-like-race.mp4'),
+    });
+    const author = { id: 'author', username: 'author', fullName: '', picUrl: null, isVerified: false };
+    const parent = {
+        id: 'parent', text: 'Parent', createdAtMs: 1, likeCount: 0, hasLiked: false,
+        childCommentCount: 1, author,
+    };
+    rpc.getReelComments = async () => ({
+        ok: true, value: { items: [parent], hasNextPage: false },
+    });
+    const child = {
+        id: 'child', text: 'Before', createdAtMs: 2, likeCount: 2, hasLiked: true,
+        childCommentCount: 0, parentCommentId: 'parent', repliedToCommentId: 'parent', author,
+    };
+    let resolveOlderReplies!: (value: Awaited<ReturnType<CompleteUiRpc['getReelCommentReplies']>>) => void;
+    let replyCalls = 0;
+    rpc.getReelCommentReplies = async () => ++replyCalls === 1
+        ? { ok: true, value: {
+            parentCommentId: 'parent', items: [child], cursor: 'next', hasNextPage: true,
+        } }
+        : new Promise(resolve => { resolveOlderReplies = resolve; });
+    rpc.setReelCommentLiked = async payload => ({
+        ok: true, value: { commentId: payload.commentId, hasLiked: payload.liked },
+    });
+    const store = createFrontendStore(rpc);
+    assert.equal(await store.openReel('CHILD-LIKE-RACE', '900'), true);
+    assert.equal(await store.openReelCommentReplies('CHILD-LIKE-RACE', 'parent'), true);
+
+    const olderReplies = store.loadNextReelCommentReplies('CHILD-LIKE-RACE', 'parent');
+    assert.equal(await store.toggleReelCommentLiked('CHILD-LIKE-RACE', 'child'), true);
+    resolveOlderReplies({ ok: true, value: {
+        parentCommentId: 'parent',
+        items: [{ ...child, text: 'Refreshed', author: { ...author, fullName: 'Updated' } }],
+        hasNextPage: false,
+    } });
+    assert.equal(await olderReplies, true);
+
+    const refreshed = store.state.reels.byId['CHILD-LIKE-RACE'].comments.byId.child;
+    assert.deepEqual({
+        liked: refreshed.hasLiked,
+        count: refreshed.likeCount,
+        text: refreshed.text,
+        author: refreshed.author.fullName,
+    }, { liked: false, count: 1, text: 'Refreshed', author: 'Updated' });
+    store.destroy();
+});
+
 test('visible reel priority moves queued media ahead without duplicating active or open requests', async () => {
     installWindowTimers();
     const reelMessages = Array.from({ length: 12 }, (_, index): Message => ({
@@ -2915,6 +3542,35 @@ test('incoming polling is visible, single-flight, backed off, and stale after de
     assert.equal(timer, undefined);
 });
 
+async function editedMessageStore() {
+    const timestamp = Date.now() - 1_000;
+    const original: Extract<Message, { kind: 'text' }> = {
+        kind: 'text', id: 'mid.$mine', senderId: 'viewer', ts: timestamp, text: 'before',
+    };
+    const inboxThread = { ...thread('a'), lastActivityMs: timestamp, lastMessage: original };
+    const rpc = fakeRpc(
+        async () => ({ ok: true, value: { items: [inboxThread], hasNextPage: false } }),
+        async () => ({ ok: true, value: {
+            items: [original], hasNextPage: false, viewerId: 'viewer',
+        } }),
+    );
+    rpc.editText = async payload => ({
+        ok: true,
+        value: { messageId: payload.messageId, timestampMs: timestamp },
+    });
+    const store = createFrontendStore(rpc, { incomingSync: false });
+    store.start();
+    await settle();
+    store.selectThread('a');
+    await settle();
+    assert.equal(store.startMessageEdit('a', original.id), true);
+    store.setDraft('a', 'after');
+    assert.equal(store.submitMessageEdit('a', 'after'), true);
+    await settle();
+    assert.equal(store.state.histories.a.editing, undefined);
+    return { store, original, inboxThread };
+}
+
 function fakeRpc(
     getInbox: UiRpc['getInbox'],
     getThread: UiRpc['getThread'] = async () => emptyHistory(),
@@ -2945,6 +3601,7 @@ function fakeRpc(
         getPins,
         togglePin,
         sendText,
+        editText: async () => ({ ok: false, error: { message: 'not used' } }),
         forwardMessage: async () => ({ ok: false, error: { message: 'not used' } }),
         setReaction,
         markThreadRead,
@@ -2956,6 +3613,9 @@ function fakeRpc(
             ok: false,
             error: { message: 'not used' },
         }),
+        getReelCommentReplies: async () => ({ ok: false, error: { message: 'not used' } }),
+        createReelComment: async () => ({ ok: false, error: { message: 'not used' } }),
+        setReelCommentLiked: async () => ({ ok: false, error: { message: 'not used' } }),
         setReelLiked: async () => ({ ok: false, error: { message: 'not used' } }),
         setReelSaved: async () => ({ ok: false, error: { message: 'not used' } }),
     };

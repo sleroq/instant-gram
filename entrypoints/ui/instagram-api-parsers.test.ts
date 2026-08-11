@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
     parseInboxResponse,
+    parseEditedTextResponse,
     parseMarkThreadReadResponse,
     parseMarkThreadReadValidationResponse,
     parseMessage,
@@ -10,6 +11,8 @@ import {
     parsePinnedMessageResponse,
     parsePinnedThreadResponse,
     parseReactionMutationResponse,
+    parseCreatedReelCommentResponse,
+    parseReelCommentRepliesResponse,
     parseReelCommentsResponse,
     parseReelInfoResponse,
     parseReelLikeResponse,
@@ -22,10 +25,26 @@ import {
     parseThreadResponse,
     parseUnreadCountResponses,
 } from '../../lib/instagram-api/parsers.ts';
+
 import {
     instagramMediaIdFromShortcode,
     loadReelMedia,
 } from '../../lib/instagram-api/reels.ts';
+
+test('edited text parser requires the captured matching IDs and timestamp', () => {
+    assert.deepEqual(parseEditedTextResponse({ data: {
+        direct_edit_message_with_slide_messaging_response: {
+            message_id: 'mid.$message',
+            timestamp_ms: '1786399709281',
+            id: 'mid.$message',
+        },
+    } }), { messageId: 'mid.$message', timestampMs: 1_786_399_709_281 });
+    assert.throws(() => parseEditedTextResponse({ data: {
+        direct_edit_message_with_slide_messaging_response: {
+            message_id: 'mid.$message', timestamp_ms: '1786399709281', id: 'other',
+        },
+    } }), /receipt/);
+});
 
 const user = {
     interop_messaging_user_fbid: 'sender-1',
@@ -550,6 +569,7 @@ test('attachment-less photos and future types retain safe normalized diagnostics
         assert.equal(unknown.contentType, 'FUTURE_CARD');
         assert.equal(unknown.fallback.label, 'Unsupported message');
         assert.equal(unknown.id, 'sender:1234:FUTURE_CARD');
+        assert.equal(unknown.isSyntheticId, true);
     }
 });
 
@@ -1085,6 +1105,38 @@ test('reel comments retain the captured opaque pagination cursor', () => {
     assert.deepEqual(parseReelSaveResponse({ data: {
         xig_media_save: { media: { id: '3953224267254190889_5654194264' } },
     } }, true), { mediaId: '3953224267254190889', hasSaved: true });
+});
+
+test('comment action responses normalize created replies and opaque child cursors', () => {
+    const author = {
+        id: '74742604942', username: 'sleroqq', full_name: 'Sleroq',
+        profile_picture: 'https://cdn.example/viewer.jpg',
+    };
+    assert.deepEqual(parseCreatedReelCommentResponse({
+        id: '17974739376065649', from: author, text: '@author reply',
+        created_time: 1_786_399_227, status: 'ok',
+    }, '18020579816703103'), {
+        id: '17974739376065649', text: '@author reply', createdAtMs: 1_786_399_227_000,
+        likeCount: 0, hasLiked: false, childCommentCount: 0,
+        parentCommentId: '18020579816703103', repliedToCommentId: '18020579816703103',
+        author: {
+            id: '74742604942', username: 'sleroqq', fullName: 'Sleroq',
+            picUrl: 'https://cdn.example/viewer.jpg', isVerified: false,
+        },
+    });
+    const reply = {
+        pk: '17960232189149842', text: '@parent reply', created_at: 1_784_152_061,
+        comment_like_count: 251, has_liked_comment: false,
+        parent_comment_id: '18118594957890789', replied_to_comment_id: '18118594957890789',
+        user: { pk: '60803639014', username: 'reply-user', full_name: 'Reply User', is_verified: false },
+    };
+    const parsed = parseReelCommentRepliesResponse({
+        child_comments: [reply], parent_comment: { pk: '18118594957890789' },
+        next_min_child_cursor: 'opaque-child-cursor', status: 'ok',
+    }, '18118594957890789');
+    assert.equal(parsed.cursor, 'opaque-child-cursor');
+    assert.equal(parsed.hasNextPage, true);
+    assert.equal(parsed.items[0]?.parentCommentId, '18118594957890789');
 });
 
 test('reel social context requires proven viewer-following and explicit ranked-comment markers', async () => {

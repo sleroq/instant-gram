@@ -71,6 +71,28 @@ test('markThreadRead accepts captured false validation after a successful receip
     ]);
 });
 
+test('editText validates input and accepts only a matching captured receipt', async () => {
+    const calls: Call[] = [];
+    const handlers = createInstagramRpcHandlers(executor({
+        IGDirectEditMessageMutation: { data: {
+            direct_edit_message_with_slide_messaging_response: {
+                message_id: 'mid.$message', timestamp_ms: '1786399709281', id: 'mid.$message',
+            },
+        } },
+    }, calls));
+    assert.deepEqual(await handlers.editText({
+        threadFbid: '123', messageId: 'mid.$message', text: 'changed',
+        offlineThreadingId: '7492703599464415944',
+    }), { messageId: 'mid.$message', timestampMs: 1_786_399_709_281 });
+    assert.deepEqual(calls, [{
+        operation: 'IGDirectEditMessageMutation',
+        input: {
+            threadFbid: '123', targetMessageId: 'mid.$message', text: 'changed',
+            offlineThreadingId: '7492703599464415944',
+        },
+    }]);
+});
+
 test('markThreadRead waits for both mutations to settle before exposing a failure', async () => {
     let resolveValidation!: (value: unknown) => void;
     const handlers = createInstagramCatalogHandlers(async operation => {
@@ -503,7 +525,7 @@ test('every closed catalog operation has a semantic or secondary RPC route', () 
         Object.keys(INSTAGRAM_RPC_OPERATION_REACHABILITY).sort(),
         Object.keys(INSTAGRAM_GRAPHQL_OPERATIONS).sort(),
     );
-    assert.equal(Object.keys(INSTAGRAM_RPC_OPERATION_REACHABILITY).length, 38);
+    assert.equal(Object.keys(INSTAGRAM_RPC_OPERATION_REACHABILITY).length, 40);
     assert.equal(
         INSTAGRAM_RPC_OPERATION_REACHABILITY.IGDirectCutoutStickerShareMutation,
         'sendCutoutSticker',

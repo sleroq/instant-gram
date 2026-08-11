@@ -9,25 +9,38 @@ import {
     type Tokens,
 } from '../lib/ig-auth';
 import {
+    buildReelCommentRepliesPath,
     INSTAGRAM_GRAPHQL_OPERATIONS,
     type InstagramGraphqlDescriptor,
     type InstagramGraphqlOperationName,
 } from '../lib/instagram-api/catalog';
 import { createInstagramRpcHandlers } from '../lib/instagram-api/handlers';
-import { parseReelCommentsResponse } from '../lib/instagram-api/parsers';
+import {
+    parseCreatedReelCommentResponse,
+    parseReelCommentLikeResponse,
+    parseReelCommentRepliesResponse,
+    parseReelCommentsResponse,
+} from '../lib/instagram-api/parsers';
 import { loadReelMedia } from '../lib/instagram-api/reels';
 import type { Result, RpcMap } from '../lib/domain';
 
 type ReelCommentsPayload = Parameters<RpcMap['getReelComments']>[0];
+type ReelRepliesPayload = Parameters<RpcMap['getReelCommentReplies']>[0];
+type CreateReelCommentPayload = Parameters<RpcMap['createReelComment']>[0];
+type ReelCommentLikePayload = Parameters<RpcMap['setReelCommentLiked']>[0];
 type RemoteRpcName = Exclude<keyof RpcMap, 'getPins'>;
 const REMOTE_RPC_NAMES = [
     'getInbox',
     'getThread',
     'getReelMedia',
     'getReelComments',
+    'getReelCommentReplies',
+    'createReelComment',
+    'setReelCommentLiked',
     'setReelLiked',
     'setReelSaved',
     'sendText',
+    'editText',
     'forwardMessage',
     'setReaction',
     'togglePin',
@@ -263,6 +276,116 @@ async function getReelComments(value: unknown) {
     return parseReelCommentsResponse(await response.json());
 }
 
+function numericId(value: unknown, label: string): string {
+    if (typeof value !== 'string' || !/^\d{1,64}$/.test(value))
+        throw new Error(`Invalid Instagram ${label}`);
+    return value;
+}
+
+function optionalOpaqueCursor(value: unknown): string | undefined {
+    if (value === undefined) return undefined;
+    if (typeof value !== 'string' || !value || value.length > 4_096)
+        throw new Error('Invalid Instagram comment replies cursor');
+    return value;
+}
+
+async function instagramRest(
+    path: string,
+    method: 'GET' | 'POST',
+    body?: URLSearchParams,
+): Promise<unknown> {
+    const tokens = await harvestTokens();
+    if (body) {
+        body.set('jazoest', tokens.jazoest);
+        body.set('fb_dtsg', tokens.fbDtsg);
+    }
+    const response = await fetch(`https://www.instagram.com${path}`, {
+        method,
+        credentials: 'include',
+        headers: {
+            ...(body ? { 'content-type': 'application/x-www-form-urlencoded' } : {}),
+            'x-ig-app-id': '936619743392459',
+            'x-asbd-id': '359341',
+            'x-csrftoken': tokens.csrfToken,
+            'x-requested-with': 'XMLHttpRequest',
+        },
+        ...(body ? { body } : {}),
+    });
+    if (!response.ok) throw new Error(`Instagram comment request failed with ${response.status}`);
+    try {
+        return await response.json();
+    } catch {
+        throw new Error('Instagram comment request returned an invalid response');
+    }
+}
+
+async function getReelCommentReplies(value: unknown) {
+    if (!isRecord(value)) throw new Error('Invalid Instagram comment replies payload');
+    if (Object.keys(value).some(key => !['mediaId', 'commentId', 'cursor'].includes(key)))
+        throw new Error('Invalid Instagram comment replies payload fields');
+    const payload: ReelRepliesPayload = {
+        mediaId: numericId(value.mediaId, 'reel media ID'),
+        commentId: numericId(value.commentId, 'comment ID'),
+        cursor: optionalOpaqueCursor(value.cursor),
+    };
+    const json = await instagramRest(
+        buildReelCommentRepliesPath(payload),
+        'GET',
+    );
+    return parseReelCommentRepliesResponse(json, payload.commentId);
+}
+
+async function createReelComment(value: unknown) {
+    if (!isRecord(value)) throw new Error('Invalid Instagram create comment payload');
+    if (Object.keys(value).some(key => !['mediaId', 'text', 'replyToCommentId'].includes(key)))
+        throw new Error('Invalid Instagram create comment payload fields');
+    const payload: CreateReelCommentPayload = {
+        mediaId: numericId(value.mediaId, 'reel media ID'),
+        text: typeof value.text === 'string' ? value.text.trim() : '',
+        ...(value.replyToCommentId === undefined ? {} : {
+            replyToCommentId: numericId(value.replyToCommentId, 'reply comment ID'),
+        }),
+    };
+    if (!payload.text || payload.text.length > 2_200)
+        throw new Error('Instagram comment must contain 1–2200 characters');
+    const body = new URLSearchParams({ comment_text: payload.text });
+    if (payload.replyToCommentId) body.set('replied_to_comment_id', payload.replyToCommentId);
+    const json = await instagramRest(
+        `/api/v1/web/comments/${payload.mediaId}/add/`,
+        'POST',
+        body,
+    );
+    return parseCreatedReelCommentResponse(json, payload.replyToCommentId);
+}
+
+let commentMutationId = 0;
+async function setReelCommentLiked(value: unknown) {
+    if (!isRecord(value)) throw new Error('Invalid Instagram comment like payload');
+    if (Object.keys(value).some(key => !['commentId', 'liked'].includes(key)))
+        throw new Error('Invalid Instagram comment like payload fields');
+    const payload: ReelCommentLikePayload = {
+        commentId: numericId(value.commentId, 'comment ID'),
+        liked: value.liked === true,
+    };
+    if (typeof value.liked !== 'boolean') throw new Error('Invalid Instagram comment liked state');
+    if (payload.liked) {
+        const json = await executeOperation('PolarisCommentActionsLikeMutation', {
+            commentId: payload.commentId,
+            clientMutationId: String(++commentMutationId),
+        });
+        parseReelCommentLikeResponse(json);
+    } else {
+        const json = await instagramRest(
+            `/api/v1/web/comments/unlike/${payload.commentId}/`,
+            'POST',
+            new URLSearchParams(),
+        );
+        if (!isRecord(json) || json.status !== 'ok')
+            throw new Error('Instagram comment unlike receipt was not returned');
+    }
+    return { commentId: payload.commentId, hasLiked: payload.liked };
+}
+
 export default defineContentScript({
     matches: ['https://www.instagram.com/*'],
     runAt: 'document_idle',
@@ -278,6 +401,9 @@ export default defineContentScript({
             }),
             getReelMedia,
             getReelComments,
+            getReelCommentReplies,
+            createReelComment,
+            setReelCommentLiked,
         };
         for (const name of REMOTE_RPC_NAMES) {
             const handler = handlers[name] as (payload: unknown) => Promise<unknown>;

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+    buildReelCommentRepliesPath,
     INSTAGRAM_GRAPHQL_OPERATIONS as operations,
     isInstagramGraphqlOperationName,
 } from '../../lib/instagram-api/catalog.ts';
@@ -101,6 +102,24 @@ test('text and read builders preserve captured nulls and string timestamps', () 
             },
         },
     );
+});
+
+test('message editing uses the captured mutation variables', () => {
+    const operation = operations.IGDirectEditMessageMutation;
+    assert.equal(operation.docId, '32480262318254796');
+    assert.equal(operation.friendlyName, 'IGDirectEditMessageMutation');
+    assert.deepEqual(operation.buildVariables({
+        threadFbid: '1020994220298545',
+        targetMessageId: 'mid.$message',
+        text: 'edited text',
+        offlineThreadingId: '7492703599464415944',
+    }, context), {
+        thread_id: '1020994220298545',
+        target_item_id: null,
+        body: { sensitive_string_value: 'edited text' },
+        offline_threading_id: '7492703599464415944',
+        target_message_id: 'mid.$message',
+    });
 });
 
 test('reel forwarding uses the existing-thread branch from the captured client', () => {
@@ -207,6 +226,40 @@ test('reel like and save mutations match captured documents and variables', () =
     ]);
 });
 
+test('comment like mutation matches the captured document and variables', () => {
+    const operation = operations.PolarisCommentActionsLikeMutation;
+    assert.deepEqual([
+        operation.friendlyName,
+        operation.docId,
+        operation.kind,
+        operation.buildVariables({ commentId: '18137453275573708', clientMutationId: '3' }, context),
+    ], [
+        'PolarisCommentActionsLikeMutation',
+        '27184292767848867',
+        'mutation',
+        { input: {
+            comment_id: '18137453275573708',
+            actor_id: context.viewerId,
+            client_mutation_id: '3',
+        } },
+    ]);
+});
+
+test('comment reply requests preserve the captured initial and continuation query exactly', () => {
+    assert.equal(
+        buildReelCommentRepliesPath({ mediaId: '3934614549645286134', commentId: '18118594957890789' }),
+        '/api/v1/media/3934614549645286134/comments/18118594957890789/child_comments/?min_id=&is_chronological=true&paging_direction=view_more',
+    );
+    assert.equal(
+        buildReelCommentRepliesPath({
+            mediaId: '3934614549645286134',
+            commentId: '18118594957890789',
+            cursor: 'AQHSekuoBSw-07Qpuh8JYCJhfoKNJtH8Emoe1fPesCfqh8JcGri5dLRXoBJFQPt1nCQXFXLUv0zQEiVXeWnCFBMmEw',
+        }),
+        '/api/v1/media/3934614549645286134/comments/18118594957890789/child_comments/?min_id=AQHSekuoBSw-07Qpuh8JYCJhfoKNJtH8Emoe1fPesCfqh8JcGri5dLRXoBJFQPt1nCQXFXLUv0zQEiVXeWnCFBMmEw&is_chronological=true&paging_direction=view_more',
+    );
+});
+
 test('hover-card friendship lookup uses the captured liker identity request', () => {
     const operation = operations.PolarisUserHoverCardContentV2Query;
     assert.deepEqual([
@@ -236,7 +289,7 @@ test('conversation pin and unpin use distinct current web documents and exact va
 });
 
 test('catalog is a closed DM allowlist', () => {
-    assert.equal(Object.keys(operations).length, 38);
+    assert.equal(Object.keys(operations).length, 40);
     assert.equal(isInstagramGraphqlOperationName('IGDirectReactionSendMutation'), true);
     for (const shellOperation of [
         'PolarisFeedTimelinePaginationQuery',

@@ -68,6 +68,19 @@ const musicParams = (playlistId: string) => ({
     product: 'IG_DIRECT_MUSIC_STICKER',
 });
 
+export function buildReelCommentRepliesPath(input: {
+    mediaId: string;
+    commentId: string;
+    cursor?: string;
+}) {
+    const query = new URLSearchParams({
+        min_id: input.cursor ?? '',
+        is_chronological: 'true',
+        paging_direction: 'view_more',
+    });
+    return `/api/v1/media/${input.mediaId}/comments/${input.commentId}/child_comments/?${query}`;
+}
+
 export const INSTAGRAM_GRAPHQL_OPERATIONS = {
     PolarisDirectInboxQuery: query(
         FRIENDLY_NAMES.inbox,
@@ -256,6 +269,22 @@ export const INSTAGRAM_GRAPHQL_OPERATIONS = {
             send_attribution: 'igd_web_chat_tab:in_thread',
         }),
     ),
+    IGDirectEditMessageMutation: mutation(
+        FRIENDLY_NAMES.editText,
+        DOC_IDS.editText,
+        (input: {
+            threadFbid: string;
+            targetMessageId: string;
+            text: string;
+            offlineThreadingId: string;
+        }) => ({
+            thread_id: input.threadFbid,
+            target_item_id: null,
+            body: { sensitive_string_value: input.text },
+            offline_threading_id: input.offlineThreadingId,
+            target_message_id: input.targetMessageId,
+        }),
+    ),
     IGDirectReelShareMutation: mutation(
         FRIENDLY_NAMES.forwardReel,
         DOC_IDS.forwardReel,
@@ -334,6 +363,17 @@ export const INSTAGRAM_GRAPHQL_OPERATIONS = {
         (input: { mediaId: string; clientMutationId: string }, context) => ({
             input: {
                 media_id: input.mediaId,
+                actor_id: context.viewerId,
+                client_mutation_id: input.clientMutationId,
+            },
+        }),
+    ),
+    PolarisCommentActionsLikeMutation: mutation(
+        FRIENDLY_NAMES.likeComment,
+        DOC_IDS.likeComment,
+        (input: { commentId: string; clientMutationId: string }, context) => ({
+            input: {
+                comment_id: input.commentId,
                 actor_id: context.viewerId,
                 client_mutation_id: input.clientMutationId,
             },

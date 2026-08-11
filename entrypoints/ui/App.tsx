@@ -1016,6 +1016,9 @@ function MessagePane({
         const currentHistory = store.state.histories[thread.key];
         const scroller = scrollerRef.current;
         if (!currentHistory || !scroller) return false;
+        if (currentHistory.editing) {
+            return store.submitMessageEdit(thread.key, currentHistory.draft);
+        }
         // This measurement intentionally happens immediately before dispatch.
         const latestLoadedId = currentHistory.listedIds.at(-1);
         const followNewest = Boolean(
@@ -1094,6 +1097,16 @@ function MessagePane({
     }, [store, thread.key]);
     const navigateToReply = useCallback((messageId: string, returnId: string) => {
         void store.navigateToReply(thread.key, messageId, returnId);
+    }, [store, thread.key]);
+    const selectEdit = useCallback((messageId: string) => {
+        if (!store.startMessageEdit(thread.key, messageId)) return;
+        requestAnimationFrame(() => {
+            if (store.state.selectedThreadId !== thread.key) return;
+            const textarea = scrollerRef.current?.closest('.conversation')
+                ?.querySelector<HTMLTextAreaElement>('.composer textarea');
+            textarea?.focus({ preventScroll: true });
+            textarea?.select();
+        });
     }, [store, thread.key]);
     const hasReplyReturn = Boolean(history?.replyReturnStack.length);
     const showDownNavigation = hasReplyReturn || hasNewerMessages;
@@ -1217,6 +1230,7 @@ function MessagePane({
                                                         grouped={index > 0}
                                                         showDate={group.showDate && index === 0}
                                                          onReply={selectReply}
+                                                         onEdit={selectEdit}
                                                          onNavigateToReply={navigateToReply}
                                                     />
                                                 );
@@ -1259,7 +1273,7 @@ function MessagePane({
             {showDownNavigation && (
                 <button
                     type="button"
-                    className={`newest-message${history?.replyTargetId ? ' newest-message--replying' : ''}`}
+                    className={`newest-message${history?.replyTargetId || history?.editing ? ' newest-message--replying' : ''}`}
                     onClick={useDownNavigation}
                     aria-label={downNavigationLabel}
                     title={downNavigationLabel}
@@ -1278,6 +1292,7 @@ function MessagePane({
                     threadId={thread.key}
                     onDraftChange={store.setDraft}
                     onCancelReply={() => store.setReplyTarget(thread.key)}
+                    onCancelEdit={() => store.cancelMessageEdit(thread.key)}
                     onSubmit={submitDraft}
                 />
             )}
@@ -1300,6 +1315,7 @@ const MessageRow = memo(function MessageRow({
     grouped,
     showDate,
     onReply,
+    onEdit,
     onNavigateToReply,
 }: {
     store: FrontendStore;
@@ -1316,6 +1332,7 @@ const MessageRow = memo(function MessageRow({
     grouped: boolean;
     showDate: boolean;
     onReply: (messageId: string) => void;
+    onEdit: (messageId: string) => void;
     onNavigateToReply: (messageId: string, returnId: string) => void;
 }) {
     const [menuPoint, setMenuPoint] = useState<SurfacePoint>();
@@ -1415,8 +1432,10 @@ const MessageRow = memo(function MessageRow({
         });
     };
 
+    const canEdit = Boolean(menuPoint && store.canEditMessage(threadId, message.id));
     const menuItems: ContextMenuItem[] = eligibleForActions ? [
         { label: 'Reply', action: () => onReply(message.id) },
+        ...(canEdit ? [{ label: 'Edit', action: () => onEdit(message.id) }] : []),
         ...(canForward ? [{
             label: 'Forward',
             action: openForwarding,
@@ -1470,7 +1489,13 @@ const MessageRow = memo(function MessageRow({
         >
             {showDate && (
                 <div className="message-date">
-                    <time className="status-surface" dateTime={new Date(message.ts).toISOString()}>{formatMessageDate(message.ts)}</time>
+                    <time
+                        className="status-surface"
+                        dateTime={new Date(message.ts).toISOString()}
+                        title={formatFullDateTime(message.ts)}
+                    >
+                        {formatMessageDate(message.ts)}
+                    </time>
                 </div>
             )}
             <div className={`message${outgoing ? ' message--outgoing' : ''}${grouped ? ' message--grouped' : ''}${isMediaMessage ? ' message--media' : ''}${message.kind === 'reaction_log' || message.kind === 'activity' ? ' message--log' : ''}`}>
@@ -1488,7 +1513,10 @@ const MessageRow = memo(function MessageRow({
                     )}
                     <div className={`message__body${isMediaMessage ? ' message__body--media' : ''}`}>
                         <MessageContent store={store} message={message} reelItem={reelItem} />
-                        <time dateTime={new Date(message.ts).toISOString()}>
+                        <time
+                            dateTime={new Date(message.ts).toISOString()}
+                            title={formatFullDateTime(message.ts)}
+                        >
                             {formatMessageTime(message.ts)}
                         </time>
                     </div>
@@ -2239,26 +2267,44 @@ function Composer({
     threadId,
     onDraftChange,
     onCancelReply,
+    onCancelEdit,
     onSubmit,
 }: {
     history: HistoryState;
     threadId: string;
     onDraftChange: (threadId: string, draft: string) => void;
     onCancelReply: () => void;
+    onCancelEdit: () => void;
     onSubmit: () => boolean;
 }) {
     const textareaRef = useRef<HTMLTextAreaElement>(null as unknown as HTMLTextAreaElement);
     const replyTarget = history.replyTargetId
         ? history.byId[history.replyTargetId]
         : undefined;
+    const editTarget = history.editing
+        ? history.byId[history.editing.messageId]
+        : undefined;
+    const isEditing = Boolean(history.editing && editTarget?.kind === 'text');
+    const isSaving = history.editing?.status === 'pending';
+    const unchangedEdit = editTarget?.kind === 'text' && history.draft.trim() === editTarget.text;
+    const cancelEdit = () => {
+        const savedDraft = history.editing?.savedDraft ?? '';
+        onCancelEdit();
+        if (textareaRef.current) textareaRef.current.value = savedDraft;
+    };
     const submit = (event?: FormEvent<HTMLFormElement>) => {
         event?.preventDefault();
-        if (onSubmit() && textareaRef.current) textareaRef.current.value = '';
+        if (onSubmit() && textareaRef.current && !isEditing) textareaRef.current.value = '';
     };
     const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+        if (event.key === 'Escape' && isEditing && !isSaving) {
+            event.preventDefault();
+            cancelEdit();
+            return;
+        }
         if (event.key !== 'Enter' || event.shiftKey) return;
         event.preventDefault();
-        if (onSubmit()) event.currentTarget.value = '';
+        if (onSubmit() && !isEditing) event.currentTarget.value = '';
     };
     const changeDraft = (event: ChangeEvent<HTMLTextAreaElement>) => {
         const textarea = event.currentTarget;
@@ -2274,9 +2320,29 @@ function Composer({
             ) textarea.value = value;
         });
     };
+    useEffect(() => {
+        if (history.editing?.status === 'error') textareaRef.current?.focus();
+    }, [history.editing?.status]);
 
     return (
         <form className="composer" onSubmit={submit}>
+            {isEditing && (
+                <div className="composer__edit">
+                    <div>
+                        <span className="composer__edit-label">Editing message</span>
+                        <span>Changes update the original message.</span>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={cancelEdit}
+                        aria-label="Cancel editing message"
+                        disabled={isSaving}
+                    >×</button>
+                </div>
+            )}
+            {history.editing?.error && (
+                <p className="composer__edit-error" role="alert">Edit failed: {history.editing.error}</p>
+            )}
             {replyTarget && (
                 <div className="composer__reply">
                     <span className="composer__reply-label">Replying to</span>
@@ -2285,17 +2351,24 @@ function Composer({
                 </div>
             )}
             <div className="composer__controls">
-                <label className="visually-hidden" htmlFor={`message-draft-${threadId}`}>Message</label>
+                <label className="visually-hidden" htmlFor={`message-draft-${threadId}`}>
+                    {isEditing ? 'Edit message' : 'Message'}
+                </label>
                 <textarea
                     ref={textareaRef}
                     id={`message-draft-${threadId}`}
                     rows={1}
                     value={history.draft}
-                    placeholder="Message"
+                    placeholder={isEditing ? 'Edit message' : 'Message'}
+                    disabled={isSaving}
                     onChange={changeDraft}
                     onKeyDown={onKeyDown}
                 />
-                <button type="submit" disabled={!history.draft.trim()}>Send</button>
+                <button
+                    type="submit"
+                    aria-busy={isSaving}
+                    disabled={isSaving || !history.draft.trim() || Boolean(isEditing && unchangedEdit)}
+                >{isSaving ? 'Saving…' : isEditing ? 'Save' : 'Send'}</button>
             </div>
         </form>
     );
@@ -2564,6 +2637,67 @@ function ForwardModal({ store }: AppProps) {
                 )}
             </section>
         </div>
+    );
+}
+
+function ReelCommentRow({
+    store,
+    reel,
+    commentId,
+    isReply = false,
+}: {
+    store: FrontendStore;
+    reel: ReelState;
+    commentId: string;
+    isReply?: boolean;
+}) {
+    const comment = reel.comments.byId[commentId];
+    if (!comment) return undefined;
+    const mutation = reel.comments.likeMutations[commentId];
+    const replies = reel.comments.repliesByParent[commentId];
+    const repliesOpen = Boolean(replies);
+    return (
+        <article className={`reel-comment${isReply ? ' reel-comment--reply' : ''}`}>
+            <div className="reel-comment__body">
+                <strong>@{comment.author.username}</strong>
+                <p>{comment.text}</p>
+                <div className="reel-comment__actions">
+                    <button
+                        type="button"
+                        aria-label={`${comment.hasLiked ? 'Unlike' : 'Like'} comment by @${comment.author.username}`}
+                        aria-pressed={comment.hasLiked}
+                        aria-busy={mutation?.status === 'pending'}
+                        disabled={mutation?.status === 'pending'}
+                        onClick={() => { void store.toggleReelCommentLiked(reel.shortcode, commentId); }}
+                    >{comment.hasLiked ? '♥' : '♡'}{comment.likeCount > 0 ? ` ${comment.likeCount.toLocaleString()}` : ''}</button>
+                    {!isReply && <button
+                        type="button"
+                        onClick={() => store.setReelCommentReplyTarget(reel.shortcode, commentId)}
+                    >Reply</button>}
+                    {!isReply && comment.childCommentCount > 0 && !repliesOpen && <button
+                        type="button"
+                        onClick={() => { void store.openReelCommentReplies(reel.shortcode, commentId); }}
+                    >View {comment.childCommentCount.toLocaleString()} {comment.childCommentCount === 1 ? 'reply' : 'replies'}</button>}
+                </div>
+                {mutation?.status === 'error' && <p role="alert" className="reel-error">Comment like failed: {mutation.error}</p>}
+            </div>
+            {replies && <div className="reel-comment__replies" aria-label={`Replies to @${comment.author.username}`}>
+                {replies.status === 'loading' && <p role="status">Loading replies…</p>}
+                {replies.listedIds.map(id => (
+                    <ReelCommentRow key={id} store={store} reel={reel} commentId={id} isReply />
+                ))}
+                {(replies.status === 'error' || replies.failedCursor) && <div role="alert" className="reel-error">
+                    <span>{replies.error ?? 'Could not load replies'}</span>
+                    <button type="button" onClick={() => { void store.retryReelCommentReplies(reel.shortcode, commentId); }}>Retry replies</button>
+                </div>}
+                {replies.isLoadingMore && <p role="status">Loading more replies…</p>}
+                {replies.status === 'ready' && replies.hasNextPage && !replies.failedCursor && <button
+                    type="button"
+                    className="reel-comment__more"
+                    onClick={() => { void store.loadNextReelCommentReplies(reel.shortcode, commentId); }}
+                >View more replies</button>}
+            </div>}
+        </article>
     );
 }
 
@@ -2856,6 +2990,36 @@ function ReelModal({
                             {reel.saveMutation?.status === 'error' && <p role="alert" className="reel-error">Save failed: {reel.saveMutation.error}</p>}
                             <section className="reel-comments" aria-label="Comments">
                                 <h3>Comments <span>{media.commentCount.toLocaleString()}</span></h3>
+                                <form
+                                    className="reel-comment-composer"
+                                    onSubmit={(event: FormEvent<HTMLFormElement>) => {
+                                        event.preventDefault();
+                                        void store.submitReelComment(reel.shortcode);
+                                    }}
+                                >
+                                    {reel.comments.replyToCommentId && <div className="reel-comment-composer__reply">
+                                        <span>Replying to @{reel.comments.byId[reel.comments.replyToCommentId]?.author.username}</span>
+                                        <button type="button" onClick={() => store.setReelCommentReplyTarget(reel.shortcode)}>Cancel reply</button>
+                                    </div>}
+                                    <label>
+                                        <span className="visually-hidden">{reel.comments.replyToCommentId ? 'Write a reply' : 'Write a comment'}</span>
+                                        <textarea
+                                            rows={2}
+                                            maxLength={2200}
+                                            value={reel.comments.draft}
+                                            disabled={reel.comments.isSubmitting}
+                                            placeholder={reel.comments.replyToCommentId ? 'Write a reply…' : 'Add a comment…'}
+                                            onChange={(event: ChangeEvent<HTMLTextAreaElement>) =>
+                                                store.setReelCommentDraft(reel.shortcode, event.currentTarget.value)}
+                                        />
+                                    </label>
+                                    <button
+                                        type="submit"
+                                        disabled={reel.comments.isSubmitting || !reel.comments.draft.trim()}
+                                        aria-busy={reel.comments.isSubmitting}
+                                    >{reel.comments.isSubmitting ? 'Posting…' : 'Post'}</button>
+                                </form>
+                                {reel.comments.submitError && <p role="alert" className="reel-error">Comment failed: {reel.comments.submitError}</p>}
                                 {reel.comments.status === 'loading' && <p role="status">Loading comments…</p>}
                                 {(reel.comments.status === 'error' || reel.comments.failedCursor) && <div role="alert" className="reel-error">
                                     <span>{reel.comments.error ?? 'Could not load comments'}</span>
@@ -2865,8 +3029,7 @@ function ReelModal({
                                 </div>}
                                 {reel.comments.status === 'ready' && reel.comments.listedIds.length === 0 && <p>No comments yet</p>}
                                 {reel.comments.listedIds.map(id => {
-                                    const comment = reel.comments.byId[id];
-                                    return <article key={id} className="reel-comment"><strong>@{comment.author.username}</strong><p>{comment.text}</p></article>;
+                                    return <ReelCommentRow key={id} store={store} reel={reel} commentId={id} />;
                                 })}
                                 {reel.comments.isLoadingMore && <p role="status">Loading more comments…</p>}
                             </section>
@@ -3933,6 +4096,13 @@ function formatMessageDate(timestamp: number) {
         month: 'short',
         day: 'numeric',
         year: 'numeric',
+    });
+}
+
+function formatFullDateTime(timestamp: number) {
+    return new Date(timestamp).toLocaleString([], {
+        dateStyle: 'full',
+        timeStyle: 'long',
     });
 }
 

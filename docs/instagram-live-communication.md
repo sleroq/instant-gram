@@ -94,3 +94,23 @@ Read responses also carry complete authoritative arrays: accepted empty or
 timestamp-less arrays may remove/replace earlier reactions. The UI rejects stale
 overlapping reads by request ownership and local reaction revisions, not by
 comparing reaction timestamps.
+
+## Edit a text message
+
+`docs/message-editing.har` captures `IGDirectEditMessageMutation`,
+`doc_id=32480262318254796`, with:
+
+```json
+{
+    "thread_id": "<thread_fbid>",
+    "target_item_id": null,
+    "body": { "sensitive_string_value": "edited text" },
+    "offline_threading_id": "<client-generated numeric id>",
+    "target_message_id": "<target mid.$... message id>"
+}
+```
+
+The receipt is
+`data.direct_edit_message_with_slide_messaging_response` and contains matching
+`message_id`/`id` plus the original message `timestamp_ms`. The capture proves
+text editing only; media and other message variants are not exposed as editable.

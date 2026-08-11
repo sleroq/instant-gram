@@ -14,6 +14,7 @@ export type CompleteUiRpc = {
 export type UiRpc = Pick<
     CompleteUiRpc,
     'getInbox' | 'getThread' | 'getReelMedia' | 'getReelComments' |
+    'getReelCommentReplies' | 'createReelComment' | 'setReelCommentLiked' |
     'setReelLiked' | 'setReelSaved' | 'getPins' | 'togglePin'
 >;
 
@@ -26,11 +27,15 @@ export const uiRpc: CompleteUiRpc = {
     getThread: payload => call('getThread', payload),
     getReelMedia: payload => call('getReelMedia', payload),
     getReelComments: payload => call('getReelComments', payload),
+    getReelCommentReplies: payload => call('getReelCommentReplies', payload),
+    createReelComment: payload => call('createReelComment', payload),
+    setReelCommentLiked: payload => call('setReelCommentLiked', payload),
     setReelLiked: payload => call('setReelLiked', payload),
     setReelSaved: payload => call('setReelSaved', payload),
     getPins: () => call('getPins', undefined),
     togglePin: payload => call('togglePin', payload),
     sendText: payload => call('sendText', payload),
+    editText: payload => call('editText', payload),
     forwardMessage: payload => call('forwardMessage', payload),
     setReaction: payload => call('setReaction', payload),
     markThreadRead: payload => call('markThreadRead', payload),

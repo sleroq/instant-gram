@@ -29,6 +29,8 @@ export type MessageFallback = {
 
 type MessageMetadata = {
     id: string;
+    /** True only when `id` was synthesized because Instagram returned no message ID. */
+    isSyntheticId?: true;
     ts: number;
     /** Authoritative reaction state attached to the target message. */
     reactions?: MessageReaction[];
@@ -163,6 +165,10 @@ export type ReelComment = {
     likeCount: number;
     hasLiked: boolean;
     childCommentCount: number;
+    /** Present only for replies; points at the normalized top-level comment. */
+    parentCommentId?: string;
+    /** The exact comment replied to when Instagram returns it. */
+    repliedToCommentId?: string;
     author: ReelAuthor;
 };
 export type ReelComments = Page<ReelComment> & {
@@ -171,6 +177,8 @@ export type ReelComments = Page<ReelComment> & {
 };
 export type ReelLikeReceipt = { mediaId: string; hasLiked: boolean };
 export type ReelSaveReceipt = { mediaId: string; hasSaved: boolean };
+export type ReelCommentLikeReceipt = { commentId: string; hasLiked: boolean };
+export type ReelCommentReplies = Page<ReelComment> & { parentCommentId: string };
 export type Page<T> = { items: T[]; cursor?: string; hasNextPage: boolean };
 export type ThreadMessages = Page<Message> & {
     thread?: Thread;
@@ -223,6 +231,7 @@ export type SentMessage = {
     clientRequestId: string;
 };
 export type SentTextMessage = SentMessage & { timestampMs: number };
+export type EditedTextMessage = { messageId: string; timestampMs: number };
 export type ForwardMessageContent =
     | { kind: 'text'; text: string }
     | { kind: 'reel'; mediaId: string }
@@ -354,6 +363,20 @@ export type CoreRpcMap = {
         mediaId: string;
         cursor?: string;
     }) => Result<ReelComments>;
+    getReelCommentReplies: (payload: {
+        mediaId: string;
+        commentId: string;
+        cursor?: string;
+    }) => Result<ReelCommentReplies>;
+    createReelComment: (payload: {
+        mediaId: string;
+        text: string;
+        replyToCommentId?: string;
+    }) => Result<ReelComment>;
+    setReelCommentLiked: (payload: {
+        commentId: string;
+        liked: boolean;
+    }) => Result<ReelCommentLikeReceipt>;
     setReelLiked: (payload: {
         mediaId: string;
         liked: boolean;
@@ -389,6 +412,12 @@ export type InstagramRpcMap = {
         replyToMessageId?: string;
         offlineThreadingId: string;
     }) => Result<SentTextMessage>;
+    editText: (payload: {
+        threadFbid: string;
+        messageId: string;
+        text: string;
+        offlineThreadingId: string;
+    }) => Result<EditedTextMessage>;
     forwardMessage: (payload: {
         targetThreadFbid: string;
         sourceThreadIgId: string;
@@ -430,4 +459,4 @@ export type InstagramRpcMap = {
 
 /** Capabilities exposed to the extension UI and routed through the background. */
 export type RpcMap = CoreRpcMap &
-    Pick<InstagramRpcMap, 'sendText' | 'forwardMessage' | 'setReaction' | 'markThreadRead'>;
+    Pick<InstagramRpcMap, 'sendText' | 'editText' | 'forwardMessage' | 'setReaction' | 'markThreadRead'>;

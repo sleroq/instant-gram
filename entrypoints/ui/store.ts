@@ -48,6 +48,7 @@ export type HistoryState = {
     scrollAnchor?: { id: string; offset: number };
     draft: string;
     replyTargetId?: string;
+    editing?: MessageEditingState;
     replyNavigation?: {
         requestId: number;
         targetId: string;
@@ -89,6 +90,21 @@ export type ReactionMutation = {
     rollbackReactions?: MessageReaction[];
 };
 
+export type MessageEditingState = {
+    messageId: string;
+    savedDraft: string;
+    savedReplyTargetId?: string;
+    status: 'editing' | 'pending' | 'error';
+    offlineThreadingId?: string;
+    error?: string;
+};
+
+type MessageEditReceipt = {
+    text: string;
+    expiresAtMs: number;
+    remainingMismatches: number;
+};
+
 export type PinMutation = {
     pin: boolean;
     status: 'pending' | 'error';
@@ -110,6 +126,24 @@ export type ReelMutation = {
     rollbackCount?: number;
 };
 
+export type ReelCommentMutation = {
+    desired: boolean;
+    status: 'pending' | 'error';
+    error?: string;
+    rollbackHasLiked?: boolean;
+    rollbackCount?: number;
+};
+
+export type ReelRepliesState = {
+    listedIds: string[];
+    cursor?: string;
+    hasNextPage: boolean;
+    status: Status;
+    isLoadingMore: boolean;
+    failedCursor?: string;
+    error?: string;
+};
+
 export type ReelState = {
     shortcode: string;
     mediaIdHint?: string;
@@ -126,6 +160,12 @@ export type ReelState = {
         isLoadingMore: boolean;
         failedCursor?: string;
         error?: string;
+        repliesByParent: Record<string, ReelRepliesState>;
+        likeMutations: Record<string, ReelCommentMutation>;
+        draft: string;
+        replyToCommentId?: string;
+        isSubmitting: boolean;
+        submitError?: string;
     };
     likeMutation?: ReelMutation;
     saveMutation?: ReelMutation;
@@ -166,7 +206,7 @@ export type GlobalNotification = {
 
 export type FrontendStoreRpc = UiRpc & Pick<
     CompleteUiRpc,
-    'sendText' | 'forwardMessage' | 'setReaction' | 'markThreadRead'
+    'sendText' | 'editText' | 'forwardMessage' | 'setReaction' | 'markThreadRead'
 >;
 
 type IncomingSyncEnvironment = {
@@ -205,6 +245,22 @@ export type FrontendState = {
 const SIGNED_64_MAX = 9_223_372_036_854_775_807n;
 const NINETEEN_DIGIT_MIN = 1_000_000_000_000_000_000n;
 const OFFLINE_THREADING_RANDOM_MASK = 0x3f_ffff;
+export const MESSAGE_EDIT_WINDOW_MS = 15 * 60 * 1_000;
+const MESSAGE_EDIT_OVERLAY_MS = 2 * 60 * 1_000;
+const MESSAGE_EDIT_OVERLAY_MISMATCHES = 3;
+
+/** Instagram exposes editing for the viewer's server-backed text messages only.
+ * The exact 15-minute boundary is inclusive; the action boundary repeats this check.
+ */
+export function isMessageEditable(
+    message: Message,
+    viewerId: string | undefined,
+    nowMs: number,
+): message is Extract<Message, { kind: 'text' }> {
+    return message.kind === 'text' && !message.id.startsWith('local:') && !message.isSyntheticId &&
+        message.senderId === viewerId && Number.isFinite(message.ts) && message.ts > 0 &&
+        message.ts <= nowMs && nowMs - message.ts <= MESSAGE_EDIT_WINDOW_MS;
+}
 
 export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStoreOptions = {}) {
     const state: FrontendState = {
@@ -241,6 +297,8 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
     let replyPrefetchIntent = 0;
     let visibleReplyPrefetchKey = '';
     const sendRequests = new Map<string, symbol>();
+    const editRequests = new Map<string, symbol>();
+    const messageEditReceipts = new Map<string, MessageEditReceipt>();
     const reactionRequests = new Map<string, symbol>();
     const pinRequests = new Map<string, symbol>();
     const readRequests = new Map<string, symbol>();
@@ -248,10 +306,16 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
     const pendingReads = new Map<string, { messageId: string; requireDisplayed: boolean }>();
     const reelMediaRequests = new Map<string, symbol>();
     const reelCommentRequests = new Map<string, symbol>();
+    const reelReplyRequests = new Map<string, symbol>();
+    const reelCommentLikeRequests = new Map<string, symbol>();
+    const reelCommentCreateRequests = new Map<string, symbol>();
     const reelLikeRequests = new Map<string, symbol>();
     const reelSaveRequests = new Map<string, symbol>();
     const reelLikeReceiptRevisions = new Map<string, number>();
     const reelSaveReceiptRevisions = new Map<string, number>();
+    const reelCommentCreateReceiptRevisions = new Map<string, number>();
+    const reelCommentChildCountReceiptRevisions = new Map<string, number>();
+    const reelCommentLikeReceiptRevisions = new Map<string, Map<string, number>>();
     const reelMediaSettledListeners = new Map<string, Set<() => void>>();
     const reelPreloadQueue: { shortcode: string; mediaId?: string; budgeted: boolean }[] = [];
     const queuedReelPreloads = new Set<string>();
@@ -346,6 +410,10 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
                 hasNextPage: false,
                 status: 'idle',
                 isLoadingMore: false,
+                repliesByParent: {},
+                likeMutations: {},
+                draft: '',
+                isSubmitting: false,
             },
         };
     }
@@ -370,6 +438,7 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
         const requestGeneration = generation;
         const likeReceiptRevision = reelLikeReceiptRevisions.get(shortcode) ?? 0;
         const saveReceiptRevision = reelSaveReceiptRevisions.get(shortcode) ?? 0;
+        const commentCreateReceiptRevision = reelCommentCreateReceiptRevisions.get(shortcode) ?? 0;
         reelMediaRequests.set(shortcode, request);
         reel.status = 'loading';
         reel.error = undefined;
@@ -436,6 +505,10 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
                 (reelSaveReceiptRevisions.get(shortcode) ?? 0) !== saveReceiptRevision
             ) {
                 refreshedMedia = { ...refreshedMedia, hasSaved: currentMedia.hasSaved };
+            }
+            if (currentMedia &&
+                (reelCommentCreateReceiptRevisions.get(shortcode) ?? 0) !== commentCreateReceiptRevision) {
+                refreshedMedia = { ...refreshedMedia, commentCount: currentMedia.commentCount };
             }
             reel.media = refreshedMedia;
             reel.mediaIdHint = result.value.id;
@@ -513,7 +586,39 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
         drainReelPreloads();
     }
 
-    function mergeThreads(items: Thread[], readRevision: number) {
+    function reconcileMessageEdit(
+        threadId: string,
+        message: Message,
+        source: 'inbox' | 'history',
+        deferReceiptDecision = false,
+    ) {
+        const key = reactionKey(threadId, message.id);
+        const receipt = messageEditReceipts.get(key);
+        if (!receipt || message.kind !== 'text') return message;
+
+        const matchesReceipt = message.text === receipt.text;
+        const canProtect = Date.now() <= receipt.expiresAtMs && receipt.remainingMismatches > 0;
+        if (deferReceiptDecision) {
+            return !matchesReceipt && canProtect ? { ...message, text: receipt.text } : message;
+        }
+        if (matchesReceipt) {
+            messageEditReceipts.delete(key);
+            return message;
+        }
+        if (!canProtect) {
+            messageEditReceipts.delete(key);
+            return message;
+        }
+        if (source === 'history') receipt.remainingMismatches--;
+        return { ...message, text: receipt.text };
+    }
+
+    function mergeThreads(
+        items: Thread[],
+        readRevision: number,
+        deferredEditKeys?: Set<string>,
+        deferredAcknowledgements?: Set<string>,
+    ) {
         let added = 0;
         for (const thread of items) {
             const existing = state.inbox.byId[thread.key];
@@ -525,13 +630,30 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
                 (threadMutationRevisions.get(thread.key) ?? 0) > readRevision ||
                 existing.lastActivityMs > thread.lastActivityMs
             );
-            const merged = preserveOutgoing
+            let merged = preserveOutgoing
                 ? {
                     ...thread,
                     lastActivityMs: existing.lastActivityMs,
                     lastMessage: existing.lastMessage,
                 }
                 : thread;
+            if (merged.lastMessage) {
+                const key = reactionKey(thread.key, merged.lastMessage.id);
+                const receipt = messageEditReceipts.get(key);
+                if (
+                    !preserveOutgoing && deferredEditKeys?.has(key) && receipt &&
+                    thread.lastMessage?.kind === 'text' && thread.lastMessage.text === receipt.text
+                ) deferredAcknowledgements?.add(key);
+                merged = {
+                    ...merged,
+                    lastMessage: reconcileMessageEdit(
+                        thread.key,
+                        merged.lastMessage,
+                        'inbox',
+                        deferredEditKeys?.has(key),
+                    ),
+                };
+            }
             const locallyReadMessageId = readMessageIds.get(thread.key);
             const preserveRead = locallyReadMessageId !== undefined &&
                 merged.lastMessage?.id === locallyReadMessageId;
@@ -565,6 +687,7 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
         history: HistoryState,
         message: Message,
         reactionRevisions: Map<string, number>,
+        deferEditReceiptDecision = false,
     ) {
         const existing = history.byId[message.id];
         const mutation = history.reactionMutations[message.id];
@@ -602,7 +725,12 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
         if (existing && !reactionsMatch(existing.reactions, merged.reactions)) {
             reactionStateRevisions.set(key, (reactionStateRevisions.get(key) ?? 0) + 1);
         }
+        merged = reconcileMessageEdit(threadId, merged, 'history', deferEditReceiptDecision);
         history.byId[message.id] = merged;
+        const inboxThread = state.inbox.byId[threadId];
+        if (inboxThread?.lastMessage?.id === message.id) {
+            state.inbox.byId[threadId] = { ...inboxThread, lastMessage: merged };
+        }
         return !existing;
     }
 
@@ -612,11 +740,28 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
         reactionRevisions?: Map<string, number>,
     ) {
         if (!started) return false;
-        mergeThreads(snapshot.threads, readRevision);
         const incomingHistory = snapshot.history;
         const history = incomingHistory
             ? state.histories[incomingHistory.threadId]
             : undefined;
+        const mergeHistory = Boolean(history && history.status === 'ready');
+        const deferredEditKeys = mergeHistory
+            ? new Set(incomingHistory!.messages.map(message =>
+                reactionKey(incomingHistory!.threadId, message.id)))
+            : undefined;
+        const deferredAcknowledgements = new Set<string>();
+        // Inbox previews merge first, but defer receipt decisions for messages
+        // whose authoritative history entities will be merged below. History
+        // then owns the one mismatch debit and writes its canonical result back
+        // to the matching inbox preview. A matching preview still acknowledges
+        // after that canonical merge, so contradictory stale history cannot
+        // regress this snapshot or keep the receipt alive.
+        mergeThreads(
+            snapshot.threads,
+            readRevision,
+            deferredEditKeys,
+            deferredAcknowledgements,
+        );
         if (history && history.status === 'ready') {
             const capturedReactionRevisions = reactionRevisions ?? new Map(
                 incomingHistory!.messages.map(message => [
@@ -633,8 +778,10 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
                     history,
                     message,
                     capturedReactionRevisions,
+                    deferredAcknowledgements.has(reactionKey(incomingHistory!.threadId, message.id)),
                 )) added.push(message.id);
             }
+            deferredAcknowledgements.forEach(key => messageEditReceipts.delete(key));
             if (added.length) {
                 const order = new Map(history.listedIds.map((id, index) => [id, index]));
                 history.listedIds = [...new Set([...history.listedIds, ...added])].sort((left, right) => {
@@ -1210,6 +1357,137 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
         emit();
         void runSend(threadId, send);
         return localId;
+    }
+
+    function restoreComposerAfterEdit(history: HistoryState, editing: MessageEditingState) {
+        history.draft = editing.savedDraft;
+        history.replyTargetId = editing.savedReplyTargetId;
+        history.editing = undefined;
+    }
+
+    function startMessageEdit(threadId: string, messageId: string) {
+        const history = state.histories[threadId];
+        const thread = state.inbox.byId[threadId];
+        const message = history?.byId[messageId];
+        if (!history || !thread?.threadFbid || history.status !== 'ready' || history.editing ||
+            !message || message.kind !== 'text' ||
+            !isMessageEditable(message, history.viewerId, Date.now())) return false;
+        history.editing = {
+            messageId,
+            savedDraft: history.draft,
+            savedReplyTargetId: history.replyTargetId,
+            status: 'editing',
+        };
+        history.draft = message.text;
+        history.replyTargetId = undefined;
+        emit();
+        return true;
+    }
+
+    function cancelMessageEdit(threadId: string) {
+        const history = state.histories[threadId];
+        const editing = history?.editing;
+        if (!history || !editing || editing.status === 'pending') return false;
+        restoreComposerAfterEdit(history, editing);
+        emit();
+        return true;
+    }
+
+    async function runMessageEdit(
+        threadId: string,
+        history: HistoryState,
+        editing: MessageEditingState,
+        text: string,
+    ) {
+        const thread = state.inbox.byId[threadId];
+        const key = reactionKey(threadId, editing.messageId);
+        if (!thread?.threadFbid || editRequests.has(key) || !editing.offlineThreadingId) {
+            if (state.histories[threadId] === history && history.editing === editing) {
+                editing.status = 'error';
+                editing.error = !thread?.threadFbid
+                    ? 'This conversation cannot edit messages.'
+                    : 'The edit could not be started. Please retry.';
+                emit();
+            }
+            return;
+        }
+        const request = Symbol(`edit:${editing.messageId}`);
+        const requestGeneration = generation;
+        editRequests.set(key, request);
+        sendRevisions.set(threadId, (sendRevisions.get(threadId) ?? 0) + 1);
+        try {
+            const result = await rpc.editText({
+                threadFbid: thread.threadFbid,
+                messageId: editing.messageId,
+                text,
+                offlineThreadingId: editing.offlineThreadingId,
+            });
+            if (generation !== requestGeneration || editRequests.get(key) !== request ||
+                state.histories[threadId] !== history || history.editing !== editing) return;
+            const current = history.byId[editing.messageId];
+            if (!result.ok || !current || current.kind !== 'text' ||
+                result.value.messageId !== editing.messageId ||
+                result.value.timestampMs !== current.ts) {
+                editing.status = 'error';
+                editing.error = result.ok
+                    ? 'Edited message receipt did not match the message.'
+                    : result.error.message;
+                return;
+            }
+            const editedMessage = { ...current, text };
+            history.byId[editing.messageId] = editedMessage;
+            messageEditReceipts.set(key, {
+                text,
+                expiresAtMs: Date.now() + MESSAGE_EDIT_OVERLAY_MS,
+                remainingMismatches: MESSAGE_EDIT_OVERLAY_MISMATCHES,
+            });
+            const inboxThread = state.inbox.byId[threadId];
+            if (inboxThread?.lastMessage?.id === editing.messageId) {
+                state.inbox.byId[threadId] = { ...inboxThread, lastMessage: editedMessage };
+                threadMutationRevisions.set(threadId, ++threadMutationRevision);
+            }
+            restoreComposerAfterEdit(history, editing);
+        } catch (error) {
+            if (generation === requestGeneration && editRequests.get(key) === request &&
+                state.histories[threadId] === history && history.editing === editing) {
+                editing.status = 'error';
+                editing.error = errorMessage(error);
+            }
+        } finally {
+            if (generation === requestGeneration && editRequests.get(key) === request) {
+                editRequests.delete(key);
+                sendRevisions.set(threadId, (sendRevisions.get(threadId) ?? 0) + 1);
+                emit();
+            }
+        }
+    }
+
+    function submitMessageEdit(threadId: string, text: string) {
+        const history = state.histories[threadId];
+        const editing = history?.editing;
+        const thread = state.inbox.byId[threadId];
+        const message = editing ? history?.byId[editing.messageId] : undefined;
+        const trimmed = text.trim();
+        if (!history || !editing || editing.status === 'pending' || !thread?.threadFbid || !message ||
+            message.kind !== 'text' || !trimmed ||
+            trimmed === message.text ||
+            !isMessageEditable(message, history.viewerId, Date.now())) {
+            if (history && editing && (!thread?.threadFbid || (message &&
+                !isMessageEditable(message, history.viewerId, Date.now())))) {
+                editing.status = 'error';
+                editing.error = thread?.threadFbid
+                    ? 'This message is no longer editable.'
+                    : 'This conversation cannot edit messages.';
+                emit();
+            }
+            return false;
+        }
+        editing.offlineThreadingId ??= nextOfflineThreadingId(history);
+        editing.status = 'pending';
+        editing.error = undefined;
+        emit();
+        void runMessageEdit(threadId, history, editing, trimmed);
+        return true;
     }
 
     function forwardingContent(message: Message) {
@@ -1842,6 +2120,11 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
         ) return !isLoadingMore && reel?.comments.status === 'ready';
         const request = Symbol(`reel-comments:${shortcode}`);
         const requestGeneration = generation;
+        const childCountReceiptRevisions = new Map(reel.comments.listedIds.map(id => [
+            id,
+            reelCommentChildCountReceiptRevisions.get(`${shortcode}:${id}`) ?? 0,
+        ]));
+        const likeReceiptRevisions = captureReelCommentLikeReceiptRevisions(reel);
         reelCommentRequests.set(shortcode, request);
         if (isLoadingMore) reel.comments.isLoadingMore = true;
         else reel.comments.status = 'loading';
@@ -1860,7 +2143,10 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
             const beforeCount = reel.comments.listedIds.length;
             for (const comment of result.value.items) {
                 if (!reel.comments.byId[comment.id]) reel.comments.listedIds.push(comment.id);
-                reel.comments.byId[comment.id] = comment;
+                mergeReelComment(reel, comment, {
+                    childCountReceiptRevisions,
+                    likeReceiptRevisions,
+                });
             }
             if (
                 isLoadingMore && result.value.hasNextPage &&
@@ -1887,6 +2173,306 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
             if (generation === requestGeneration && reelCommentRequests.get(shortcode) === request) {
                 reelCommentRequests.delete(shortcode);
                 reel.comments.isLoadingMore = false;
+                emit();
+            }
+        }
+    }
+
+    function mergeReelComment(
+        reel: ReelState,
+        comment: ReelComment,
+        readRevisions?: {
+            childCountReceiptRevisions?: Map<string, number>;
+            likeReceiptRevisions: Map<string, number>;
+        },
+    ) {
+        const existing = reel.comments.byId[comment.id];
+        const reconciled = existing && readRevisions?.childCountReceiptRevisions &&
+            (reelCommentChildCountReceiptRevisions.get(`${reel.shortcode}:${comment.id}`) ?? 0) !==
+                (readRevisions.childCountReceiptRevisions.get(comment.id) ?? 0)
+            ? { ...comment, childCommentCount: existing.childCommentCount }
+            : comment;
+        const likeReceiptRevision = reelCommentLikeReceiptRevisions
+            .get(reel.shortcode)?.get(comment.id) ?? 0;
+        const likeReceiptAdvanced = Boolean(existing && readRevisions &&
+            likeReceiptRevision !== (readRevisions.likeReceiptRevisions.get(comment.id) ?? 0));
+        const mutation = reel.comments.likeMutations[comment.id];
+        if (mutation?.status === 'pending') {
+            if (likeReceiptAdvanced) {
+                reel.comments.byId[comment.id] = {
+                    ...reconciled,
+                    hasLiked: existing!.hasLiked,
+                    likeCount: existing!.likeCount,
+                };
+                return;
+            }
+            mutation.rollbackHasLiked = reconciled.hasLiked;
+            mutation.rollbackCount = reconciled.likeCount;
+            reel.comments.byId[comment.id] = {
+                ...reconciled,
+                hasLiked: mutation.desired,
+                likeCount: Math.max(0, reconciled.likeCount + (mutation.desired === reconciled.hasLiked
+                    ? 0
+                    : mutation.desired ? 1 : -1)),
+            };
+            return;
+        }
+        reel.comments.byId[comment.id] = likeReceiptAdvanced
+            ? { ...reconciled, hasLiked: existing!.hasLiked, likeCount: existing!.likeCount }
+            : reconciled;
+    }
+
+    function captureReelCommentLikeReceiptRevisions(reel: ReelState) {
+        const revisions = reelCommentLikeReceiptRevisions.get(reel.shortcode);
+        return new Map(Object.keys(reel.comments.byId).map(commentId => [
+            commentId,
+            revisions?.get(commentId) ?? 0,
+        ]));
+    }
+
+    function recordReelCommentLikeReceipt(shortcode: string, commentId: string) {
+        let revisions = reelCommentLikeReceiptRevisions.get(shortcode);
+        if (!revisions) {
+            revisions = new Map();
+            reelCommentLikeReceiptRevisions.set(shortcode, revisions);
+        }
+        revisions.set(commentId, (revisions.get(commentId) ?? 0) + 1);
+    }
+
+    function repliesState(reel: ReelState, parentCommentId: string): ReelRepliesState {
+        const existing = reel.comments.repliesByParent[parentCommentId];
+        if (existing) return existing;
+        const localIds = Object.values(reel.comments.byId)
+            .filter(comment => comment.parentCommentId === parentCommentId)
+            .sort((a, b) => a.createdAtMs - b.createdAtMs)
+            .map(comment => comment.id);
+        return reel.comments.repliesByParent[parentCommentId] = {
+            listedIds: localIds,
+            hasNextPage: true,
+            status: 'idle',
+            isLoadingMore: false,
+        };
+    }
+
+    async function loadReelCommentReplies(
+        shortcode: string,
+        parentCommentId: string,
+        cursor?: string,
+    ) {
+        const reel = state.reels.byId[shortcode];
+        const mediaId = reel?.media?.id ?? reel?.mediaIdHint;
+        const parent = reel?.comments.byId[parentCommentId];
+        if (!reel || !mediaId || !parent || parent.parentCommentId) return false;
+        const replies = repliesState(reel, parentCommentId);
+        const key = `${shortcode}:${parentCommentId}`;
+        const isLoadingMore = cursor !== undefined;
+        if (!isLoadingMore && replies.status === 'idle' &&
+            replies.listedIds.length >= parent.childCommentCount) {
+            replies.status = 'ready';
+            replies.hasNextPage = false;
+            emit();
+            return true;
+        }
+        if (reelReplyRequests.has(key) || (isLoadingMore
+            ? replies.status !== 'ready' || !replies.hasNextPage || replies.cursor !== cursor ||
+                replies.failedCursor === cursor
+            : replies.status === 'ready')) return replies.status === 'ready';
+        const request = Symbol(`reel-replies:${key}`);
+        const requestGeneration = generation;
+        const likeReceiptRevisions = captureReelCommentLikeReceiptRevisions(reel);
+        reelReplyRequests.set(key, request);
+        if (isLoadingMore) replies.isLoadingMore = true;
+        else replies.status = 'loading';
+        replies.error = undefined;
+        emit();
+        try {
+            const result = await rpc.getReelCommentReplies({
+                mediaId,
+                commentId: parentCommentId,
+                ...(cursor ? { cursor } : {}),
+            });
+            if (generation !== requestGeneration || reelReplyRequests.get(key) !== request)
+                return false;
+            if (!result.ok || result.value.parentCommentId !== parentCommentId) {
+                if (isLoadingMore) replies.failedCursor = cursor;
+                else replies.status = 'error';
+                replies.error = result.ok
+                    ? 'Comment replies did not match the parent.'
+                    : result.error.message;
+                return false;
+            }
+            const before = replies.listedIds.length;
+            for (const comment of result.value.items) {
+                if (!replies.listedIds.includes(comment.id)) replies.listedIds.push(comment.id);
+                mergeReelComment(reel, comment, { likeReceiptRevisions });
+            }
+            if (isLoadingMore && result.value.hasNextPage && result.value.cursor === cursor &&
+                replies.listedIds.length === before) {
+                replies.failedCursor = cursor;
+                replies.error = 'Reply pagination made no progress.';
+                return false;
+            }
+            replies.cursor = result.value.cursor;
+            replies.hasNextPage = result.value.hasNextPage;
+            replies.status = 'ready';
+            replies.failedCursor = undefined;
+            return true;
+        } catch (error) {
+            if (generation === requestGeneration && reelReplyRequests.get(key) === request) {
+                if (isLoadingMore) replies.failedCursor = cursor;
+                else replies.status = 'error';
+                replies.error = errorMessage(error);
+            }
+            return false;
+        } finally {
+            if (generation === requestGeneration && reelReplyRequests.get(key) === request) {
+                reelReplyRequests.delete(key);
+                replies.isLoadingMore = false;
+                emit();
+            }
+        }
+    }
+
+    async function setReelCommentLiked(shortcode: string, commentId: string) {
+        const reel = state.reels.byId[shortcode];
+        const comment = reel?.comments.byId[commentId];
+        const key = `${shortcode}:${commentId}`;
+        if (!reel || !comment || reelCommentLikeRequests.has(key)) return false;
+        const desired = !comment.hasLiked;
+        const previousCount = comment.likeCount;
+        const request = Symbol(`reel-comment-like:${key}`);
+        const requestGeneration = generation;
+        reelCommentLikeRequests.set(key, request);
+        reel.comments.byId[commentId] = {
+            ...comment,
+            hasLiked: desired,
+            likeCount: Math.max(0, previousCount + (desired ? 1 : -1)),
+        };
+        reel.comments.likeMutations[commentId] = {
+            desired,
+            status: 'pending',
+            rollbackHasLiked: comment.hasLiked,
+            rollbackCount: previousCount,
+        };
+        emit();
+        try {
+            const result = await rpc.setReelCommentLiked({ commentId, liked: desired });
+            if (generation !== requestGeneration || reelCommentLikeRequests.get(key) !== request)
+                return false;
+            if (!result.ok || result.value.commentId !== commentId || result.value.hasLiked !== desired) {
+                const current = reel.comments.byId[commentId];
+                const mutation = reel.comments.likeMutations[commentId];
+                reel.comments.byId[commentId] = {
+                    ...current,
+                    hasLiked: mutation?.rollbackHasLiked ?? comment.hasLiked,
+                    likeCount: mutation?.rollbackCount ?? previousCount,
+                };
+                reel.comments.likeMutations[commentId] = {
+                    desired,
+                    status: 'error',
+                    error: result.ok ? 'Comment like receipt did not match the request.' : result.error.message,
+                };
+                return false;
+            }
+            reel.comments.byId[commentId] = {
+                ...reel.comments.byId[commentId],
+                hasLiked: result.value.hasLiked,
+            };
+            recordReelCommentLikeReceipt(shortcode, commentId);
+            delete reel.comments.likeMutations[commentId];
+            return true;
+        } catch (error) {
+            if (generation === requestGeneration && reelCommentLikeRequests.get(key) === request) {
+                const current = reel.comments.byId[commentId];
+                const mutation = reel.comments.likeMutations[commentId];
+                reel.comments.byId[commentId] = {
+                    ...current,
+                    hasLiked: mutation?.rollbackHasLiked ?? comment.hasLiked,
+                    likeCount: mutation?.rollbackCount ?? previousCount,
+                };
+                reel.comments.likeMutations[commentId] = {
+                    desired,
+                    status: 'error',
+                    error: errorMessage(error),
+                };
+            }
+            return false;
+        } finally {
+            if (generation === requestGeneration && reelCommentLikeRequests.get(key) === request) {
+                reelCommentLikeRequests.delete(key);
+                emit();
+            }
+        }
+    }
+
+    async function submitReelComment(shortcode: string) {
+        const reel = state.reels.byId[shortcode];
+        const media = reel?.media;
+        const text = reel?.comments.draft.trim() ?? '';
+        if (!reel || !media || !text || text.length > 2_200 ||
+            reelCommentCreateRequests.has(shortcode)) return false;
+        const replyToCommentId = reel.comments.replyToCommentId;
+        if (replyToCommentId && !reel.comments.byId[replyToCommentId]) return false;
+        const request = Symbol(`reel-comment-create:${shortcode}`);
+        const requestGeneration = generation;
+        reelCommentCreateRequests.set(shortcode, request);
+        reel.comments.isSubmitting = true;
+        reel.comments.submitError = undefined;
+        emit();
+        try {
+            const result = await rpc.createReelComment({
+                mediaId: media.id,
+                text,
+                ...(replyToCommentId ? { replyToCommentId } : {}),
+            });
+            if (generation !== requestGeneration || reelCommentCreateRequests.get(shortcode) !== request)
+                return false;
+            if (!result.ok) {
+                reel.comments.submitError = result.error.message;
+                return false;
+            }
+            const comment = result.value;
+            if (replyToCommentId && comment.parentCommentId !== replyToCommentId) {
+                reel.comments.submitError = 'Created reply did not match the parent comment.';
+                return false;
+            }
+            mergeReelComment(reel, comment);
+            if (replyToCommentId) {
+                const replies = repliesState(reel, replyToCommentId);
+                if (!replies.listedIds.includes(comment.id)) replies.listedIds.push(comment.id);
+                const parent = reel.comments.byId[replyToCommentId];
+                reel.comments.byId[replyToCommentId] = {
+                    ...parent,
+                    childCommentCount: parent.childCommentCount + 1,
+                };
+                const parentKey = `${shortcode}:${replyToCommentId}`;
+                reelCommentChildCountReceiptRevisions.set(
+                    parentKey,
+                    (reelCommentChildCountReceiptRevisions.get(parentKey) ?? 0) + 1,
+                );
+            } else if (!reel.comments.listedIds.includes(comment.id)) {
+                reel.comments.listedIds.unshift(comment.id);
+            }
+            const currentMedia = reel.media;
+            if (currentMedia) {
+                reel.media = { ...currentMedia, commentCount: currentMedia.commentCount + 1 };
+            }
+            reelCommentCreateReceiptRevisions.set(
+                shortcode,
+                (reelCommentCreateReceiptRevisions.get(shortcode) ?? 0) + 1,
+            );
+            reel.comments.draft = '';
+            reel.comments.replyToCommentId = undefined;
+            reel.comments.submitError = undefined;
+            return true;
+        } catch (error) {
+            if (generation === requestGeneration && reelCommentCreateRequests.get(shortcode) === request)
+                reel.comments.submitError = errorMessage(error);
+            return false;
+        } finally {
+            if (generation === requestGeneration && reelCommentCreateRequests.get(shortcode) === request) {
+                reelCommentCreateRequests.delete(shortcode);
+                reel.comments.isSubmitting = false;
                 emit();
             }
         }
@@ -2291,6 +2877,8 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
             visibleReplyPrefetchKey = '';
             replyPrefetchIntent++;
             sendRequests.clear();
+            editRequests.clear();
+            messageEditReceipts.clear();
             reactionRequests.clear();
             reactionStateRevisions.clear();
             sendRevisions.clear();
@@ -2300,10 +2888,16 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
             pendingReads.clear();
             reelMediaRequests.clear();
             reelCommentRequests.clear();
+            reelReplyRequests.clear();
+            reelCommentLikeRequests.clear();
+            reelCommentCreateRequests.clear();
             reelLikeRequests.clear();
             reelSaveRequests.clear();
             reelLikeReceiptRevisions.clear();
             reelSaveReceiptRevisions.clear();
+            reelCommentCreateReceiptRevisions.clear();
+            reelCommentChildCountReceiptRevisions.clear();
+            reelCommentLikeReceiptRevisions.clear();
             reelMediaSettledListeners.forEach(listeners =>
                 listeners.forEach(listener => listener()),
             );
@@ -2411,13 +3005,13 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
         },
         setDraft(threadId: string, draft: string) {
             const history = state.histories[threadId];
-            if (!history || history.draft === draft) return;
+            if (!history || history.editing?.status === 'pending' || history.draft === draft) return;
             history.draft = draft;
             emit();
         },
         setReplyTarget(threadId: string, messageId?: string) {
             const history = state.histories[threadId];
-            if (!history) return false;
+            if (!history || history.editing) return false;
             if (messageId) {
                 if (
                     !history.byId[messageId] || messageId.startsWith('local:') ||
@@ -2429,6 +3023,15 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
             emit();
             return true;
         },
+        canEditMessage(threadId: string, messageId: string, nowMs = Date.now()) {
+            const history = state.histories[threadId];
+            const message = history?.byId[messageId];
+            return Boolean(state.inbox.byId[threadId]?.threadFbid && message &&
+                isMessageEditable(message, history?.viewerId, nowMs));
+        },
+        startMessageEdit,
+        cancelMessageEdit,
+        submitMessageEdit,
         sendText,
         retrySend(threadId: string, localId: string) {
             const failed = state.histories[threadId]?.failedSends[localId];
@@ -2500,6 +3103,46 @@ export function createFrontendStore(rpc: FrontendStoreRpc, options: FrontendStor
             if (!comments?.cursor) return Promise.resolve(false);
             return loadReelComments(shortcode, comments.cursor);
         },
+        openReelCommentReplies(shortcode: string, parentCommentId: string) {
+            return loadReelCommentReplies(shortcode, parentCommentId);
+        },
+        loadNextReelCommentReplies(shortcode: string, parentCommentId: string) {
+            const replies = state.reels.byId[shortcode]?.comments.repliesByParent[parentCommentId];
+            if (!replies?.cursor) return Promise.resolve(false);
+            return loadReelCommentReplies(shortcode, parentCommentId, replies.cursor);
+        },
+        retryReelCommentReplies(shortcode: string, parentCommentId: string) {
+            const reel = state.reels.byId[shortcode];
+            const replies = reel?.comments.repliesByParent[parentCommentId];
+            if (!reel || !replies) return Promise.resolve(false);
+            if (replies.failedCursor) {
+                const cursor = replies.failedCursor;
+                replies.failedCursor = undefined;
+                replies.error = undefined;
+                return loadReelCommentReplies(shortcode, parentCommentId, cursor);
+            }
+            replies.status = 'idle';
+            replies.error = undefined;
+            return loadReelCommentReplies(shortcode, parentCommentId);
+        },
+        setReelCommentDraft(shortcode: string, draft: string) {
+            const reel = state.reels.byId[shortcode];
+            if (!reel || draft.length > 2_200) return false;
+            reel.comments.draft = draft;
+            reel.comments.submitError = undefined;
+            emit();
+            return true;
+        },
+        setReelCommentReplyTarget(shortcode: string, commentId?: string) {
+            const reel = state.reels.byId[shortcode];
+            if (!reel || (commentId && !reel.comments.byId[commentId])) return false;
+            reel.comments.replyToCommentId = commentId;
+            reel.comments.submitError = undefined;
+            emit();
+            return true;
+        },
+        submitReelComment,
+        toggleReelCommentLiked: setReelCommentLiked,
         toggleReelLiked: setReelLiked,
         toggleReelSaved: setReelSaved,
         togglePin,

@@ -9,6 +9,7 @@ import type {
 import type { InstagramGraphqlOperationName } from './catalog.ts';
 import {
     parseInboxResponse,
+    parseEditedTextResponse,
     parseForwardedPostResponse,
     parseForwardedReelResponse,
     parseMarkThreadReadResponse,
@@ -42,7 +43,7 @@ type AsyncHandlers<Map extends Record<keyof Map, (...args: never[]) => unknown>>
 };
 type CanonicalHandlerRpcMap = Pick<
     RpcMap,
-    'getInbox' | 'getThread' | 'sendText' | 'forwardMessage' | 'setReaction' | 'setReelLiked' |
+    'getInbox' | 'getThread' | 'sendText' | 'editText' | 'forwardMessage' | 'setReaction' | 'setReelLiked' |
     'setReelSaved' | 'togglePin' | 'markThreadRead'
 >;
 export type InstagramRpcHandlers = AsyncHandlers<CanonicalHandlerRpcMap>;
@@ -369,6 +370,25 @@ function createInstagramHandlers(
                 input.offlineThreadingId,
             );
         },
+        async editText(value: unknown) {
+            const payload = record(value);
+            exactKeys(payload, ['threadFbid', 'messageId', 'text', 'offlineThreadingId']);
+            const input = {
+                threadFbid: requiredString(payload.threadFbid, 'thread FBID'),
+                targetMessageId: requiredString(payload.messageId, 'message ID'),
+                text: requiredString(payload.text, 'message text', MAX_TEXT_LENGTH),
+                offlineThreadingId: numericStringId(
+                    payload.offlineThreadingId,
+                    'offline threading ID',
+                ),
+            };
+            const receipt = parseEditedTextResponse(
+                await execute('IGDirectEditMessageMutation', input),
+            );
+            if (receipt.messageId !== input.targetMessageId)
+                throw new Error('Instagram edited message receipt did not match the request');
+            return receipt;
+        },
         async forwardMessage(value: unknown) {
             const payload = record(value);
             exactKeys(payload, [
@@ -576,6 +596,7 @@ export function createInstagramRpcHandlers(
         getInbox: handlers.getInbox,
         getThread: handlers.getThread,
         sendText: handlers.sendText,
+        editText: handlers.editText,
         forwardMessage: handlers.forwardMessage,
         setReaction: handlers.setReaction,
         setReelLiked: handlers.setReelLiked,
@@ -613,11 +634,13 @@ export const INSTAGRAM_RPC_OPERATION_REACHABILITY = {
     useIGDMarkThreadAsReadMutation: 'markThreadRead',
     useIGDMarkThreadAsReadValidationMutation: 'markThreadRead',
     IGDirectTextSendMutation: 'sendText',
+    IGDirectEditMessageMutation: 'editText',
     IGDirectReelShareMutation: 'forwardMessage',
     IGDirectMediaShareMutation: 'forwardMessage',
     IGDirectReactionSendMutation: 'setReaction',
     PolarisAPILikePostMutation: 'setReelLiked',
     PolarisAPIUnlikePostMutation: 'setReelLiked',
+    PolarisCommentActionsLikeMutation: 'setReelCommentLiked',
     PolarisAPISavePostMutation: 'setReelSaved',
     PolarisAPIUnsavePostMutation: 'setReelSaved',
     PolarisUserHoverCardContentV2Query: 'getReelMedia',

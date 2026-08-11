@@ -2731,6 +2731,40 @@ test('focused message Enter opens only an existing share action and Space toggle
     await page.close();
 });
 
+test('message context editing is eligible, cancellable, focused, and reconciled in place', async () => {
+    const page = await openHarness();
+    await page.evaluate(() => window.historyHarness.mount('message-editing'));
+
+    for (const id of ['edit-received', 'edit-old']) {
+        await page.locator(`[data-message-id="${id}"]`).click({ button: 'right' });
+        const menu = page.getByRole('menu', { name: 'Message actions' });
+        await menu.waitFor();
+        assert.equal(await menu.getByRole('menuitem', { name: 'Edit' }).count(), 0);
+        await page.keyboard.press('Escape');
+    }
+
+    const row = page.locator('[data-message-id="edit-current"]');
+    await row.click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Edit' }).click();
+    const editor = page.getByRole('textbox', { name: 'Edit message' });
+    await editor.waitFor();
+    assert.equal(await editor.inputValue(), 'Original text');
+    assert.equal(await editor.evaluate(element => document.activeElement === element), true);
+    await editor.fill('Cancelled change');
+    await editor.press('Escape');
+    assert.equal(await page.getByRole('textbox', { name: 'Message' }).inputValue(), '');
+
+    await row.click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Edit' }).click();
+    await page.getByRole('textbox', { name: 'Edit message' }).fill('Edited text');
+    await page.getByRole('button', { name: 'Save' }).click();
+    await page.waitForFunction(() => document.querySelector(
+        '[data-message-id="edit-current"] .message__body',
+    )?.textContent?.includes('Edited text'));
+    assert.equal(await page.getByRole('textbox', { name: 'Message' }).inputValue(), '');
+    await page.close();
+});
+
 test('Vim selection minimally reveals virtual chats and rendered messages without paginating', async () => {
     const page = await openHarness({ width: 900, height: 420 });
     await page.evaluate(() => window.historyHarness.mount('vim-scroll'));
@@ -3713,7 +3747,7 @@ test('controlled drafts and composer actions remain per-thread and operable at n
         pointerType: 'touch', pointerId: 7, isPrimary: true, clientX: box!.x + 12, clientY: box!.y + 12,
     });
     const messageMenu = page.getByRole('menu', { name: 'Message actions' });
-    assert.deepEqual(await messageMenu.getByRole('menuitem').allTextContents(), ['Reply', 'Forward']);
+    assert.deepEqual(await messageMenu.getByRole('menuitem').allTextContents(), ['Reply', 'Edit', 'Forward']);
     await page.keyboard.press('Escape');
     await messageMenu.waitFor({ state: 'detached' });
     await page.waitForTimeout(850);
@@ -3737,7 +3771,10 @@ test('controlled drafts and composer actions remain per-thread and operable at n
     await picker.getByText('Choose the current reaction to remove it').waitFor();
     const pickerTop = (await picker.boundingBox())!.y;
     await picker.locator('.reaction-picker__body').evaluate(element => { element.scrollTop = 400; });
-    assert.equal((await picker.boundingBox())!.y, pickerTop);
+    assert.ok(
+        Math.abs((await picker.boundingBox())!.y - pickerTop) < 1,
+        'scrolling the picker body must keep the dialog fixed within browser subpixel rounding',
+    );
     await picker.getByRole('searchbox', { name: 'Search emoji reactions' }).fill('👍');
     await picker.locator('[role="option"][data-emoji="👍"]').click();
     await page.locator('.reaction-chip--viewer').last().waitFor();
