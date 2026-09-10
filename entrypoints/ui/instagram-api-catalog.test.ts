@@ -2,14 +2,14 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
     buildReelCommentRepliesPath,
-    INSTAGRAM_GRAPHQL_OPERATIONS as operations,
+    INSTAGRAM_GRAPHQL_OPERATIONS,
     isInstagramGraphqlOperationName,
 } from '../../lib/instagram-api/catalog.ts';
 
 const context = { viewerId: 'viewer-1', deviceId: 'device-1' };
 
 test('inbox pagination uses the captured generation and exact relay variables', () => {
-    const operation = operations.IGDThreadListOffMsysPaginationQuery;
+    const operation = INSTAGRAM_GRAPHQL_OPERATIONS.IGDThreadListOffMsysPaginationQuery;
     assert.equal(operation.docId, '28035404249479587');
     assert.equal(operation.kind, 'query');
     assert.deepEqual(
@@ -39,7 +39,7 @@ test('inbox pagination uses the captured generation and exact relay variables', 
 
 test('text and read builders preserve captured nulls and string timestamps', () => {
     assert.deepEqual(
-        operations.IGDirectTextSendMutation.buildVariables(
+        INSTAGRAM_GRAPHQL_OPERATIONS.IGDirectTextSendMutation.buildVariables(
             {
                 threadFbid: 'thread',
                 offlineThreadingId: 'offline',
@@ -67,8 +67,8 @@ test('text and read builders preserve captured nulls and string timestamps', () 
     );
     assert.deepEqual(
         [
-            operations.useIGDMarkThreadAsReadMutation.docId,
-            operations.useIGDMarkThreadAsReadMutation.buildVariables(
+            INSTAGRAM_GRAPHQL_OPERATIONS.useIGDMarkThreadAsReadMutation.docId,
+            INSTAGRAM_GRAPHQL_OPERATIONS.useIGDMarkThreadAsReadMutation.buildVariables(
                 { threadIgId: 'igid', messageId: 'message' },
                 context,
             ),
@@ -82,11 +82,11 @@ test('text and read builders preserve captured nulls and string timestamps', () 
         ],
     );
     assert.equal(
-        operations.useIGDMarkThreadAsReadValidationMutation.docId,
+        INSTAGRAM_GRAPHQL_OPERATIONS.useIGDMarkThreadAsReadValidationMutation.docId,
         '35211594988486314',
     );
     assert.deepEqual(
-        operations.useIGDMarkThreadAsReadValidationMutation.buildVariables(
+        INSTAGRAM_GRAPHQL_OPERATIONS.useIGDMarkThreadAsReadValidationMutation.buildVariables(
             {
                 threadIgId: 'igid',
                 messageId: 'message',
@@ -105,7 +105,7 @@ test('text and read builders preserve captured nulls and string timestamps', () 
 });
 
 test('message editing uses the captured mutation variables', () => {
-    const operation = operations.IGDirectEditMessageMutation;
+    const operation = INSTAGRAM_GRAPHQL_OPERATIONS.IGDirectEditMessageMutation;
     assert.equal(operation.docId, '32480262318254796');
     assert.equal(operation.friendlyName, 'IGDirectEditMessageMutation');
     assert.deepEqual(operation.buildVariables({
@@ -123,7 +123,7 @@ test('message editing uses the captured mutation variables', () => {
 });
 
 test('reel forwarding uses the existing-thread branch from the captured client', () => {
-    const operation = operations.IGDirectReelShareMutation;
+    const operation = INSTAGRAM_GRAPHQL_OPERATIONS.IGDirectReelShareMutation;
     assert.equal(operation.docId, '26212720875066239');
     assert.deepEqual(operation.buildVariables({
         targetThreadFbid: 'target-operation-id',
@@ -152,7 +152,7 @@ test('reel forwarding uses the existing-thread branch from the captured client',
 });
 
 test('post forwarding uses the captured media-share existing-thread variables', () => {
-    const operation = operations.IGDirectMediaShareMutation;
+    const operation = INSTAGRAM_GRAPHQL_OPERATIONS.IGDirectMediaShareMutation;
     assert.equal(operation.docId, '27442850591982122');
     assert.deepEqual(operation.buildVariables({
         targetThreadFbid: 'target-operation-id',
@@ -174,7 +174,7 @@ test('post forwarding uses the captured media-share existing-thread variables', 
 
 test('reaction builder matches the HAR-backed mutation variables exactly', () => {
     assert.deepEqual(
-        operations.IGDirectReactionSendMutation.buildVariables(
+        INSTAGRAM_GRAPHQL_OPERATIONS.IGDirectReactionSendMutation.buildVariables(
             {
                 threadFbid: '340282366841710300949128133551876018644',
                 messageId: 'mid.$cAABa-Z8DgqJu9RqQy2iUnYadFQdn',
@@ -194,7 +194,7 @@ test('reaction builder matches the HAR-backed mutation variables exactly', () =>
         },
     );
     assert.deepEqual(
-        operations.IGDirectReactionSendMutation.buildVariables({
+        INSTAGRAM_GRAPHQL_OPERATIONS.IGDirectReactionSendMutation.buildVariables({
             threadFbid: 'thread', messageId: 'message', emoji: '❤', remove: true,
         }, context),
         { input: {
@@ -213,11 +213,11 @@ test('reel like and save mutations match captured documents and variables', () =
         },
     };
     assert.deepEqual([
-        operations.PolarisAPILikePostMutation.docId,
-        operations.PolarisAPILikePostMutation.buildVariables(input, context),
-        operations.PolarisAPIUnlikePostMutation.docId,
-        operations.PolarisAPISavePostMutation.docId,
-        operations.PolarisAPIUnsavePostMutation.docId,
+        INSTAGRAM_GRAPHQL_OPERATIONS.PolarisAPILikePostMutation.docId,
+        INSTAGRAM_GRAPHQL_OPERATIONS.PolarisAPILikePostMutation.buildVariables(input, context),
+        INSTAGRAM_GRAPHQL_OPERATIONS.PolarisAPIUnlikePostMutation.docId,
+        INSTAGRAM_GRAPHQL_OPERATIONS.PolarisAPISavePostMutation.docId,
+        INSTAGRAM_GRAPHQL_OPERATIONS.PolarisAPIUnsavePostMutation.docId,
     ], [
         '27358573637160660', variables,
         '37071567952434061',
@@ -227,7 +227,7 @@ test('reel like and save mutations match captured documents and variables', () =
 });
 
 test('comment like mutation matches the captured document and variables', () => {
-    const operation = operations.PolarisCommentActionsLikeMutation;
+    const operation = INSTAGRAM_GRAPHQL_OPERATIONS.PolarisCommentActionsLikeMutation;
     assert.deepEqual([
         operation.friendlyName,
         operation.docId,
@@ -261,7 +261,7 @@ test('comment reply requests preserve the captured initial and continuation quer
 });
 
 test('hover-card friendship lookup uses the captured liker identity request', () => {
-    const operation = operations.PolarisUserHoverCardContentV2Query;
+    const operation = INSTAGRAM_GRAPHQL_OPERATIONS.PolarisUserHoverCardContentV2Query;
     assert.deepEqual([
         operation.friendlyName,
         operation.docId,
@@ -276,8 +276,8 @@ test('hover-card friendship lookup uses the captured liker identity request', ()
 });
 
 test('conversation pin and unpin use distinct current web documents and exact variables', () => {
-    const pin = operations.useIGDPinThreadMutation;
-    const unpin = operations.useIGDUnpinThreadMutation;
+    const pin = INSTAGRAM_GRAPHQL_OPERATIONS.useIGDPinThreadMutation;
+    const unpin = INSTAGRAM_GRAPHQL_OPERATIONS.useIGDUnpinThreadMutation;
     assert.deepEqual(
         [pin.friendlyName, pin.docId, pin.kind, pin.buildVariables({ threadFbid: 'fbid' }, context)],
         ['useIGDPinThreadMutation', '26491513390471063', 'mutation', { thread_fbid: 'fbid', pin: true }],
@@ -289,7 +289,7 @@ test('conversation pin and unpin use distinct current web documents and exact va
 });
 
 test('catalog is a closed DM allowlist', () => {
-    assert.equal(Object.keys(operations).length, 40);
+    assert.equal(Object.keys(INSTAGRAM_GRAPHQL_OPERATIONS).length, 40);
     assert.equal(isInstagramGraphqlOperationName('IGDirectReactionSendMutation'), true);
     for (const shellOperation of [
         'PolarisFeedTimelinePaginationQuery',
@@ -298,6 +298,6 @@ test('catalog is a closed DM allowlist', () => {
         'PolarisViewerSettingsQuery',
     ]) {
         assert.equal(isInstagramGraphqlOperationName(shellOperation), false);
-        assert.equal(Object.hasOwn(operations, shellOperation), false);
+        assert.equal(Object.hasOwn(INSTAGRAM_GRAPHQL_OPERATIONS, shellOperation), false);
     }
 });

@@ -18,8 +18,10 @@ Non-negotiable frontend rules:
 - Preserve bounded rendering: fixed 72px absolute inbox rows, stable domain
   keys, the existing chat window, and at most 80 history rows when Milestone 2
   is implemented. Consume loaded local IDs before network pagination.
-- Use TypeScript/TSX, vendored Teact, and SCSS. Do not add React as a runtime or
-  assume unsupported React APIs. Animate transform/opacity, honor reduced
+- Use TypeScript/TSX and SCSS. Legacy production UI modules use vendored Teact;
+  opt-in successor modules under `entrypoints/solid` use the pinned Solid 2
+  stack. Do not add React as a runtime or mix JSX runtimes between boundaries.
+  Animate transform/opacity, honor reduced
   motion, reserve media geometry, and retain accessible status/error/focus UI.
 - `vendor/teact` is pinned MIT code; preserve its `LICENSE` and provenance.
   Telegram Web A is GPL-3.0-or-later: do not copy its source, styles, icons, or

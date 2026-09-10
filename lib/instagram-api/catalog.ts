@@ -1,7 +1,7 @@
 import {
     DOC_IDS,
     FRIENDLY_NAMES,
-    INSTAGRAM_GRAPHQL_FLAGS as FLAGS,
+    INSTAGRAM_GRAPHQL_FLAGS,
 } from '../config.ts';
 
 export type InstagramGraphqlContext = {
@@ -47,21 +47,21 @@ const mutation = <Input>(
 const empty = () => ({});
 const listFlags = {
     __relay_internal__pv__IGDPinnedThreadsRenderEnabledGKrelayprovider:
-        FLAGS.pinnedThreads,
+        INSTAGRAM_GRAPHQL_FLAGS.pinnedThreads,
     __relay_internal__pv__IGDMaxUnreadMessagesCountrelayprovider:
-        FLAGS.maxUnreadMessages,
+        INSTAGRAM_GRAPHQL_FLAGS.maxUnreadMessages,
     __relay_internal__pv__PolarisAIGMAccountLabelEnabledrelayprovider:
-        FLAGS.aiAccountLabel,
+        INSTAGRAM_GRAPHQL_FLAGS.aiAccountLabel,
     __relay_internal__pv__IGDThreadListActionsEnabledGKrelayprovider:
-        FLAGS.threadListActions,
+        INSTAGRAM_GRAPHQL_FLAGS.threadListActions,
 };
 const threadFlags = {
     __relay_internal__pv__IGDEnableOffMsysChatThemesQErelayprovider:
-        FLAGS.chatThemes,
+        INSTAGRAM_GRAPHQL_FLAGS.chatThemes,
     __relay_internal__pv__IGDInitialMessagePageCountrelayprovider:
-        FLAGS.initialMessagePageCount,
+        INSTAGRAM_GRAPHQL_FLAGS.initialMessagePageCount,
     __relay_internal__pv__PolarisAIGMAccountLabelEnabledrelayprovider:
-        FLAGS.aiAccountLabel,
+        INSTAGRAM_GRAPHQL_FLAGS.aiAccountLabel,
 };
 const musicParams = (playlistId: string) => ({
     playlist_id: playlistId,
@@ -88,7 +88,7 @@ export const INSTAGRAM_GRAPHQL_OPERATIONS = {
         (_: Record<string, never>, context) => ({
             device_id_for_iris_subscription: context.deviceId,
             __relay_internal__pv__IGDIsProfessionalAccountGKrelayprovider:
-                FLAGS.isProfessionalAccount,
+                INSTAGRAM_GRAPHQL_FLAGS.isProfessionalAccount,
             ...listFlags,
         }),
     ),
@@ -174,7 +174,7 @@ export const INSTAGRAM_GRAPHQL_OPERATIONS = {
                 : { min_uq_seq_id: input.minUqSeqId }),
             thread_fbid: input.threadFbid,
             __relay_internal__pv__PolarisAIGMAccountLabelEnabledrelayprovider:
-                FLAGS.aiAccountLabel,
+                INSTAGRAM_GRAPHQL_FLAGS.aiAccountLabel,
         }),
     ),
     IGDInboxInfoOffMsysQuery: query(
@@ -183,9 +183,9 @@ export const INSTAGRAM_GRAPHQL_OPERATIONS = {
         (input: { threadFbid: string }) => ({
             thread_fbid: input.threadFbid,
             __relay_internal__pv__IGDGroupLinksEnabledGKrelayprovider:
-                FLAGS.groupLinks,
+                INSTAGRAM_GRAPHQL_FLAGS.groupLinks,
             __relay_internal__pv__IGDEnableOffMsysChatThemesQErelayprovider:
-                FLAGS.chatThemes,
+                INSTAGRAM_GRAPHQL_FLAGS.chatThemes,
         }),
     ),
     IGDUserMessageRowMoreActionsMenuOffMsysQuery: query(

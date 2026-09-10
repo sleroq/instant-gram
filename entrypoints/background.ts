@@ -4,33 +4,19 @@ import browser from 'webextension-polyfill';
 import type { ReelAuthor, ReelMedia, Result, RpcMap } from '../lib/domain';
 import { createSerialTaskQueue } from '../lib/errors';
 import { loadTrustedProfileImageDataUrl } from '../lib/media-proxy';
+import { ensureAnchorTab } from '../lib/provider/anchor';
+import { createInboxProvider } from '../lib/provider/inbox';
+import { PROVIDER_PORT } from '../lib/provider/protocol';
+import { createInboxRepository } from '../lib/engine/db';
+import { createInboxEngine, type InboxEngine } from '../lib/engine/inbox';
+import { registerInboxClientPorts } from '../lib/engine/ports';
+import { INBOX_CLIENT_PORT } from '../lib/engine/protocol';
 
 type PinStore = { pinned?: string[] };
 
 async function getPinned(): Promise<string[]> {
     const stored = (await browser.storage.local.get('pinned')) as PinStore;
     return stored.pinned ?? [];
-}
-
-async function ensureAnchorTab(): Promise<number> {
-    // This takes 2 ms at most, but maybe we should still cache this in the future
-    // to prevent checking the tab on every network request
-    const tabs = await browser.tabs.query({
-        url: 'https://www.instagram.com/*',
-    });
-
-    const existing = tabs.find(tab => typeof tab.id === 'number');
-    if (existing?.id) return existing.id;
-
-    const created = await browser.tabs.create({
-        url: 'https://www.instagram.com/direct/inbox/',
-        active: false,
-    });
-
-    if (typeof created.id !== 'number')
-        throw new Error('Could not create Instagram anchor tab');
-
-    return created.id;
 }
 
 type RemoteRpcName = Exclude<keyof RpcMap, 'getPins'>;
@@ -100,6 +86,16 @@ async function routeToAnchor<K extends RemoteRpcName>(
 }
 
 export default defineBackground(() => {
+    const preview = import.meta.env.WXT_SOLID_PREVIEW === '1';
+    const provider = preview ? createInboxProvider({ ensureAnchor: ensureAnchorTab, extensionId: browser.runtime.id }) : undefined;
+    let engine: InboxEngine | undefined;
+    if (provider) browser.runtime.onConnect.addListener(port => {
+        if (port.name === PROVIDER_PORT) provider.accept(port);
+        else if (port.name === INBOX_CLIENT_PORT) {
+            engine ??= createInboxEngine(createInboxRepository(), provider);
+            registerInboxClientPorts(port, engine);
+        }
+    });
     browser.action.onClicked.addListener(async () => {
         await ensureAnchorTab();
         await browser.tabs.create({ url: browser.runtime.getURL('/ui.html') });

@@ -1,3 +1,5 @@
+/** @jsxImportSource teact */
+/** @jsxRuntime automatic */
 import { createElement } from '../vendor/teact/src/teact/teact';
 import TeactDOM from '../vendor/teact/src/teact/teact-dom';
 import type { Message, Result, ThreadMessages } from '../lib/domain';

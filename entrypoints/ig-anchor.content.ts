@@ -1,4 +1,5 @@
 import '../lib/bridge';
+import browser from 'webextension-polyfill';
 import { defineContentScript } from 'wxt/utils/define-content-script';
 import { DOC_IDS, FRIENDLY_NAMES, INSTAGRAM_GRAPHQL_FLAGS } from '../lib/config';
 import { getErrorMessage } from '../lib/errors';
@@ -23,6 +24,7 @@ import {
 } from '../lib/instagram-api/parsers';
 import { loadReelMedia } from '../lib/instagram-api/reels';
 import type { Result, RpcMap } from '../lib/domain';
+import { registerInboxProvider } from '../lib/provider/inbox-content';
 
 type ReelCommentsPayload = Parameters<RpcMap['getReelComments']>[0];
 type ReelRepliesPayload = Parameters<RpcMap['getReelCommentReplies']>[0];
@@ -414,6 +416,11 @@ export default defineContentScript({
                     return fail(error);
                 }
             });
+        }
+        if (import.meta.env.WXT_SOLID_PREVIEW === '1') {
+            // SAFETY: createInstagramRpcHandlers gives getInbox the Page<Thread> contract; only the generic handler map widens it.
+            const getInbox = () => handlers.getInbox({}) as Promise<import('../lib/domain').Page<import('../lib/domain').Thread>>;
+            registerInboxProvider(getInbox, browser.runtime);
         }
     },
 });

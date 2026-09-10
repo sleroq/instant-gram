@@ -1,4 +1,10 @@
-## Solid `basic` template
+# Disposable Solid spike
+
+This directory is a disposable, standalone Solid CLI experiment retained for
+reference. It is not part of the root WXT application, build, typecheck, or the
+supported Solid preview. Use `entrypoints/solid` for successor integration work.
+
+## Original Solid `basic` template notes
 
 `bare` plus the app floors most projects want: `@solidjs/router` with file-system routes, per-page titles via `@solidjs/meta`, and a `vitest` test suite.
 

@@ -1,3 +1,5 @@
+/** @jsxImportSource teact */
+/** @jsxRuntime automatic */
 import type {
     ChangeEvent,
     CSSProperties,

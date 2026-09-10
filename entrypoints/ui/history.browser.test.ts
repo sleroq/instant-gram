@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { chromium, type Browser, type Page } from 'playwright';
-import { createServer, type ViteDevServer } from 'vite';
+import { createServer, transformWithEsbuild, type ViteDevServer } from 'vite';
 
 let browser: Browser;
 let server: ViteDevServer;
@@ -13,6 +13,16 @@ test.before(async () => {
     server = await createServer({
         root,
         configFile: false,
+        plugins: [{
+            name: 'history-harness-teact-tsx',
+            enforce: 'pre',
+            transform(code, id) {
+                if (!/(?:entrypoints\/ui\/App|tests\/history-harness)\.tsx$/.test(id)) return;
+                return transformWithEsbuild(code, id, {
+                    loader: 'tsx', jsx: 'automatic', jsxImportSource: 'teact',
+                });
+            },
+        }],
         server: { port: 0 },
         resolve: {
             alias: {

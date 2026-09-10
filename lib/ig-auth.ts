@@ -170,6 +170,12 @@ function cookie(name: string): string | undefined {
         .join('=');
 }
 
+export function currentInstagramAccountId(): string {
+    const accountId = userId(cookie('ds_user_id'));
+    if (!accountId) throw new Error('Instagram authentication is unavailable.');
+    return accountId;
+}
+
 function authError(values: Partial<Tokens>): Error {
     const keys: TokenKey[] = [
         'fbDtsg',

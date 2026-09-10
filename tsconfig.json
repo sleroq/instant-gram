@@ -4,13 +4,13 @@
         "allowJs": false,
         "checkJs": false,
         "strict": true,
-        "jsx": "react-jsx",
-        "jsxImportSource": "teact",
+        "jsx": "preserve",
+        "jsxImportSource": "@solidjs/web",
         "baseUrl": ".",
         "ignoreDeprecations": "6.0",
         "allowImportingTsExtensions": true,
         "paths": { "teact/*": ["vendor/teact/src/teact/*"] }
     },
     "include": ["**/*", ".wxt/wxt.d.ts", "shim.d.ts"],
-    "exclude": [".output"]
+    "exclude": [".output", ".output-solid", "instant-gram"]
 }

@@ -49,12 +49,19 @@ npm ci
 npm run dev
 ```
 
+The Solid 2 stack is currently an integration preview, not the product UI. Run
+`npm run dev:solid` to include `solid.html`, or `npm run build:solid` to create
+an isolated `.output-solid` production build. Ordinary builds ship only the
+legacy `ui.html` application. Browser installation is explicit via
+`npm run test:setup`.
+
 Before submitting a change, run:
 
 ```sh
 npm run lint
 npm test
 npm run build
+npm run build:solid
 ```
 
 ## Release

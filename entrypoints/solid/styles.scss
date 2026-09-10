@@ -1,0 +1,22 @@
+* { box-sizing: border-box; }
+body { margin: 0; background: #f5f6f8; color: #16181d; font: 14px system-ui, sans-serif; }
+.solid-inbox { width: min(100%, 560px); min-height: 100vh; margin: auto; background: white; padding: 20px; }
+.solid-inbox header { display: flex; align-items: center; justify-content: space-between; }
+.solid-inbox header p { margin: 0; color: #687080; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+.solid-inbox h1 { margin: 3px 0 0; font-size: 24px; }
+.solid-inbox button { border: 1px solid #ccd1da; border-radius: 8px; background: white; padding: 8px 12px; cursor: pointer; }
+.solid-inbox button:focus-visible { outline: 3px solid #8ab4ff; outline-offset: 2px; }
+.solid-inbox__status { min-height: 20px; color: #687080; }
+.solid-inbox__error { padding: 10px; border-radius: 8px; background: #fff2f1; color: #9a2922; }
+.solid-inbox__error button { margin-left: 8px; }
+.solid-inbox__empty { padding: 32px 8px; text-align: center; color: #687080; }
+.solid-inbox__viewport { height: min(75vh, 720px); overflow-y: auto; border-top: 1px solid #e5e7eb; }
+.solid-inbox ul { position: relative; margin: 0; padding: 0; list-style: none; }
+.solid-inbox li { position: absolute; inset: 0 0 auto; height: 72px; display: flex; align-items: center; gap: 12px; padding: 8px; border-bottom: 1px solid #edf0f3; }
+.solid-inbox li > div { min-width: 0; flex: 1; }
+.solid-inbox li strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.solid-inbox li p { margin: 4px 0 0; overflow: hidden; color: #687080; text-overflow: ellipsis; white-space: nowrap; }
+.solid-inbox__avatar { width: 48px; height: 48px; flex: 0 0 48px; display: grid; place-items: center; border-radius: 50%; background: #e6eaf1; font-weight: 700; }
+.solid-inbox__unread { color: #2158bd; font-size: 12px; font-weight: 700; }
+@media (max-width: 560px) { .solid-inbox { padding: 14px; } .solid-inbox__viewport { height: min(calc(100vh - 125px), 720px); } }
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
