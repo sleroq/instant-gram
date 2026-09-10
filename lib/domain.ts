@@ -1,3 +1,5 @@
+import type { JsonObject } from './json.ts';
+
 export type Folder = 'PRIMARY' | 'GENERAL' | 'REQUESTS';
 
 export type User = {
@@ -244,10 +246,8 @@ export type MutationSuccess = { success: true };
 export type PinMessageResult = { pinnedMessageIds: string[] };
 export type PinThreadResult = { threadFbid: string; isPinned: boolean };
 
-export type JsonPrimitive = string | number | boolean | null;
-export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 export type InstagramGraphqlPayload = {
-    data?: { [key: string]: JsonValue };
+    data?: JsonObject;
     errors?: { message: string; code?: string }[];
 };
 

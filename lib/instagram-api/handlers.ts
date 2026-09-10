@@ -6,6 +6,14 @@ import type {
     Result,
     RpcMap,
 } from '../domain.ts';
+import {
+    isBoolean,
+    isJsonObject,
+    isNumber,
+    isString,
+    type JsonObject,
+    type JsonValue,
+} from '../json.ts';
 import type { InstagramGraphqlOperationName } from './catalog.ts';
 import {
     parseInboxResponse,
@@ -32,14 +40,16 @@ import {
 
 export type InstagramOperationExecutor = (
     operation: InstagramGraphqlOperationName | 'IGDMessageListOffMsysQuery',
-    input: Record<string, unknown>,
-) => Promise<unknown>;
+    input: JsonObject,
+) => Promise<JsonValue>;
 
 type ResultValue<T> = T extends Result<infer Value> ? Value : T;
 type AsyncHandlers<Map extends Record<keyof Map, (...args: never[]) => unknown>> = {
-    [K in keyof Map]: (
+    [K in keyof Map]: ((
         ...args: Parameters<Map[K]>
-    ) => Promise<ResultValue<Awaited<ReturnType<Map[K]>>>>;
+    ) => Promise<ResultValue<Awaited<ReturnType<Map[K]>>>>) & ((
+        value: JsonValue
+    ) => Promise<ResultValue<Awaited<ReturnType<Map[K]>>>>);
 };
 type CanonicalHandlerRpcMap = Pick<
     RpcMap,
@@ -64,34 +74,30 @@ const MAX_TEXT_LENGTH = 10_000;
 const MAX_SEARCH_LENGTH = 256;
 const MAX_PLAYLIST_PAGE_SIZE = 50;
 
-function failureMessage(error: unknown) {
-    return error instanceof Error ? error.message : String(error);
-}
-
-function record(value: unknown, label = 'payload'): Record<string, unknown> {
-    if (typeof value !== 'object' || value === null || Array.isArray(value))
+function record(value: JsonValue | undefined, label = 'payload'): JsonObject {
+    if (!isJsonObject(value))
         throw new Error(`Invalid Instagram ${label}`);
-    return value as Record<string, unknown>;
+    return value;
 }
 
-function exactKeys(value: Record<string, unknown>, allowed: readonly string[]) {
+function exactKeys(value: JsonObject, allowed: readonly string[]) {
     if (Object.keys(value).some(key => !allowed.includes(key)))
         throw new Error('Invalid Instagram payload fields');
 }
 
 function requiredString(
-    value: unknown,
+    value: JsonValue | undefined,
     label: string,
     maxLength = MAX_ID_LENGTH,
 ): string {
-    if (typeof value !== 'string' || value.trim().length === 0)
+    if (!isString(value) || value.trim().length === 0)
         throw new Error(`Invalid Instagram ${label}`);
     if (value.length > maxLength) throw new Error(`Instagram ${label} is too long`);
     return value;
 }
 
 function optionalString(
-    value: unknown,
+    value: JsonValue | undefined,
     label: string,
     maxLength = MAX_ID_LENGTH,
 ): string | undefined {
@@ -100,62 +106,47 @@ function optionalString(
         : requiredString(value, label, maxLength);
 }
 
-function stringAllowEmpty(value: unknown, label: string, maxLength: number): string {
-    if (typeof value !== 'string') throw new Error(`Invalid Instagram ${label}`);
+function stringAllowEmpty(value: JsonValue | undefined, label: string, maxLength: number): string {
+    if (!isString(value)) throw new Error(`Invalid Instagram ${label}`);
     if (value.length > maxLength) throw new Error(`Instagram ${label} is too long`);
     return value;
 }
 
-function numericStringId(value: unknown, label: string): string {
-    if (typeof value !== 'string' || !/^\d+$/.test(value) || value.length > MAX_ID_LENGTH)
+function numericStringId(value: JsonValue | undefined, label: string): string {
+    if (!isString(value) || !/^\d+$/.test(value) || value.length > MAX_ID_LENGTH)
         throw new Error(`Invalid Instagram ${label}`);
     return value;
 }
 
-function boolean(value: unknown, label: string): boolean | undefined {
+function boolean(value: JsonValue | undefined, label: string): boolean | undefined {
     if (value === undefined) return undefined;
-    if (typeof value !== 'boolean') throw new Error(`Invalid Instagram ${label}`);
+    if (!isBoolean(value)) throw new Error(`Invalid Instagram ${label}`);
     return value;
 }
 
-function positiveInteger(value: unknown, label: string, maximum: number): number {
-    if (!Number.isSafeInteger(value) || (value as number) < 1 || (value as number) > maximum)
+function positiveInteger(value: JsonValue | undefined, label: string, maximum: number): number {
+    if (!isNumber(value) || !Number.isSafeInteger(value) || value < 1 || value > maximum)
         throw new Error(`Invalid Instagram ${label}`);
-    return value as number;
+    return value;
 }
 
-function timestamp(value: unknown): number {
+function timestamp(value: JsonValue | undefined): number {
     if (
+        !isNumber(value) ||
         !Number.isSafeInteger(value) ||
-        (value as number) < 946_684_800_000 ||
-        (value as number) > 4_102_444_800_000
+        value < 946_684_800_000 ||
+        value > 4_102_444_800_000
     )
         throw new Error('Invalid Instagram message timestamp');
-    return value as number;
+    return value;
 }
 
-function cursor(value: unknown): string | undefined {
+function cursor(value: JsonValue | undefined): string | undefined {
     return optionalString(value, 'cursor', MAX_CURSOR_LENGTH);
 }
 
-function jsonValue(value: unknown, depth = 0): boolean {
-    if (depth > 50) return false;
-    if (
-        value === null ||
-        typeof value === 'string' ||
-        typeof value === 'boolean'
-    )
-        return true;
-    if (typeof value === 'number') return Number.isFinite(value);
-    if (Array.isArray(value)) return value.every(item => jsonValue(item, depth + 1));
-    if (typeof value !== 'object') return false;
-    return Object.values(value as Record<string, unknown>).every(item =>
-        jsonValue(item, depth + 1),
-    );
-}
-
 export function parseInstagramGraphqlPayload(
-    value: unknown,
+    value: JsonValue,
 ): InstagramGraphqlPayload {
     const root = record(value, 'GraphQL response');
     if (root.errors !== undefined) {
@@ -166,66 +157,65 @@ export function parseInstagramGraphqlPayload(
     }
     if (root.data === undefined) return {};
     const data = record(root.data, 'GraphQL data');
-    if (!jsonValue(data)) throw new Error('Invalid Instagram GraphQL response');
-    return { data: data as InstagramGraphqlPayload['data'] };
+    return { data };
 }
 
 function validateSecondary(
-    value: unknown,
+    value: JsonValue,
 ): InstagramSecondaryGraphqlRequest {
     const payload = record(value);
     const operation = requiredString(payload.operation, 'operation', 128);
-    const noInput = [
-        'PolarisAutomaticPreviewsDisabledContextProviderQuery',
-        'useFeatureLimitsOffMsysQuery',
-        'IGPresenceUnifiedSetupQuery',
-        'IGDInboxTrayQuery',
-        'IGDEmojiPickerQuery',
-        'IGDComposerRichContentTray_AvatarAvailableQuery',
-        'IGDComposerRichContentStickersV2_recentStickersQuery',
-        'IGDComposerRichContentStickersV2_cutoutStickersQuery',
-    ];
-    if (noInput.includes(operation)) {
+    if (operation === 'PolarisAutomaticPreviewsDisabledContextProviderQuery' ||
+        operation === 'useFeatureLimitsOffMsysQuery' ||
+        operation === 'IGPresenceUnifiedSetupQuery' ||
+        operation === 'IGDInboxTrayQuery' ||
+        operation === 'IGDEmojiPickerQuery' ||
+        operation === 'IGDComposerRichContentTray_AvatarAvailableQuery' ||
+        operation === 'IGDComposerRichContentStickersV2_recentStickersQuery' ||
+        operation === 'IGDComposerRichContentStickersV2_cutoutStickersQuery') {
         exactKeys(payload, ['operation']);
-        return payload as InstagramSecondaryGraphqlRequest;
+        return { operation };
     }
     if (operation === 'IGDComposerRichContentStickersV2Query') {
         exactKeys(payload, ['operation', 'searchQuery']);
-        stringAllowEmpty(payload.searchQuery, 'sticker search', MAX_SEARCH_LENGTH);
-        return payload as InstagramSecondaryGraphqlRequest;
+        const searchQuery = stringAllowEmpty(payload.searchQuery, 'sticker search', MAX_SEARCH_LENGTH);
+        return { operation, searchQuery };
     }
     if (
         operation === 'IGDComposerRichContentStickersV2ThreadIGIDQuery' ||
         operation === 'IGDComposerRichContentMusicThreadIGIDQuery'
     ) {
         exactKeys(payload, ['operation', 'threadFbid']);
-        requiredString(payload.threadFbid, 'thread FBID');
-        return payload as InstagramSecondaryGraphqlRequest;
+        const threadFbid = requiredString(payload.threadFbid, 'thread FBID');
+        return { operation, threadFbid };
     }
     if (operation === 'IGDComposerRichContentMusicQuery') {
         exactKeys(payload, ['operation', 'playlistId']);
-        requiredString(payload.playlistId, 'playlist ID');
-        return payload as InstagramSecondaryGraphqlRequest;
+        const playlistId = requiredString(payload.playlistId, 'playlist ID');
+        return { operation, playlistId };
     }
     if (operation === 'IGDComposerRichContentMusicSearchQuery') {
         exactKeys(payload, ['operation', 'query']);
-        stringAllowEmpty(payload.query, 'music search', MAX_SEARCH_LENGTH);
-        return payload as InstagramSecondaryGraphqlRequest;
+        const query = stringAllowEmpty(payload.query, 'music search', MAX_SEARCH_LENGTH);
+        return { operation, query };
     }
     if (operation === 'useIGDSystemFolderUnreadThreadCountQuery') {
         exactKeys(payload, ['operation', 'folder', 'newerThanTimestampMs']);
         if (payload.folder !== 'INBOX' && payload.folder !== 'PENDING')
             throw new Error('Invalid Instagram unread folder');
-        optionalString(payload.newerThanTimestampMs, 'unread timestamp', 32);
-        return payload as InstagramSecondaryGraphqlRequest;
+        const newerThanTimestampMs = optionalString(payload.newerThanTimestampMs, 'unread timestamp', 32);
+        const request: InstagramSecondaryGraphqlRequest = { operation, folder: payload.folder };
+        if (newerThanTimestampMs !== undefined) request.newerThanTimestampMs = newerThanTimestampMs;
+        return request;
     }
     if (operation === 'playlistMusicRefetchQuery') {
         exactKeys(payload, ['operation', 'playlistId', 'cursor', 'count']);
-        requiredString(payload.playlistId, 'playlist ID');
-        requiredString(payload.cursor, 'cursor', MAX_CURSOR_LENGTH);
+        const playlistId = requiredString(payload.playlistId, 'playlist ID');
+        const playlistCursor = requiredString(payload.cursor, 'cursor', MAX_CURSOR_LENGTH);
+        const request: InstagramSecondaryGraphqlRequest = { operation, playlistId, cursor: playlistCursor };
         if (payload.count !== undefined)
-            positiveInteger(payload.count, 'count', MAX_PLAYLIST_PAGE_SIZE);
-        return payload as InstagramSecondaryGraphqlRequest;
+            request.count = positiveInteger(payload.count, 'count', MAX_PLAYLIST_PAGE_SIZE);
+        return request;
     }
     throw new Error('Unsupported Instagram GraphQL operation');
 }
@@ -238,7 +228,7 @@ export function generateOfflineThreadingId(): string {
 
 function secondaryInput(
     request: InstagramSecondaryGraphqlRequest,
-): Record<string, unknown> {
+): JsonObject {
     const { operation: _, ...input } = request;
     return input;
 }
@@ -261,7 +251,7 @@ function createInstagramHandlers(
     }
 
     return {
-        async getInbox(value: unknown) {
+        async getInbox(value: JsonValue) {
             const payload = record(value);
             exactKeys(payload, ['cursor']);
             const nextCursor = cursor(payload.cursor);
@@ -277,7 +267,7 @@ function createInstagramHandlers(
             mailboxId = parseMailboxId(json) ?? mailboxId;
             return parseInboxResponse(json);
         },
-        async getThread(value: unknown) {
+        async getThread(value: JsonValue) {
             const payload = record(value);
             exactKeys(payload, ['threadKey', 'cursor']);
             const threadKey = requiredString(payload.threadKey, 'thread ID');
@@ -293,12 +283,12 @@ function createInstagramHandlers(
                 options.viewerId ? await options.viewerId() : '',
             );
         },
-        async getMessageRequests(value: unknown) {
+        async getMessageRequests(value: JsonValue) {
             const payload = record(value);
             exactKeys(payload, ['folder', 'cursor']);
             if (payload.folder !== 'REQUESTS' && payload.folder !== 'SPAM')
                 throw new Error('Invalid Instagram request folder');
-            const folder = payload.folder as MessageRequestFolder;
+            const folder: MessageRequestFolder = payload.folder;
             const nextCursor = cursor(payload.cursor);
             const json = nextCursor
                 ? await execute('IGDThreadListOffMsysPaginationQuery', {
@@ -314,7 +304,7 @@ function createInstagramHandlers(
             mailboxId = parseMailboxId(json) ?? mailboxId;
             return parseMessageRequestsResponse(json, folder);
         },
-        async getThreadInfo(value: unknown) {
+        async getThreadInfo(value: JsonValue) {
             const payload = record(value);
             exactKeys(payload, ['threadFbid']);
             const threadFbid = requiredString(payload.threadFbid, 'thread FBID');
@@ -324,7 +314,7 @@ function createInstagramHandlers(
             ]);
             return parseThreadInfoResponses(header, info);
         },
-        async getMessageActions(value: unknown) {
+        async getMessageActions(value: JsonValue) {
             const payload = record(value);
             exactKeys(payload, ['threadFbid', 'messageId', 'senderId']);
             const input = {
@@ -336,7 +326,7 @@ function createInstagramHandlers(
                 await execute('IGDUserMessageRowMoreActionsMenuOffMsysQuery', input),
             );
         },
-        async getUnreadCount(value?: unknown) {
+        async getUnreadCount(value?: JsonValue) {
             if (value !== undefined) {
                 const payload = record(value);
                 exactKeys(payload, []);
@@ -350,7 +340,7 @@ function createInstagramHandlers(
             ]);
             return parseUnreadCountResponses(inbox, requests);
         },
-        async sendText(value: unknown) {
+        async sendText(value: JsonValue) {
             const payload = record(value);
             exactKeys(payload, ['threadFbid', 'text', 'replyToMessageId', 'offlineThreadingId']);
             const input = {
@@ -370,7 +360,7 @@ function createInstagramHandlers(
                 input.offlineThreadingId,
             );
         },
-        async editText(value: unknown) {
+        async editText(value: JsonValue) {
             const payload = record(value);
             exactKeys(payload, ['threadFbid', 'messageId', 'text', 'offlineThreadingId']);
             const input = {
@@ -389,7 +379,7 @@ function createInstagramHandlers(
                 throw new Error('Instagram edited message receipt did not match the request');
             return receipt;
         },
-        async forwardMessage(value: unknown) {
+        async forwardMessage(value: JsonValue) {
             const payload = record(value);
             exactKeys(payload, [
                 'targetThreadFbid', 'sourceThreadIgId',
@@ -398,7 +388,7 @@ function createInstagramHandlers(
             const targetThreadFbid = requiredString(payload.targetThreadFbid, 'target thread FBID');
             const sourceThreadIgId = requiredString(payload.sourceThreadIgId, 'source thread IG ID');
             const offlineThreadingId = numericStringId(payload.offlineThreadingId, 'offline threading ID');
-            if (typeof payload.sourceIsViewer !== 'boolean')
+            if (!isBoolean(payload.sourceIsViewer))
                 throw new Error('Invalid Instagram forwarding sender state');
             const content = record(payload.content, 'forwarding content');
             if (content.kind === 'text') {
@@ -434,10 +424,10 @@ function createInstagramHandlers(
             }
             throw new Error('Unsupported Instagram forwarding content');
         },
-        async setReaction(value: unknown) {
+        async setReaction(value: JsonValue) {
             const payload = record(value);
             exactKeys(payload, ['threadFbid', 'messageId', 'emoji', 'remove']);
-            if (typeof payload.remove !== 'boolean')
+            if (!isBoolean(payload.remove))
                 throw new Error('Invalid Instagram reaction removal state');
             const input = {
                 threadFbid: requiredString(payload.threadFbid, 'thread FBID'),
@@ -449,11 +439,11 @@ function createInstagramHandlers(
                 await execute('IGDirectReactionSendMutation', input),
             );
         },
-        async setReelLiked(value: unknown) {
+        async setReelLiked(value: JsonValue) {
             const payload = record(value);
             exactKeys(payload, ['mediaId', 'liked']);
             const mediaId = numericStringId(payload.mediaId, 'reel media ID');
-            if (typeof payload.liked !== 'boolean')
+            if (!isBoolean(payload.liked))
                 throw new Error('Invalid Instagram reel liked state');
             const input = {
                 mediaId,
@@ -467,11 +457,11 @@ function createInstagramHandlers(
                 throw new Error('Instagram reel like receipt did not match the request');
             return receipt;
         },
-        async setReelSaved(value: unknown) {
+        async setReelSaved(value: JsonValue) {
             const payload = record(value);
             exactKeys(payload, ['mediaId', 'saved']);
             const mediaId = numericStringId(payload.mediaId, 'reel media ID');
-            if (typeof payload.saved !== 'boolean')
+            if (!isBoolean(payload.saved))
                 throw new Error('Invalid Instagram reel saved state');
             const input = {
                 mediaId,
@@ -485,14 +475,14 @@ function createInstagramHandlers(
                 throw new Error('Instagram reel save receipt did not match the request');
             return receipt;
         },
-        async togglePin(value: unknown) {
+        async togglePin(value: JsonValue) {
             const payload = record(value);
             exactKeys(payload, ['threadKey', 'threadFbid', 'pin']);
             requiredString(payload.threadKey, 'thread key');
             const input = {
                 threadFbid: numericStringId(payload.threadFbid, 'thread FBID'),
             };
-            if (typeof payload.pin !== 'boolean')
+            if (!isBoolean(payload.pin))
                 throw new Error('Invalid Instagram conversation pin state');
             const receipt = parsePinnedThreadResponse(await execute(
                 payload.pin ? 'useIGDPinThreadMutation' : 'useIGDUnpinThreadMutation',
@@ -502,7 +492,7 @@ function createInstagramHandlers(
                 throw new Error('Instagram conversation pin receipt did not match the request');
             return { pinned: [], receipt };
         },
-        async markThreadRead(value: unknown) {
+        async markThreadRead(value: JsonValue) {
             const payload = record(value);
             exactKeys(payload, ['threadIgId', 'messageId', 'messageTimestampMs']);
             const input = {
@@ -516,29 +506,29 @@ function createInstagramHandlers(
             ]);
             const failures: string[] = [];
             if (receipt.status === 'rejected') {
-                failures.push(`receipt: ${failureMessage(receipt.reason)}`);
+                failures.push(`receipt: ${receipt.reason instanceof Error ? receipt.reason.message : String(receipt.reason)}`);
             } else {
                 try {
                     parseMarkThreadReadResponse(receipt.value);
                 } catch (error) {
-                    failures.push(`receipt: ${failureMessage(error)}`);
+                    failures.push(`receipt: ${error instanceof Error ? error.message : String(error)}`);
                 }
             }
             let parsedValidation: ReturnType<typeof parseMarkThreadReadValidationResponse> | undefined;
             if (validation.status === 'rejected') {
-                failures.push(`validation: ${failureMessage(validation.reason)}`);
+                failures.push(`validation: ${validation.reason instanceof Error ? validation.reason.message : String(validation.reason)}`);
             } else {
                 try {
                     parsedValidation = parseMarkThreadReadValidationResponse(validation.value);
                 } catch (error) {
-                    failures.push(`validation: ${failureMessage(error)}`);
+                    failures.push(`validation: ${error instanceof Error ? error.message : String(error)}`);
                 }
             }
             if (failures.length)
                 throw new Error(`Instagram mark-read request failed (${failures.join('; ')})`);
             return parsedValidation!;
         },
-        async pinMessage(value: unknown) {
+        async pinMessage(value: JsonValue) {
             const payload = record(value);
             exactKeys(payload, ['threadFbid', 'messageId', 'replaceOldest']);
             const input = {
@@ -548,7 +538,7 @@ function createInstagramHandlers(
             };
             return parsePinnedMessageResponse(await execute('useIGDPinMessageOffMsysMutation', input));
         },
-        async sendCutoutSticker(value: unknown) {
+        async sendCutoutSticker(value: JsonValue) {
             const payload = record(value);
             exactKeys(payload, ['threadFbid', 'stickerId', 'replyToMessageId', 'clientRequestId']);
             const input = {
@@ -568,7 +558,7 @@ function createInstagramHandlers(
                 input.offlineThreadingId,
             );
         },
-        async executeInstagramGraphql(value: unknown) {
+        async executeInstagramGraphql(value: JsonValue) {
             const request = validateSecondary(value);
             const json = await execute(request.operation, secondaryInput(request));
             const sanitized = parseInstagramGraphqlPayload(json);

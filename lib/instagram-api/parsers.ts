@@ -12,6 +12,7 @@ import type {
     InstagramSecondaryGraphqlResult,
     Page,
     ReelComment,
+    ReelCommentReplies,
     ReelComments,
     ReelAuthor,
     ReelLikeReceipt,
@@ -31,35 +32,41 @@ import {
     parseThreadActivityMs,
     parseTimestampMs,
 } from '../instagram-timestamps.ts';
+import {
+    isBoolean,
+    isJsonObject,
+    isNumber,
+    isString,
+    type JsonObject,
+    type JsonValue,
+} from '../json.ts';
 
-type JsonObject = Record<string, unknown>;
 type ReelPayload = { shortcode: string; mediaId?: string };
+type PinnedMessageResult = { pinnedMessageIds: string[] };
 
-function objectProp(value: unknown): JsonObject | undefined {
-    return typeof value === 'object' && value !== null && !Array.isArray(value)
-        ? (value as JsonObject)
-        : undefined;
+function objectProp(value: JsonValue | undefined): JsonObject | undefined {
+    return isJsonObject(value) ? value : undefined;
 }
 
-function stringProp(value: unknown): string | undefined {
-    return typeof value === 'string' && value.length > 0 ? value : undefined;
+function stringProp(value: JsonValue | undefined): string | undefined {
+    return isString(value) && value.length > 0 ? value : undefined;
 }
 
-function booleanProp(value: unknown): boolean | undefined {
-    return typeof value === 'boolean' ? value : undefined;
+function booleanProp(value: JsonValue | undefined): boolean | undefined {
+    return isBoolean(value) ? value : undefined;
 }
 
-function numberProp(value: unknown): number | undefined {
-    return typeof value === 'number' && Number.isFinite(value)
+function numberProp(value: JsonValue | undefined): number | undefined {
+    return isNumber(value) && Number.isFinite(value)
         ? value
         : undefined;
 }
 
-function imageUrl(value: unknown): string | undefined {
+function imageUrl(value: JsonValue | undefined): string | undefined {
     return stringProp(objectProp(value)?.url);
 }
 
-function textFragments(value: unknown): string | undefined {
+function textFragments(value: JsonValue | undefined): string | undefined {
     if (!Array.isArray(value)) return undefined;
     const text = value
         .map(fragment => stringProp(objectProp(fragment)?.plaintext) ?? '')
@@ -91,9 +98,13 @@ function xmaThumb(xma: JsonObject | undefined): string | undefined {
     return imageUrl(xma?.preview_image) ?? imageUrl(xma?.xmaPreviewImage);
 }
 
-function positiveDimension(value: unknown): number | undefined {
+function positiveDimension(value: JsonValue | undefined): number | undefined {
     const dimension = numberProp(value);
     return dimension !== undefined && dimension > 0 ? dimension : undefined;
+}
+
+function safeIntegerArray(value: JsonValue | undefined): value is number[] {
+    return Array.isArray(value) && value.every(item => isNumber(item) && Number.isSafeInteger(item));
 }
 
 function xmaPreviewDimensions(xma: JsonObject): { width: number; height: number } | undefined {
@@ -130,7 +141,7 @@ function senderId(node: JsonObject): string {
     );
 }
 
-function parseReactions(value: unknown): MessageReaction[] {
+function parseReactions(value: JsonValue | undefined): MessageReaction[] {
     if (!Array.isArray(value)) return [];
     return value.flatMap(item => {
         const reaction = objectProp(item);
@@ -234,16 +245,8 @@ function fallbackFor(
 ): MessageFallback {
     const xma = objectProp(content?.xma);
     const fragmentText = textFragments(content?.text_fragments);
-    const labels: Record<string, string> = {
-        IMAGES: 'Photo',
-        MESSAGE_INLINE_SHARE: 'Shared post',
-        GEN_AI_RICH_RESPONSE_XMA: 'Meta AI response',
-        GEN_AI_SEARCH_PLUGIN_RESPONSE_XMA: 'Meta AI search response',
-        MONTAGE_SHARE_XMA: 'Story',
-        IG_REELS_BLEND_VISITATION_XMAT: 'Reels blend activity',
-    };
     return {
-        label: xmaTitle(xma) ?? fragmentText ?? labels[contentType] ?? 'Unsupported message',
+        label: xmaTitle(xma) ?? fragmentText ?? fallbackLabel(contentType),
         preview:
             stringProp(node.text_body) ??
             stringProp(content?.text_body) ??
@@ -256,14 +259,35 @@ function fallbackFor(
     };
 }
 
-export function parseMessage(value: unknown): Message | undefined {
+function fallbackLabel(contentType: string): string {
+    switch (contentType) {
+        case 'IMAGES': return 'Photo';
+        case 'MESSAGE_INLINE_SHARE': return 'Shared post';
+        case 'GEN_AI_RICH_RESPONSE_XMA': return 'Meta AI response';
+        case 'GEN_AI_SEARCH_PLUGIN_RESPONSE_XMA': return 'Meta AI search response';
+        case 'MONTAGE_SHARE_XMA': return 'Story';
+        case 'IG_REELS_BLEND_VISITATION_XMAT': return 'Reels blend activity';
+        default: return 'Unsupported message';
+    }
+}
+
+function activityLabel(contentType: string): string | undefined {
+    switch (contentType) {
+        case 'CHANGE_THREAD_IMAGE_XMAT': return 'Group image changed';
+        case 'CHANGE_THREAD_NAME_XMAT': return 'Group name changed';
+        case 'REMOVE_PARTICIPANT_XMAT': return 'Participant removed';
+        case 'THREAD_IGD_NEW_FRIEND_BUMP_XMAT': return 'You are now connected on Instagram';
+        default: return undefined;
+    }
+}
+
+export function parseMessage(value: JsonValue | undefined): Message | undefined {
     const node = objectProp(value);
     if (!node) return undefined;
     const contentType = stringProp(node.content_type) ?? 'UNKNOWN';
     if (contentType === 'REACTION_LOG_XMAT') return undefined;
 
     const identity = messageIdentity(node);
-    const { id } = identity;
     const ts = messageTs(node);
     const sender = senderId(node);
     const content = objectProp(node.content);
@@ -308,13 +332,8 @@ export function parseMessage(value: unknown): Message | undefined {
                 'Activity',
         };
 
-    const activityLabels: Record<string, string> = {
-        CHANGE_THREAD_IMAGE_XMAT: 'Group image changed',
-        CHANGE_THREAD_NAME_XMAT: 'Group name changed',
-        REMOVE_PARTICIPANT_XMAT: 'Participant removed',
-        THREAD_IGD_NEW_FRIEND_BUMP_XMAT: 'You are now connected on Instagram',
-    };
-    if (contentType in activityLabels)
+    const activity = activityLabel(contentType);
+    if (activity)
         return {
             kind: 'activity',
             ...identity,
@@ -325,7 +344,7 @@ export function parseMessage(value: unknown): Message | undefined {
                 stringProp(node.text_body) ??
                 stringProp(content?.text_body) ??
                 textFragments(content?.text_fragments) ??
-                activityLabels[contentType],
+                activity,
         };
 
     if (contentType === 'IMAGES') {
@@ -376,7 +395,7 @@ export function parseMessage(value: unknown): Message | undefined {
     };
 }
 
-export function parseUser(value: unknown): User | undefined {
+export function parseUser(value: JsonValue | undefined): User | undefined {
     const user = objectProp(value);
     if (!user) return undefined;
     const id =
@@ -399,7 +418,7 @@ export function parseUser(value: unknown): User | undefined {
     };
 }
 
-export function parseFolder(value: unknown): Folder | undefined {
+export function parseFolder(value: JsonValue | undefined): Folder | undefined {
     switch (value) {
         case 'PRIMARY':
         case 'INBOX':
@@ -429,7 +448,7 @@ function pinnedMessageIds(thread: JsonObject): string[] {
     return ids;
 }
 
-export function parseThread(value: unknown): Thread | undefined {
+export function parseThread(value: JsonValue | undefined): Thread | undefined {
     const thread = objectProp(value);
     if (!thread) return undefined;
     const key =
@@ -495,7 +514,7 @@ export function parseThread(value: unknown): Thread | undefined {
     };
 }
 
-export function parseThreads(container: unknown): Page<Thread> {
+export function parseThreads(container: JsonValue | undefined): Page<Thread> {
     const box = objectProp(container);
     const pageInfo = objectProp(box?.page_info);
     const items = (Array.isArray(box?.edges) ? box.edges : [])
@@ -511,7 +530,7 @@ export function parseThreads(container: unknown): Page<Thread> {
     };
 }
 
-export function parseMessagePage(container: unknown): Page<Message> {
+export function parseMessagePage(container: JsonValue | undefined): Page<Message> {
     const page = objectProp(container);
     const pageInfo = objectProp(page?.page_info);
     const items = (Array.isArray(page?.edges) ? page.edges : [])
@@ -525,11 +544,11 @@ export function parseMessagePage(container: unknown): Page<Message> {
     };
 }
 
-function responseData(json: unknown): JsonObject | undefined {
+function responseData(json: JsonValue | undefined): JsonObject | undefined {
     return objectProp(objectProp(json)?.data);
 }
 
-function responseThread(json: unknown): JsonObject | undefined {
+function responseThread(json: JsonValue | undefined): JsonObject | undefined {
     const data = responseData(json);
     const wrapper =
         objectProp(data?.get_slide_thread_nullable) ??
@@ -537,7 +556,7 @@ function responseThread(json: unknown): JsonObject | undefined {
     return objectProp(wrapper?.as_ig_direct_thread);
 }
 
-export function parseInboxResponse(json: unknown): Page<Thread> {
+export function parseInboxResponse(json: JsonValue | undefined): Page<Thread> {
     const data = responseData(json);
     const mailbox =
         objectProp(data?.get_slide_mailbox_for_iris_subscription) ??
@@ -546,7 +565,7 @@ export function parseInboxResponse(json: unknown): Page<Thread> {
 }
 
 /** Interop messaging FBID required by Slide mailbox pagination. */
-export function parseMailboxId(json: unknown): string | undefined {
+export function parseMailboxId(json: JsonValue | undefined): string | undefined {
     const data = responseData(json);
     const mailbox =
         objectProp(data?.get_slide_mailbox_for_iris_subscription) ??
@@ -555,7 +574,7 @@ export function parseMailboxId(json: unknown): string | undefined {
 }
 
 export function parseMessageRequestsResponse(
-    json: unknown,
+    json: JsonValue | undefined,
     folder: MessageRequestFolder,
 ): Page<Thread> {
     const data = responseData(json);
@@ -573,7 +592,7 @@ export function parseMessageRequestsResponse(
 }
 
 export function parseThreadResponse(
-    json: unknown,
+    json: JsonValue | undefined,
     fallbackViewerId: string,
 ): ThreadMessages {
     const thread = responseThread(json);
@@ -588,7 +607,7 @@ export function parseThreadResponse(
     };
 }
 
-export function parseThreadInfoResponse(json: unknown): ThreadInfo {
+export function parseThreadInfoResponse(json: JsonValue | undefined): ThreadInfo {
     const parsed = parseThread(responseThread(json));
     if (!parsed) throw new Error('Instagram thread info was not returned');
     const { key, threadFbid, threadIgId, title, isGroup, isMuted, serverIsPin, users } = parsed;
@@ -596,14 +615,15 @@ export function parseThreadInfoResponse(json: unknown): ThreadInfo {
 }
 
 export function parseThreadInfoResponses(
-    headerJson: unknown,
-    infoJson: unknown,
+    headerJson: JsonValue | undefined,
+    infoJson: JsonValue | undefined,
 ): ThreadInfo {
     const header = parseThread(responseThread(headerJson));
     const info = parseThread(responseThread(infoJson));
     if (!header && !info)
         throw new Error('Instagram thread info was not returned');
-    const primary = header ?? info!;
+    const primary = header ?? info;
+    if (!primary) throw new Error('Instagram thread info was not returned');
     return {
         key: primary.key,
         threadFbid: header?.threadFbid ?? info?.threadFbid,
@@ -619,7 +639,7 @@ export function parseThreadInfoResponses(
     };
 }
 
-function unreadPage(json: unknown, mailboxName = 'get_slide_mailbox_for_iris_subscription') {
+function unreadPage(json: JsonValue | undefined, mailboxName = 'get_slide_mailbox_for_iris_subscription') {
     const data = responseData(json);
     const mailbox = objectProp(data?.[mailboxName]);
     const box = objectProp(mailbox?.threads_by_folder);
@@ -634,13 +654,13 @@ function unreadPage(json: unknown, mailboxName = 'get_slide_mailbox_for_iris_sub
     };
 }
 
-export function parseBadgeCountResponse(json: unknown): number {
+export function parseBadgeCountResponse(json: JsonValue | undefined): number {
     return unreadPage(json).count;
 }
 
 export function parseUnreadCountResponses(
-    inboxJson: unknown,
-    requestsJson?: unknown,
+    inboxJson: JsonValue | undefined,
+    requestsJson?: JsonValue | undefined,
 ): UnreadCount {
     const inbox = unreadPage(inboxJson);
     const requests = unreadPage(requestsJson);
@@ -653,7 +673,7 @@ export function parseUnreadCountResponses(
     };
 }
 
-export function parseMessageActionsResponse(json: unknown): MessageActions {
+export function parseMessageActionsResponse(json: JsonValue | undefined): MessageActions {
     const data = responseData(json);
     const message = objectProp(data?.get_slide_message);
     const thread = objectProp(
@@ -685,7 +705,7 @@ function mutationSuccess(condition: boolean, message: string): MutationSuccess {
     return { success: true };
 }
 
-function parseMutationReactions(value: unknown): MessageReaction[] {
+function parseMutationReactions(value: JsonValue | undefined): MessageReaction[] {
     if (!Array.isArray(value))
         throw new Error('Instagram reaction receipt was malformed');
     return value.map(value => {
@@ -699,7 +719,7 @@ function parseMutationReactions(value: unknown): MessageReaction[] {
     });
 }
 
-export function parseReactionMutationResponse(json: unknown): SetReactionResult {
+export function parseReactionMutationResponse(json: JsonValue | undefined): SetReactionResult {
     const receipt = objectProp(
         responseData(json)?.xig_direct_reaction_send_with_slide_messaging_response,
     );
@@ -713,7 +733,7 @@ export function parseReactionMutationResponse(json: unknown): SetReactionResult 
     };
 }
 
-export function parseMarkThreadReadResponse(json: unknown): MutationSuccess {
+export function parseMarkThreadReadResponse(json: JsonValue | undefined): MutationSuccess {
     return mutationSuccess(
         objectProp(
             responseData(json)
@@ -724,14 +744,14 @@ export function parseMarkThreadReadResponse(json: unknown): MutationSuccess {
 }
 
 export function parseMarkThreadReadValidationResponse(
-    json: unknown,
+    json: JsonValue | undefined,
 ): MutationSuccess {
-    if (typeof responseData(json)?.xig_direct_mark_read_id_validation !== 'boolean')
+    if (!isBoolean(responseData(json)?.xig_direct_mark_read_id_validation))
         throw new Error('Instagram read validation was not returned');
     return { success: true };
 }
 
-function sentMessage(value: unknown, clientRequestId: string): SentMessage {
+function sentMessage(value: JsonValue | undefined, clientRequestId: string): SentMessage {
     const receipt = objectProp(value);
     const id = stringProp(receipt?.message_id) ?? stringProp(receipt?.id);
     if (!id) throw new Error('Instagram sent message ID was not returned');
@@ -742,7 +762,7 @@ function sentMessage(value: unknown, clientRequestId: string): SentMessage {
     };
 }
 
-export function parseSentTextResponse(json: unknown, clientRequestId: string): SentTextMessage {
+export function parseSentTextResponse(json: JsonValue | undefined, clientRequestId: string): SentTextMessage {
     const receipt = objectProp(
         responseData(json)?.xig_direct_text_send_with_slide_messaging_response,
     );
@@ -755,7 +775,7 @@ export function parseSentTextResponse(json: unknown, clientRequestId: string): S
     return { messageId, timestampMs, clientRequestId };
 }
 
-export function parseEditedTextResponse(json: unknown) {
+export function parseEditedTextResponse(json: JsonValue | undefined) {
     const receipt = objectProp(
         responseData(json)?.direct_edit_message_with_slide_messaging_response,
     );
@@ -767,21 +787,21 @@ export function parseEditedTextResponse(json: unknown) {
     return { messageId, timestampMs };
 }
 
-export function parseSentCutoutStickerResponse(json: unknown, clientRequestId: string): SentMessage {
+export function parseSentCutoutStickerResponse(json: JsonValue | undefined, clientRequestId: string): SentMessage {
     return sentMessage(
         responseData(json)?.ig_direct_cutout_sticker_share_with_slide_msg_response,
         clientRequestId,
     );
 }
 
-export function parseForwardedReelResponse(json: unknown, clientRequestId: string): SentMessage {
+export function parseForwardedReelResponse(json: JsonValue | undefined, clientRequestId: string): SentMessage {
     return sentMessage(
         responseData(json)?.xig_direct_clip_share_with_slide_msg_response,
         clientRequestId,
     );
 }
 
-export function parseForwardedPostResponse(json: unknown, clientRequestId: string): SentMessage {
+export function parseForwardedPostResponse(json: JsonValue | undefined, clientRequestId: string): SentMessage {
     return sentMessage(
         responseData(json)?.direct_media_share_with_slide_response,
         clientRequestId,
@@ -802,7 +822,7 @@ function stickerImage(value: JsonObject | undefined) {
 
 export function parseSecondaryGraphqlResponse(
     operation: InstagramSecondaryGraphqlResult['operation'],
-    json: unknown,
+    json: JsonValue | undefined,
 ): InstagramSecondaryGraphqlResult {
     const data = responseData(json);
     if (operation === 'IGDEmojiPickerQuery') {
@@ -817,8 +837,8 @@ export function parseSecondaryGraphqlResponse(
                 ? category.emojis_in_category
                 : []).flatMap(item => {
                 const points = objectProp(item)?.codepoint;
-                if (!Array.isArray(points) || !points.every(Number.isSafeInteger)) return [];
-                try { return [String.fromCodePoint(...(points as number[]))]; }
+                if (!safeIntegerArray(points)) return [];
+                try { return [String.fromCodePoint(...points)]; }
                 catch { return []; }
             });
             return [{ id, name, items }];
@@ -845,7 +865,7 @@ export function parseSecondaryGraphqlResponse(
                 if (!stickerId) return [];
                 return [{
                     id: stickerId,
-                    altText: typeof sticker.alt_text === 'string' ? sticker.alt_text : '',
+                    altText: isString(sticker.alt_text) ? sticker.alt_text : '',
                     sendType: stringProp(sticker.sticker_send_type),
                     image: stickerImage(sticker),
                 }];
@@ -905,18 +925,17 @@ export function parseSecondaryGraphqlResponse(
             threadFbid: stringProp(thread?.id) ?? stringProp(wrapper?.id),
         };
     }
+    // SAFETY: JsonObject values came from the JSON boundary, so present properties cannot be undefined.
     return { operation, payload: { data: data as Record<string, never> | undefined } };
 }
 
-export function parsePinnedMessageResponse(json: unknown): {
-    pinnedMessageIds: string[];
-} {
+export function parsePinnedMessageResponse(json: JsonValue | undefined): PinnedMessageResult {
     const result = objectProp(responseData(json)?.xig_direct_pin_message);
     if (!result) throw new Error('Instagram pin result was not returned');
     return { pinnedMessageIds: pinnedMessageIds(result) };
 }
 
-export function parsePinnedThreadResponse(json: unknown): PinThreadResult {
+export function parsePinnedThreadResponse(json: JsonValue | undefined): PinThreadResult {
     const result = objectProp(responseData(json)?.xig_direct_pin_thread);
     const threadFbid = stringProp(result?.id);
     const isPinned = booleanProp(result?.is_pin);
@@ -925,12 +944,15 @@ export function parsePinnedThreadResponse(json: unknown): PinThreadResult {
     return { threadFbid, isPinned };
 }
 
-function equivalentMediaId(left: string, right: string): boolean {
-    const normalize = (value: string) => /^\d+$/.test(value)
+function normalizeMediaId(value: string): string | undefined {
+    return /^\d+$/.test(value)
         ? value
         : /^(\d+)_\d+$/.exec(value)?.[1];
-    const leftId = normalize(left);
-    return Boolean(leftId && leftId === normalize(right));
+}
+
+function equivalentMediaId(left: string, right: string): boolean {
+    const leftId = normalizeMediaId(left);
+    return Boolean(leftId && leftId === normalizeMediaId(right));
 }
 
 function instagramMediaId(node: JsonObject | undefined): string | undefined {
@@ -996,13 +1018,16 @@ function reelItem(
         id,
         kind: 'video',
         videoUrl,
-        variants: versions.length ? versions.map(version => ({
-            url: stringProp(version.url)!,
-            type: numberProp(version.type),
-            width: numberProp(version.width),
-            height: numberProp(version.height),
-            bandwidth: numberProp(version.bandwidth),
-        })) : [{ url: videoUrl }],
+        variants: versions.length ? versions.flatMap(version => {
+            const url = stringProp(version.url);
+            return url ? [{
+                url,
+                type: numberProp(version.type),
+                width: numberProp(version.width),
+                height: numberProp(version.height),
+                bandwidth: numberProp(version.bandwidth),
+            }] : [];
+        }) : [{ url: videoUrl }],
         posterUrl: image?.url ?? videoUrl,
         width,
         height,
@@ -1023,7 +1048,7 @@ function reelItem(
     return undefined;
 }
 
-function reelAuthor(value: unknown) {
+function reelAuthor(value: JsonValue | undefined) {
     const user = objectProp(value);
     return {
         id: stringProp(user?.pk) ?? stringProp(user?.id) ?? '',
@@ -1035,7 +1060,7 @@ function reelAuthor(value: unknown) {
 }
 
 export function parseReelInfoResponse(
-    json: unknown,
+    json: JsonValue | undefined,
     payload: ReelPayload,
 ): ReelMedia {
     const root = objectProp(json);
@@ -1048,9 +1073,10 @@ export function parseReelInfoResponse(
     const canDownload = booleanProp(item.is_third_party_downloads_eligible) ?? false;
     const isCarousel = numberProp(item.media_type) === 8 ||
         stringProp(item.product_type) === 'carousel_container';
-    if (isCarousel && (!Array.isArray(item.carousel_media) || !item.carousel_media.length))
+    const carouselMedia = item.carousel_media;
+    if (isCarousel && (!Array.isArray(carouselMedia) || !carouselMedia.length))
         throw new Error('Instagram reel carousel media was not returned');
-    const children = isCarousel ? (item.carousel_media as unknown[]).map(child => {
+    const children = isCarousel && Array.isArray(carouselMedia) ? carouselMedia.map(child => {
         const parsed = objectProp(child);
         if (!parsed) throw new Error('Instagram reel carousel contained malformed media');
         return parsed;
@@ -1081,6 +1107,7 @@ export function parseReelInfoResponse(
             ? stringProp(musicAsset?.display_artist)
             : stringProp(originalArtist?.full_name) ?? stringProp(originalArtist?.username),
     } : undefined;
+    const overlapDurationMs = numberProp(musicConsumption?.overlap_duration_in_ms);
     const attachedAudio = mediaType === 'post' && attachedAudioUrl && attachedAudioId ? {
         id: attachedAudioId,
         url: attachedAudioUrl,
@@ -1088,20 +1115,18 @@ export function parseReelInfoResponse(
         artist: stringProp(musicAsset?.display_artist),
         durationSec: (numberProp(musicAsset?.duration_in_ms) ?? 0) / 1_000,
         startTimeSec: (numberProp(musicConsumption?.audio_asset_start_time_in_ms) ?? 0) / 1_000,
-        playDurationSec: numberProp(musicConsumption?.overlap_duration_in_ms) === undefined
-            ? undefined
-            : numberProp(musicConsumption?.overlap_duration_in_ms)! / 1_000,
+        playDurationSec: overlapDurationMs === undefined ? undefined : overlapDurationMs / 1_000,
     } : undefined;
+    const takenAt = numberProp(item.taken_at);
+    const parsedItems = items.filter((child): child is ReelMediaItem => child !== undefined);
     return {
         id: mediaId,
         shortcode: payload.shortcode,
         mediaType,
         author: reelAuthor(item.user),
         caption: stringProp(caption?.text),
-        takenAtMs: numberProp(item.taken_at) === undefined
-            ? undefined
-            : numberProp(item.taken_at)! * 1_000,
-        items: items as ReelMediaItem[],
+        takenAtMs: takenAt === undefined ? undefined : takenAt * 1_000,
+        items: parsedItems,
         likeCount: numberProp(item.like_count) ?? 0,
         commentCount: numberProp(item.comment_count) ?? 0,
         hasLiked: booleanProp(item.has_liked) ?? false,
@@ -1114,7 +1139,7 @@ export function parseReelInfoResponse(
     };
 }
 
-export function parseTopLikerCandidates(json: unknown): ReelAuthor[] {
+export function parseTopLikerCandidates(json: JsonValue | undefined): ReelAuthor[] {
     const root = objectProp(json);
     const item = Array.isArray(root?.items) ? objectProp(root.items[0]) : undefined;
     if (!item) return [];
@@ -1134,7 +1159,7 @@ export function parseTopLikerCandidates(json: unknown): ReelAuthor[] {
     ).slice(0, 5);
 }
 
-export function parseViewerFollowingResponse(json: unknown, expectedUserId: string): boolean {
+export function parseViewerFollowingResponse(json: JsonValue | undefined, expectedUserId: string): boolean {
     const root = objectProp(json);
     const data = objectProp(root?.data);
     const result = objectProp(data?.xig_user_by_igid_v2);
@@ -1158,22 +1183,23 @@ function reelComment(comment: JsonObject): ReelComment | undefined {
             is_verified: false,
         }
         : authorSource;
-    const parentCommentId = stringProp(comment.parent_comment_id);
-    const repliedToCommentId = stringProp(comment.replied_to_comment_id);
-    return {
+    const result: ReelComment = {
         id,
         text,
         createdAtMs: (numberProp(comment.created_at) ?? numberProp(comment.created_time) ?? 0) * 1_000,
         likeCount: numberProp(comment.comment_like_count) ?? 0,
         hasLiked: booleanProp(comment.has_liked_comment) ?? false,
         childCommentCount: numberProp(comment.child_comment_count) ?? 0,
-        ...(parentCommentId ? { parentCommentId } : {}),
-        ...(repliedToCommentId ? { repliedToCommentId } : {}),
         author: reelAuthor(normalizedAuthor),
     };
+    const parentCommentId = stringProp(comment.parent_comment_id);
+    if (parentCommentId) result.parentCommentId = parentCommentId;
+    const repliedToCommentId = stringProp(comment.replied_to_comment_id);
+    if (repliedToCommentId) result.repliedToCommentId = repliedToCommentId;
+    return result;
 }
 
-export function parseReelCommentsResponse(json: unknown): ReelComments {
+export function parseReelCommentsResponse(json: JsonValue | undefined): ReelComments {
     const root = objectProp(json);
     if (!root || !Array.isArray(root.comments))
         throw new Error('Instagram reel comments were not returned');
@@ -1186,19 +1212,19 @@ export function parseReelCommentsResponse(json: unknown): ReelComments {
         )
         : undefined;
     const featuredId = stringProp(featuredCommentId?.pk) ?? stringProp(featuredCommentId?.id);
-    return {
+    const result: ReelComments = {
         items,
-        ...(cursor ? { cursor } : {}),
-        ...(featuredId && items.some(comment => comment.id === featuredId)
-            ? { featuredCommentId: featuredId }
-            : {}),
         // Captured continuation pages report has_more_comments=false while still
         // returning a usable next_min_id, so cursor presence is authoritative.
         hasNextPage: Boolean(cursor),
     };
+    if (cursor) result.cursor = cursor;
+    if (featuredId && items.some(comment => comment.id === featuredId))
+        result.featuredCommentId = featuredId;
+    return result;
 }
 
-export function parseReelCommentRepliesResponse(json: unknown, expectedParentId: string) {
+export function parseReelCommentRepliesResponse(json: JsonValue | undefined, expectedParentId: string): ReelCommentReplies {
     const root = objectProp(json);
     if (!root || !Array.isArray(root.child_comments) || stringProp(root.status) !== 'ok')
         throw new Error('Instagram comment replies were not returned');
@@ -1212,37 +1238,37 @@ export function parseReelCommentRepliesResponse(json: unknown, expectedParentId:
     if (items.some(comment => comment.parentCommentId !== expectedParentId))
         throw new Error('Instagram comment reply had an invalid parent');
     const cursor = stringProp(root.next_min_child_cursor);
-    return {
+    const result: ReelCommentReplies = {
         parentCommentId: expectedParentId,
         items,
-        ...(cursor ? { cursor } : {}),
         hasNextPage: Boolean(cursor),
     };
+    if (cursor) result.cursor = cursor;
+    return result;
 }
 
-export function parseCreatedReelCommentResponse(json: unknown, replyToCommentId?: string): ReelComment {
+export function parseCreatedReelCommentResponse(json: JsonValue | undefined, replyToCommentId?: string): ReelComment {
     const root = objectProp(json);
     if (!root || stringProp(root.status) !== 'ok')
         throw new Error('Instagram created comment was not returned');
-    const comment = reelComment({
-        ...root,
-        ...(replyToCommentId ? {
-            parent_comment_id: replyToCommentId,
-            replied_to_comment_id: replyToCommentId,
-        } : {}),
-    });
+    const commentPayload: JsonObject = { ...root };
+    if (replyToCommentId) {
+        commentPayload.parent_comment_id = replyToCommentId;
+        commentPayload.replied_to_comment_id = replyToCommentId;
+    }
+    const comment = reelComment(commentPayload);
     if (!comment) throw new Error('Instagram created comment was invalid');
     return comment;
 }
 
-export function parseReelCommentLikeResponse(json: unknown): void {
+export function parseReelCommentLikeResponse(json: JsonValue | undefined): void {
     const result = objectProp(responseData(json)?.xig_comment_like);
     if (stringProp(result?.__typename) !== 'XIGCommentLikeMutationResponse')
         throw new Error('Instagram comment like receipt was not returned');
 }
 
 export function parseReelLikeResponse(
-    json: unknown,
+    json: JsonValue | undefined,
     liked: boolean,
 ): ReelLikeReceipt {
     const result = objectProp(responseData(json)?.[liked ? 'xig_media_like' : 'xig_media_unlike']);
@@ -1252,7 +1278,7 @@ export function parseReelLikeResponse(
 }
 
 export function parseReelSaveResponse(
-    json: unknown,
+    json: JsonValue | undefined,
     saved: boolean,
 ): ReelSaveReceipt {
     const result = objectProp(responseData(json)?.[saved ? 'xig_media_save' : 'xig_media_unsave']);

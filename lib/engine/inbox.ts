@@ -75,8 +75,8 @@ export function normalizeInbox(page: Page<Thread>, fetchedAt = Date.now()): Inbo
     return inbox;
 }
 
-function publicError<Caught>(error: Caught, fallback: InboxErrorKind): EngineError {
-    const known = error instanceof InboxError ? error : new InboxError(fallback);
+function publicError(cause: unknown, fallback: InboxErrorKind): EngineError {
+    const known = cause instanceof InboxError ? cause : new InboxError(fallback);
     return { kind: known.kind, message: known.message };
 }
 

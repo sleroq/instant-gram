@@ -1,3 +1,12 @@
+import {
+    isBoolean,
+    isJsonObject,
+    isNumber,
+    isString,
+    parseJson,
+    type JsonValue,
+} from './json.ts';
+
 export type Tokens = {
     fbDtsg: string;
     lsd: string;
@@ -21,8 +30,39 @@ type AuthProbePayload = Partial<
     requireAvailable: boolean;
     sources: Partial<Record<TokenKey, string>>;
 };
-type PageRequire = (name: string) => unknown;
-type PageWindow = Window & { require?: PageRequire };
+type TokenModule = { token?: string };
+type IdentityModule = {
+    viewer_fbid?: string;
+    actorID?: string;
+    USER_ID?: string;
+    ACCOUNT_ID?: string;
+};
+type PageModules = {
+    DTSGInitialData: TokenModule;
+    LSD: TokenModule;
+    LSDToken: TokenModule;
+    CurrentUserInitialData: IdentityModule;
+    PolarisViewer: IdentityModule;
+    Viewer: IdentityModule;
+};
+type PageRequire = <Name extends keyof PageModules>(
+    name: Name,
+) => PageModules[Name] | undefined;
+
+function hasPageRequire(
+    value: Window['require'],
+): value is PageRequire {
+    return typeof value === 'function';
+}
+
+declare global {
+    interface Window {
+        require?: PageRequire;
+    }
+    interface WindowEventMap {
+        'icr:ig-auth-probe': CustomEvent<string>;
+    }
+}
 
 export const AUTH_PROBE_EVENT = 'icr:ig-auth-probe';
 export const AUTH_PROBE_REQUEST_EVENT = 'icr:ig-auth-probe-request';
@@ -34,18 +74,16 @@ let pendingHarvest: Promise<Tokens> | undefined;
 
 const TOKEN_CACHE_MS = 60_000;
 const AUTH_PROBE_TIMEOUT_MS = 2_500;
+const AUTH_PROBE_TTL_MS = 60_000;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-    return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function findString(root: unknown, keys: string[]): string | undefined {
-    if (!isRecord(root)) return undefined;
+function findString(root: JsonValue, keys: string[]): string | undefined {
+    if (!isJsonObject(root)) return undefined;
     for (const key of keys) {
         const value = root[key];
-        if (typeof value === 'string' && value.length > 0) return value;
+        if (isString(value) && value.length > 0) return value;
     }
     for (const value of Object.values(root)) {
+        if (value === undefined) continue;
         const found = Array.isArray(value)
             ? value.map(item => findString(item, keys)).find(Boolean)
             : findString(value, keys);
@@ -54,7 +92,7 @@ function findString(root: unknown, keys: string[]): string | undefined {
     return undefined;
 }
 
-function pageJson(): unknown[] {
+function pageJson(): JsonValue[] {
     return Array.from(
         document.querySelectorAll(
             'script[type="application/json"][data-sjs], script[data-sjs]',
@@ -63,7 +101,7 @@ function pageJson(): unknown[] {
         .map(node => node.textContent ?? '')
         .flatMap(text => {
             try {
-                return [JSON.parse(text) as unknown];
+                return [parseJson(text)];
             } catch {
                 return [];
             }
@@ -87,27 +125,27 @@ function firstMatch(text: string, patterns: RegExp[]): string | undefined {
     return undefined;
 }
 
-function optionalString(value: unknown, field: string): string | undefined {
+function optionalString(value: JsonValue | undefined, field: string): string | undefined {
     if (value === undefined) return undefined;
-    if (typeof value === 'string' && value.length > 0) return value;
+    if (isString(value) && value.length > 0) return value;
     throw new Error(`Invalid Instagram auth probe ${field}`);
 }
 
-function userId(value: unknown): string | undefined {
-    return typeof value === 'string' && /^\d+$/.test(value) && value !== '0'
+function userId(value: JsonValue | undefined): string | undefined {
+    return isString(value) && /^\d+$/.test(value) && value !== '0'
         ? value
         : undefined;
 }
 
 function parseAuthProbe(detail: string): AuthProbePayload {
-    const data = JSON.parse(detail) as unknown;
-    if (!isRecord(data))
+    const data = parseJson(detail);
+    if (!isJsonObject(data))
         throw new Error('Invalid Instagram auth probe payload');
-    if (typeof data.at !== 'number')
+    if (!isNumber(data.at))
         throw new Error('Invalid Instagram auth probe at');
-    if (typeof data.requireAvailable !== 'boolean')
+    if (!isBoolean(data.requireAvailable))
         throw new Error('Invalid Instagram auth probe requireAvailable');
-    if (!isRecord(data.sources) || Object.keys(data.sources).length === 0)
+    if (!isJsonObject(data.sources) || Object.keys(data.sources).length === 0)
         throw new Error('Invalid Instagram auth probe sources');
 
     return {
@@ -131,7 +169,7 @@ function parseAuthProbe(detail: string): AuthProbePayload {
 function readProbeToken(key: TokenKey): string | undefined {
     const value = pageAuthProbe[key];
     if (key === 'viewerId') return userId(value);
-    return typeof value === 'string' && value.length > 0 ? value : undefined;
+    return isString(value) && value.length > 0 ? value : undefined;
 }
 
 function source(
@@ -197,15 +235,18 @@ function requestAuthProbe() {
 
 export function startAuthProbeListener() {
     window.addEventListener(AUTH_PROBE_EVENT, event => {
-        const detail =
-            'detail' in event && typeof event.detail === 'string'
-                ? event.detail
-                : undefined;
+        const detail = event.detail;
         if (!detail) return;
 
-        const data = parseAuthProbe(detail);
-        pageAuthProbe = data;
-        authProbeSequence += 1;
+        try {
+            const data = parseAuthProbe(detail);
+            const age = Date.now() - data.at;
+            if (age < 0 || age > AUTH_PROBE_TTL_MS) return;
+            pageAuthProbe = data;
+            authProbeSequence += 1;
+        } catch {
+            // Ignore malformed data crossing the page/content-script boundary.
+        }
     });
 }
 
@@ -216,14 +257,14 @@ function waitForAuthProbe(
     if (authProbeSequence > afterSequence) return Promise.resolve();
     return new Promise(resolve => {
         let timeoutId: number | undefined;
-        const cleanup = () => {
+        function cleanup() {
             window.removeEventListener(AUTH_PROBE_EVENT, onProbe);
             if (timeoutId !== undefined) window.clearTimeout(timeoutId);
             resolve();
-        };
-        const onProbe = () => {
+        }
+        function onProbe() {
             if (authProbeSequence > afterSequence) cleanup();
-        };
+        }
         timeoutId = window.setTimeout(cleanup, timeoutMs);
         window.addEventListener(AUTH_PROBE_EVENT, onProbe);
     });
@@ -423,30 +464,38 @@ export function clearTokenCache() {
     tokenCache = undefined;
 }
 
-function requireModule(name: string): unknown {
-    const pageWindow = window as PageWindow;
+function requireModule<Name extends keyof PageModules>(
+    name: Name,
+): PageModules[Name] | undefined {
     try {
-        return pageWindow.require?.(name);
+        return window.require?.(name);
     } catch {
         return undefined;
     }
 }
 
-function moduleToken(name: string): string | undefined {
+function moduleToken(
+    name: 'DTSGInitialData' | 'LSD' | 'LSDToken',
+): string | undefined {
     const mod = requireModule(name);
-    return isRecord(mod) &&
-        typeof mod.token === 'string' &&
-        mod.token.length > 0
+    return isString(mod?.token) && mod.token.length > 0
         ? mod.token
         : undefined;
 }
 
 function moduleUserId(): string | undefined {
-    for (const name of ['CurrentUserInitialData', 'PolarisViewer', 'Viewer']) {
+    for (const name of [
+        'CurrentUserInitialData',
+        'PolarisViewer',
+        'Viewer',
+    ] as const) {
         const value = requireModule(name);
-        if (!isRecord(value)) continue;
-        for (const key of ['viewer_fbid', 'actorID', 'USER_ID', 'ACCOUNT_ID']) {
-            const found = value[key];
+        for (const found of [
+            value?.viewer_fbid,
+            value?.actorID,
+            value?.USER_ID,
+            value?.ACCOUNT_ID,
+        ]) {
             const id = userId(found);
             if (id) return id;
         }
@@ -463,7 +512,6 @@ function deviceId(): string {
 }
 
 function emitProbe() {
-    const pageWindow = window as PageWindow;
     const fbDtsg = moduleToken('DTSGInitialData');
     const lsd = moduleToken('LSD') ?? moduleToken('LSDToken');
     const jazoest = deriveJazoest(fbDtsg);
@@ -475,7 +523,7 @@ function emitProbe() {
         deviceId: deviceId(),
         viewerId,
         at: Date.now(),
-        requireAvailable: typeof pageWindow.require === 'function',
+        requireAvailable: hasPageRequire(window.require),
         sources: {
             fbDtsg: fbDtsg ? "require('DTSGInitialData').token" : undefined,
             lsd: lsd ? "require('LSD'|'LSDToken').token" : undefined,

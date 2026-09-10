@@ -3,6 +3,7 @@ import {
     FRIENDLY_NAMES,
     INSTAGRAM_GRAPHQL_FLAGS,
 } from '../config.ts';
+import type { JsonObject } from '../json.ts';
 
 export type InstagramGraphqlContext = {
     viewerId: string;
@@ -17,34 +18,26 @@ export type InstagramGraphqlDescriptor<Input> = {
     buildVariables: (
         input: Input,
         context: InstagramGraphqlContext,
-    ) => Record<string, unknown>;
+    ) => JsonObject;
 };
 
-const query = <Input>(
+function query<Input>(
     friendlyName: string,
     docId: string,
     buildVariables: InstagramGraphqlDescriptor<Input>['buildVariables'],
-): InstagramGraphqlDescriptor<Input> => ({
-    friendlyName,
-    docId,
-    endpoint: '/api/graphql',
-    kind: 'query',
-    buildVariables,
-});
+): InstagramGraphqlDescriptor<Input> {
+    return { friendlyName, docId, endpoint: '/api/graphql', kind: 'query', buildVariables };
+}
 
-const mutation = <Input>(
+function mutation<Input>(
     friendlyName: string,
     docId: string,
     buildVariables: InstagramGraphqlDescriptor<Input>['buildVariables'],
-): InstagramGraphqlDescriptor<Input> => ({
-    friendlyName,
-    docId,
-    endpoint: '/api/graphql',
-    kind: 'mutation',
-    buildVariables,
-});
+): InstagramGraphqlDescriptor<Input> {
+    return { friendlyName, docId, endpoint: '/api/graphql', kind: 'mutation', buildVariables };
+}
 
-const empty = () => ({});
+function empty(): JsonObject { return {}; }
 const listFlags = {
     __relay_internal__pv__IGDPinnedThreadsRenderEnabledGKrelayprovider:
         INSTAGRAM_GRAPHQL_FLAGS.pinnedThreads,
@@ -63,10 +56,9 @@ const threadFlags = {
     __relay_internal__pv__PolarisAIGMAccountLabelEnabledrelayprovider:
         INSTAGRAM_GRAPHQL_FLAGS.aiAccountLabel,
 };
-const musicParams = (playlistId: string) => ({
-    playlist_id: playlistId,
-    product: 'IG_DIRECT_MUSIC_STICKER',
-});
+function musicParams(playlistId: string): JsonObject {
+    return { playlist_id: playlistId, product: 'IG_DIRECT_MUSIC_STICKER' };
+}
 
 export function buildReelCommentRepliesPath(input: {
     mediaId: string;
@@ -85,7 +77,7 @@ export const INSTAGRAM_GRAPHQL_OPERATIONS = {
     PolarisDirectInboxQuery: query(
         FRIENDLY_NAMES.inbox,
         DOC_IDS.inbox,
-        (_: Record<string, never>, context) => ({
+        (_input: JsonObject, context) => ({
             device_id_for_iris_subscription: context.deviceId,
             __relay_internal__pv__IGDIsProfessionalAccountGKrelayprovider:
                 INSTAGRAM_GRAPHQL_FLAGS.isProfessionalAccount,
@@ -123,20 +115,22 @@ export const INSTAGRAM_GRAPHQL_OPERATIONS = {
     IGDBadgeCountOffMsysQuery: query(
         FRIENDLY_NAMES.badgeCount,
         DOC_IDS.badgeCount,
-        (_: Record<string, never>, context) => ({
+        (_input: JsonObject, context) => ({
             device_id_for_iris_subscription: context.deviceId,
         }),
     ),
     useIGDSystemFolderUnreadThreadCountQuery: query(
         FRIENDLY_NAMES.systemFolderUnreadCount,
         DOC_IDS.systemFolderUnreadCount,
-        (input: { folder: 'INBOX' | 'PENDING'; newerThanTimestampMs?: string }, context) => ({
-            device_id_for_iris_subscription: context.deviceId,
-            folder: input.folder,
-            ...(input.newerThanTimestampMs === undefined
-                ? {}
-                : { newer_than_timestamp_ms: input.newerThanTimestampMs }),
-        }),
+        (input: { folder: 'INBOX' | 'PENDING'; newerThanTimestampMs?: string }, context) => {
+            const variables: JsonObject = {
+                device_id_for_iris_subscription: context.deviceId,
+                folder: input.folder,
+            };
+            if (input.newerThanTimestampMs !== undefined)
+                variables.newer_than_timestamp_ms = input.newerThanTimestampMs;
+            return variables;
+        },
     ),
     IGDInboxTrayQuery: query(FRIENDLY_NAMES.inboxTray, DOC_IDS.inboxTray, empty),
     PolarisAutomaticPreviewsDisabledContextProviderQuery: query(
@@ -157,25 +151,24 @@ export const INSTAGRAM_GRAPHQL_OPERATIONS = {
     IGDThreadDetailQuery: query(
         FRIENDLY_NAMES.thread,
         DOC_IDS.thread,
-        (input: { threadKey: string; minUqSeqId?: number | null }) => ({
-            ...(input.minUqSeqId === undefined
-                ? {}
-                : { min_uq_seq_id: input.minUqSeqId }),
-            thread_fbid: input.threadKey,
-            ...threadFlags,
-        }),
+        (input: { threadKey: string; minUqSeqId?: number | null }) => {
+            const variables: JsonObject = { thread_fbid: input.threadKey, ...threadFlags };
+            if (input.minUqSeqId !== undefined) variables.min_uq_seq_id = input.minUqSeqId;
+            return variables;
+        },
     ),
     IGDInboxHeaderOffMsysQuery: query(
         FRIENDLY_NAMES.inboxHeader,
         DOC_IDS.inboxHeader,
-        (input: { threadFbid: string; minUqSeqId?: number }) => ({
-            ...(input.minUqSeqId === undefined
-                ? {}
-                : { min_uq_seq_id: input.minUqSeqId }),
-            thread_fbid: input.threadFbid,
-            __relay_internal__pv__PolarisAIGMAccountLabelEnabledrelayprovider:
-                INSTAGRAM_GRAPHQL_FLAGS.aiAccountLabel,
-        }),
+        (input: { threadFbid: string; minUqSeqId?: number }) => {
+            const variables: JsonObject = {
+                thread_fbid: input.threadFbid,
+                __relay_internal__pv__PolarisAIGMAccountLabelEnabledrelayprovider:
+                    INSTAGRAM_GRAPHQL_FLAGS.aiAccountLabel,
+            };
+            if (input.minUqSeqId !== undefined) variables.min_uq_seq_id = input.minUqSeqId;
+            return variables;
+        },
     ),
     IGDInboxInfoOffMsysQuery: query(
         FRIENDLY_NAMES.inboxInfo,
@@ -425,7 +418,7 @@ export const INSTAGRAM_GRAPHQL_OPERATIONS = {
     IGDComposerRichContentTray_AvatarAvailableQuery: query(
         FRIENDLY_NAMES.avatarAvailable,
         DOC_IDS.avatarAvailable,
-        (_: Record<string, never>, context) => ({ user_id: context.viewerId }),
+        (_input: JsonObject, context) => ({ user_id: context.viewerId }),
     ),
     IGDComposerRichContentStickersV2Query: query(
         FRIENDLY_NAMES.stickers,
@@ -488,7 +481,7 @@ export const INSTAGRAM_GRAPHQL_OPERATIONS = {
             params: musicParams(input.playlistId),
         }),
     ),
-} as const;
+};
 
 export type InstagramGraphqlOperationName =
     keyof typeof INSTAGRAM_GRAPHQL_OPERATIONS;

@@ -1,44 +1,21 @@
 # Instagram Client
 
-A Chromium extension for using Instagram direct messages and reels in a
-focused client.
+A Chromium extension that shows a read-only view of the first page of your
+Instagram primary inbox.
 
-## How it works
+This is a clean-restart scope: the current product does **not** open conversation
+history, send or mutate messages, paginate, or load avatars and media. Those
+capabilities may be rebuilt later against explicit engine contracts.
 
-The add-on uses your existing Instagram web session. It does not ask for or
-store your password. When opened, it finds an Instagram tab—or creates an
-inactive one—and uses it to communicate with Instagram.
+The audited [Solid restoration checklist](docs/solid-restoration-checklist.md)
+describes **planned** restoration and optional scope; it does not claim those
+features are implemented.
 
-```text
-╭──────────────╮     ╭────────────╮     ╭───────────────╮
-│ Extension UI │────▶│ Background │────▶│ Instagram tab │
-╰──────▲───────╯     ╰────────────╯     ╰───────┬───────╯
-       │                                        │
-       │ parsed messages                        ▼
-       ╰─────────────────────────────── Instagram APIs
-```
-
-### Data pipeline
-
-1. The UI asks the background worker for conversations, messages, or reel data.
-2. The worker forwards the request to a content script in the Instagram tab.
-3. The content script uses your logged-in session to call Instagram's APIs.
-4. Responses are validated, converted into stable app data, and sent to the UI.
-5. The UI caches data by ID and renders only the visible inbox and message rows.
-
-Pinned conversations are stored locally by the extension. If your Instagram
-session expires, sign in or refresh Instagram and retry.
-
-## Install
-
-1. Download the Chrome ZIP from the latest [GitHub release](../../releases/latest).
-2. Extract the ZIP to a permanent folder.
-3. Open `chrome://extensions` in Chrome or another Chromium-based browser.
-4. Enable **Developer mode**, select **Load unpacked**, and choose the extracted
-   folder.
-
-The extension is not currently distributed through a browser store, so updates
-must be installed from a newer release in the same way.
+The extension uses your existing Instagram web session. Its background worker
+selects an Instagram tab, verifies the active account through a content-side
+provider, fetches and validates the first inbox page, and persists normalized
+account-partitioned facts in IndexedDB. The Solid 2 `ui.html` page receives
+complete worker snapshots and renders a bounded virtual list.
 
 ## Develop
 
@@ -49,24 +26,32 @@ npm ci
 npm run dev
 ```
 
-The Solid 2 stack is currently an integration preview, not the product UI. Run
-`npm run dev:solid` to include `solid.html`, or `npm run build:solid` to create
-an isolated `.output-solid` production build. Ordinary builds ship only the
-legacy `ui.html` application. Browser installation is explicit via
-`npm run test:setup`.
-
-Before submitting a change, run:
+Before submitting a change:
 
 ```sh
 npm run lint
 npm test
+npm run check
 npm run build
-npm run build:solid
+git diff --check
 ```
 
-## Release
+Install browser test Chromium once with `npm run test:setup` when needed.
 
-Set `version` in `package.json`, commit the change, then push a matching tag
-(for example, package version `0.2.0` uses tag `v0.2.0`). GitHub Actions checks
-the project, packages the extension, and creates a GitHub release containing
-the installable ZIP.
+The repository's local shared lint policy additionally requires an existing
+`$HOME/sgconfig.yml`:
+
+```sh
+ast-grep scan --config "$HOME/sgconfig.yml" --no-ignore hidden .
+```
+
+## Install the unpacked extension
+
+```sh
+npm ci
+npm run build
+```
+
+Open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**,
+and select `.output/chrome-mv3`. This installs the current clean-restart inbox;
+it does not imply feature parity with earlier releases.

@@ -1,57 +1,22 @@
 # Repository guidance
 
-Before frontend changes, read:
+Before frontend work, read [`docs/frontend-architecture.md`](docs/frontend-architecture.md),
+[`docs/solid-2-guide.md`](docs/solid-2-guide.md), and
+[`docs/engine-inbox-contract.md`](docs/engine-inbox-contract.md).
 
-- [`docs/frontend-architecture.md`](docs/frontend-architecture.md) for source
-  ownership, exact current state, cursor/single-flight/warmup rules,
-  virtualization, and implemented-versus-Milestone-2 behavior.
-- [`docs/teact-guide.md`](docs/teact-guide.md) for the pinned local Teact API,
-  lifecycle/reconciliation caveats, TSX setup, and component conventions.
-- [`docs/frontend-rewrite-plan.md`](docs/frontend-rewrite-plan.md) for the
-  reviewed milestone design and pinned Telegram Web A references.
+The sole production UI is the Solid 2 `ui.html` read-only primary inbox. Keep
+entities normalized, fixed 72px rows bounded to at most 31 mounted rows, stable
+domain keys, explicit refresh/retry, and worker-owned RPC, identity, persistence,
+single-flight, and stale-generation behavior. History, pagination, selection,
+media, and mutations are future work and must not be implied or added as UI
+adapters.
 
-Non-negotiable frontend rules:
+Use TypeScript/TSX and SCSS with the pinned Solid 2 stack. Keep Instagram protocol
+knowledge outside components. Documentation and sanitized captures under `docs`
+remain protocol references for future rebuilding.
 
-- Keep entities normalized (`orderedIds`/`listedIds` plus `byId`); components do
-  not own parallel caches. Store actions own RPC, cursor semantics,
-  single-flight, retries, and stale-generation checks.
-- Preserve bounded rendering: fixed 72px absolute inbox rows, stable domain
-  keys, the existing chat window, and at most 80 history rows when Milestone 2
-  is implemented. Consume loaded local IDs before network pagination.
-- Use TypeScript/TSX and SCSS. Legacy production UI modules use vendored Teact;
-  opt-in successor modules under `entrypoints/solid` use the pinned Solid 2
-  stack. Do not add React as a runtime or mix JSX runtimes between boundaries.
-  Animate transform/opacity, honor reduced
-  motion, reserve media geometry, and retain accessible status/error/focus UI.
-- `vendor/teact` is pinned MIT code; preserve its `LICENSE` and provenance.
-  Telegram Web A is GPL-3.0-or-later: do not copy its source, styles, icons, or
-  assets into this unlicensed repository. Independently implement documented
-  behavior unless the repository's licensing boundary is explicitly changed.
+Verify frontend changes with `npm test`, `npm run check`, `npm run build`, and
+`git diff --check`.
 
-For complex, performance-sensitive, or controversial frontend behavior, check
-the pinned Telegram Web A source referenced in `docs/frontend-rewrite-plan.md`
-for concrete examples before choosing an implementation. Inspect only the
-relevant paths, verify the behavior against our smaller API and scope, and
-record any lasting architectural decision in `docs/frontend-architecture.md`.
-Use Telegram as a behavioral reference, not as source to paste: preserve the
-GPL clean-room boundary and omit machinery that our measured requirements do
-not need.
-
-Instagram API/query documentation is in `docs/instagram-*.md`. Browser request
-examples are in `docs/examples/*.har`; consult them when request or response
-shape is relevant, and keep Instagram protocol knowledge out of UI components.
-
-Use Chrome DevTools MCP only to reproduce or verify behavior in a live browser,
-such as the add-on or Instagram web client. Do not use it to research external
-repositories or browse the web; use search tools or temporarily clone the
-relevant repository locally instead. Do not use it for routine changes that can
-be verified locally.
-
-Frontend verification:
-
-```sh
-npm test
-npm run check
-npm run build
-git diff --check
-```
+Do not copy Telegram GPL source or assets. Keep this repository's source and
+assets clean-room and repository-owned.

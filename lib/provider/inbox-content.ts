@@ -39,10 +39,11 @@ export async function executeInboxProviderRequest(
     }
     return { kind: 'response', id: request.id, method: 'inbox', result: { ok: true, value: page } };
 }
-export function registerInboxProvider(getInbox: () => Promise<Page<Thread>>, runtime: Pick<browser.Runtime.Static, 'connect'>) {
+export function registerInboxProvider(runtime: Pick<browser.Runtime.Static, 'connect'>, getInbox: () => Promise<Page<Thread>>) {
     function connect() {
         const port = runtime.connect({ name: PROVIDER_PORT });
-        port.onMessage.addListener((request: ProviderRequest) => {
+        // SAFETY: this named provider port receives only ProviderRequest values from the worker counterpart.
+        const receive = ((request: ProviderRequest) => {
             if (request.kind !== 'request') return;
             void executeInboxProviderRequest(request, {
                 account: currentInstagramAccountId,
@@ -51,7 +52,8 @@ export function registerInboxProvider(getInbox: () => Promise<Page<Thread>>, run
             }).then(response => {
                 try { port.postMessage(response); } catch { /* The validated provider port disconnected before delivery. */ }
             });
-        });
+        }) as Parameters<typeof port.onMessage.addListener>[0];
+        port.onMessage.addListener(receive);
         port.onDisconnect.addListener(connect);
     }
     connect();

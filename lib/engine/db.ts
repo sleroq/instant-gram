@@ -93,7 +93,12 @@ export function createInboxRepository(factory: IDBFactory = globalThis.indexedDB
                 for (const [id, value] of Object.entries(data.usersById)) tx.objectStore('users').put({ accountId, id, value });
                 for (const [id, value] of Object.entries(data.threadsById)) tx.objectStore('threads').put({ accountId, id, value });
                 for (const [id, value] of Object.entries(data.messagesById)) tx.objectStore('messages').put({ accountId, id, value });
-                const { usersById, threadsById, messagesById, ...resource } = data;
+                const resource: Omit<InboxData, 'usersById' | 'threadsById' | 'messagesById'> = {
+                    orderedIds: data.orderedIds,
+                    fetchedAt: data.fetchedAt,
+                    hasNextPage: data.hasNextPage,
+                };
+                if (data.cursor) resource.cursor = data.cursor;
                 tx.objectStore('resources').put({ accountId, id: 'inbox:primary', value: resource });
                 const revision = Number(await requestResult(tx.objectStore('meta').get('revision')) ?? 0) + 1;
                 tx.objectStore('meta').put(revision, 'revision');

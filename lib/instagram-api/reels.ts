@@ -1,4 +1,5 @@
 import type { ReelMedia } from '../domain.ts';
+import { isJsonObject, isString, type JsonValue } from '../json.ts';
 import {
     parseReelInfoResponse,
     parseTopLikerCandidates,
@@ -19,24 +20,26 @@ export function instagramMediaIdFromShortcode(shortcode: string): string {
     return value;
 }
 
-export function validateReelPayload(value: unknown): ReelPayload {
-    if (!value || typeof value !== 'object' || Array.isArray(value))
+export function validateReelPayload(value: JsonValue): ReelPayload {
+    if (!isJsonObject(value))
         throw new Error('Invalid Instagram reel payload');
-    const payload = value as Record<string, unknown>;
+    const payload = value;
     if (Object.keys(payload).some(key => key !== 'shortcode' && key !== 'mediaId'))
         throw new Error('Invalid Instagram reel payload fields');
-    if (typeof payload.shortcode !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(payload.shortcode))
+    if (!isString(payload.shortcode) || !/^[A-Za-z0-9_-]{1,128}$/.test(payload.shortcode))
         throw new Error('Invalid Instagram reel shortcode');
     if (payload.mediaId !== undefined &&
-        (typeof payload.mediaId !== 'string' || !/^\d{1,64}$/.test(payload.mediaId)))
+        (!isString(payload.mediaId) || !/^\d{1,64}$/.test(payload.mediaId)))
         throw new Error('Invalid Instagram reel media ID');
-    return payload as ReelPayload;
+    const reel: ReelPayload = { shortcode: payload.shortcode };
+    if (payload.mediaId !== undefined) reel.mediaId = payload.mediaId;
+    return reel;
 }
 
 export async function loadReelMedia(
-    value: unknown,
-    fetchInfo: (mediaId: string) => Promise<unknown>,
-    fetchFriendship?: (userId: string) => Promise<unknown>,
+    value: JsonValue,
+    fetchInfo: (mediaId: string) => Promise<JsonValue>,
+    fetchFriendship?: (userId: string) => Promise<JsonValue>,
 ): Promise<ReelMedia> {
     const payload = validateReelPayload(value);
     const mediaId = payload.mediaId ?? instagramMediaIdFromShortcode(payload.shortcode);
