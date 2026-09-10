@@ -28,9 +28,9 @@ not a description of the completed tree.
 - `entrypoints/background.ts` routes read RPCs and pin persistence; `entrypoints/ig-anchor.content.ts` already has the authenticated GraphQL transport and response envelope helpers.
 - `lib/config.ts` has read-operation names/doc IDs only.
 - Captured Instagram payloads and responses are sufficient for this milestone:
-  - `docs/examples/www.instagram.com-with-my-message-and-sending.har` and `www.instagram.com-with-reply-by-me.har` show `IGDirectTextSendMutation` returning server `message_id` and `timestamp_ms`.
-  - `docs/examples/www.instagram.com-live-communication.har` shows `IGDirectReactionSendMutation` returning the target message ID and complete current `reactions` array.
-  - Loaded message payloads already include `reactions: [{ reaction, reaction_timestamp_ms, sender_fbid }]`; the parser currently ignores them.
+    - `docs/examples/www.instagram.com-with-my-message-and-sending.har` and `www.instagram.com-with-reply-by-me.har` show `IGDirectTextSendMutation` returning server `message_id` and `timestamp_ms`.
+    - `docs/examples/www.instagram.com-live-communication.har` shows `IGDirectReactionSendMutation` returning the target message ID and complete current `reactions` array.
+    - Loaded message payloads already include `reactions: [{ reaction, reaction_timestamp_ms, sender_fbid }]`; the parser currently ignores them.
 
 ## Architecture decisions
 
@@ -93,7 +93,6 @@ not a description of the completed tree.
 
 Attachments, reaction removal, edit/delete/forward, read receipts, incoming live updates/Iris/MQTT, typing indicators, offline persistence, and a generalized Telegram-style action framework. Incoming-message synchronization should be a separate milestone because it has a different transport and consistency boundary.
 
-
 ## Telegram Web A behavioral reference
 
 Reviewed pinned `Ajaxy/telegram-tt@a323b1f` as behavioral guidance only. Its GPL source, styles, icons, and assets must not be copied.
@@ -108,7 +107,6 @@ Useful invariants adapted to this smaller client:
 - Telegram focuses an own optimistic send and uses near-bottom checks for incoming updates: [`apiUpdaters/messages.ts` L282–306](https://github.com/Ajaxy/telegram-tt/blob/a323b1f29f5b91e9a32b8c14866234e925fb0bfa/src/global/actions/apiUpdaters/messages.ts#L282-L306), [`MessageList.tsx` L943–987](https://github.com/Ajaxy/telegram-tt/blob/a323b1f29f5b91e9a32b8c14866234e925fb0bfa/src/components/middle/MessageList.tsx#L943-L987). ICR deliberately preserves an older-reading anchor when the composer is used away from bottom, matching this project's existing scroll requirement; the new-message affordance provides explicit navigation.
 
 Omit Telegram's GramJS worker/update pipeline, topics, scheduled/paid messages, albums/uploads, multitab viewports, send-collapse animations, unread-reaction effects, and wholesale refresh/reset machinery. If incoming synchronization is later added, preserve optimistic rows and surviving viewport IDs rather than resetting history; Telegram's broader refresh behavior is referenceable at [`sync.ts` L119–219](https://github.com/Ajaxy/telegram-tt/blob/a323b1f29f5b91e9a32b8c14866234e925fb0bfa/src/global/actions/api/sync.ts#L119-L219).
-
 
 ## Update — API catalog and action capture (2026-08-03)
 
@@ -181,38 +179,38 @@ operator may still perform the listed live smoke pass.
 ## Interaction polish follow-up (2026-08-03)
 
 - [x] Replace always-expanded message actions with collision-safe top-layer
-  context menus available from right click, Context Menu/Shift+F10 keyboard
-  semantics, and movement-cancelled touch long-press. Chat and message rows have
-  no visible ellipsis/menu trigger at any width.
+      context menus available from right click, Context Menu/Shift+F10 keyboard
+      semantics, and movement-cancelled touch long-press. Chat and message rows have
+      no visible ellipsis/menu trigger at any width.
 - [x] Add a truthful chat-row menu. The only currently routed safe action is
-  open/select; mute, pin, delete, and read-state actions are intentionally not
-  implied by the UI.
+      open/select; mute, pin, delete, and read-state actions are intentionally not
+      implied by the UI.
 - [x] Make reaction choice an anchored keyboard-navigable menu, identify the
-  viewer's current reaction, and keep pending selection disabled through the
-  existing per-message single flight.
+      viewer's current reaction, and keep pending selection disabled through the
+      existing per-message single flight.
 - [x] Show the reaction affordance only on message hover/focus, on the outer
-  bubble side opposite for incoming versus outgoing messages, without changing
-  message geometry or scroll anchors.
+      bubble side opposite for incoming versus outgoing messages, without changing
+      message geometry or scroll anchors.
 - [x] Preserve the visible message anchor while selecting reply, focus the
-  composer without scroll, and retain existing per-thread draft/reply ownership.
+      composer without scroll, and retain existing per-thread draft/reply ownership.
 - [x] Cover Escape/outside/action/thread-switch dismissal, focus return,
-  viewport clamping, reaction change/current indication, reply anchor behavior,
-  chat keyboard invocation, and narrow placement in the production browser
-  harness.
+      viewport clamping, reaction change/current indication, reply anchor behavior,
+      chat keyboard invocation, and narrow placement in the production browser
+      harness.
 - [x] Exercise long-press through Chromium's browser input dispatcher: movement
-  before the threshold and pointer cancellation prevent opening; after a real
-  held touch opens the menu, the same active touch moves onto its action and
-  releases there. Chromium's generated click is recorded, prevented, and cannot
-  activate that action; a later ordinary click proves suppression cleanup.
-  Visual-viewport size/offset repositioning is also covered. Selected chat rows
-  retain the native context menu rather than exposing a disabled custom action.
+      before the threshold and pointer cancellation prevent opening; after a real
+      held touch opens the menu, the same active touch moves onto its action and
+      releases there. Chromium's generated click is recorded, prevented, and cannot
+      activate that action; a later ordinary click proves suppression cleanup.
+      Visual-viewport size/offset repositioning is also covered. Selected chat rows
+      retain the native context menu rather than exposing a disabled custom action.
 - [x] Give focusable message rows sender/content/delivery accessible names and
-  keep the reply callback identity stable so memoized rows skip draft-only renders.
+      keep the reply callback identity stable so memoized rows skip draft-only renders.
 - [ ] Reaction removal remains unavailable. The current narrow RPC/catalog only
-  proves `reaction_status: 'created'`; no delete route or captured delete
-  variables were added or guessed.
+      proves `reaction_status: 'created'`; no delete route or captured delete
+      variables were added or guessed.
 - [ ] The real-Instagram manual extension pass remains unperformed in this
-  environment.
+      environment.
 
 This follow-up independently implements the behavior in ICR's existing visual
 language. No Telegram application source, styles, markup, icons, or assets were

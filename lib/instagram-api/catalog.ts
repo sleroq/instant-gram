@@ -1,8 +1,4 @@
-import {
-    DOC_IDS,
-    FRIENDLY_NAMES,
-    INSTAGRAM_GRAPHQL_FLAGS,
-} from '../config.ts';
+import { DOC_IDS, FRIENDLY_NAMES, INSTAGRAM_GRAPHQL_FLAGS } from '../config.ts';
 import type { JsonObject } from '../json.ts';
 
 export type InstagramGraphqlContext = {
@@ -26,7 +22,13 @@ function query<Input>(
     docId: string,
     buildVariables: InstagramGraphqlDescriptor<Input>['buildVariables'],
 ): InstagramGraphqlDescriptor<Input> {
-    return { friendlyName, docId, endpoint: '/api/graphql', kind: 'query', buildVariables };
+    return {
+        friendlyName,
+        docId,
+        endpoint: '/api/graphql',
+        kind: 'query',
+        buildVariables,
+    };
 }
 
 function mutation<Input>(
@@ -34,10 +36,18 @@ function mutation<Input>(
     docId: string,
     buildVariables: InstagramGraphqlDescriptor<Input>['buildVariables'],
 ): InstagramGraphqlDescriptor<Input> {
-    return { friendlyName, docId, endpoint: '/api/graphql', kind: 'mutation', buildVariables };
+    return {
+        friendlyName,
+        docId,
+        endpoint: '/api/graphql',
+        kind: 'mutation',
+        buildVariables,
+    };
 }
 
-function empty(): JsonObject { return {}; }
+function empty(): JsonObject {
+    return {};
+}
 const listFlags = {
     __relay_internal__pv__IGDPinnedThreadsRenderEnabledGKrelayprovider:
         INSTAGRAM_GRAPHQL_FLAGS.pinnedThreads,
@@ -122,7 +132,13 @@ export const INSTAGRAM_GRAPHQL_OPERATIONS = {
     useIGDSystemFolderUnreadThreadCountQuery: query(
         FRIENDLY_NAMES.systemFolderUnreadCount,
         DOC_IDS.systemFolderUnreadCount,
-        (input: { folder: 'INBOX' | 'PENDING'; newerThanTimestampMs?: string }, context) => {
+        (
+            input: {
+                folder: 'INBOX' | 'PENDING';
+                newerThanTimestampMs?: string;
+            },
+            context,
+        ) => {
             const variables: JsonObject = {
                 device_id_for_iris_subscription: context.deviceId,
                 folder: input.folder,
@@ -132,7 +148,11 @@ export const INSTAGRAM_GRAPHQL_OPERATIONS = {
             return variables;
         },
     ),
-    IGDInboxTrayQuery: query(FRIENDLY_NAMES.inboxTray, DOC_IDS.inboxTray, empty),
+    IGDInboxTrayQuery: query(
+        FRIENDLY_NAMES.inboxTray,
+        DOC_IDS.inboxTray,
+        empty,
+    ),
     PolarisAutomaticPreviewsDisabledContextProviderQuery: query(
         FRIENDLY_NAMES.automaticPreviewsDisabled,
         DOC_IDS.automaticPreviewsDisabled,
@@ -152,8 +172,12 @@ export const INSTAGRAM_GRAPHQL_OPERATIONS = {
         FRIENDLY_NAMES.thread,
         DOC_IDS.thread,
         (input: { threadKey: string; minUqSeqId?: number | null }) => {
-            const variables: JsonObject = { thread_fbid: input.threadKey, ...threadFlags };
-            if (input.minUqSeqId !== undefined) variables.min_uq_seq_id = input.minUqSeqId;
+            const variables: JsonObject = {
+                thread_fbid: input.threadKey,
+                ...threadFlags,
+            };
+            if (input.minUqSeqId !== undefined)
+                variables.min_uq_seq_id = input.minUqSeqId;
             return variables;
         },
     ),
@@ -166,7 +190,8 @@ export const INSTAGRAM_GRAPHQL_OPERATIONS = {
                 __relay_internal__pv__PolarisAIGMAccountLabelEnabledrelayprovider:
                     INSTAGRAM_GRAPHQL_FLAGS.aiAccountLabel,
             };
-            if (input.minUqSeqId !== undefined) variables.min_uq_seq_id = input.minUqSeqId;
+            if (input.minUqSeqId !== undefined)
+                variables.min_uq_seq_id = input.minUqSeqId;
             return variables;
         },
     ),
@@ -184,7 +209,11 @@ export const INSTAGRAM_GRAPHQL_OPERATIONS = {
     IGDUserMessageRowMoreActionsMenuOffMsysQuery: query(
         FRIENDLY_NAMES.messageActions,
         DOC_IDS.messageActions,
-        (input: { threadFbid: string; messageId: string; senderId: string }) => ({
+        (input: {
+            threadFbid: string;
+            messageId: string;
+            senderId: string;
+        }) => ({
             message_id: input.messageId,
             sender_id: input.senderId,
             shouldFetchInspectData: false,
@@ -194,7 +223,11 @@ export const INSTAGRAM_GRAPHQL_OPERATIONS = {
     useIGDPinMessageOffMsysMutation: mutation(
         FRIENDLY_NAMES.pinMessage,
         DOC_IDS.pinMessage,
-        (input: { threadFbid: string; messageId: string; replaceOldest?: boolean }) => ({
+        (input: {
+            threadFbid: string;
+            messageId: string;
+            replaceOldest?: boolean;
+        }) => ({
             thread_fbid: input.threadFbid,
             message_id: input.messageId,
             should_replace_oldest_pin: input.replaceOldest ?? false,
@@ -227,7 +260,11 @@ export const INSTAGRAM_GRAPHQL_OPERATIONS = {
     useIGDMarkThreadAsReadValidationMutation: mutation(
         FRIENDLY_NAMES.markThreadReadValidation,
         DOC_IDS.markThreadReadValidation,
-        (input: { threadIgId: string; messageId: string; messageTimestampMs: number }) => ({
+        (input: {
+            threadIgId: string;
+            messageId: string;
+            messageTimestampMs: number;
+        }) => ({
             metadata: { ig_thread_igid: input.threadIgId },
             data: {
                 message_id: input.messageId,
@@ -258,7 +295,8 @@ export const INSTAGRAM_GRAPHQL_OPERATIONS = {
             mentioned_user_ids: [],
             commands: null,
             forwarded_from_thread_id: input.forwardedFromThreadId ?? null,
-            is_forwarded_from_own_message: input.isForwardedFromOwnMessage ?? null,
+            is_forwarded_from_own_message:
+                input.isForwardedFromOwnMessage ?? null,
             send_attribution: 'igd_web_chat_tab:in_thread',
         }),
     ),
@@ -329,7 +367,12 @@ export const INSTAGRAM_GRAPHQL_OPERATIONS = {
     IGDirectReactionSendMutation: mutation(
         FRIENDLY_NAMES.sendReaction,
         DOC_IDS.sendReaction,
-        (input: { threadFbid: string; messageId: string; emoji: string; remove: boolean }) => ({
+        (input: {
+            threadFbid: string;
+            messageId: string;
+            emoji: string;
+            remove: boolean;
+        }) => ({
             input: {
                 emoji: input.emoji,
                 item_id: '',
@@ -423,7 +466,9 @@ export const INSTAGRAM_GRAPHQL_OPERATIONS = {
     IGDComposerRichContentStickersV2Query: query(
         FRIENDLY_NAMES.stickers,
         DOC_IDS.stickers,
-        (input: { searchQuery: string }) => ({ search_query: input.searchQuery }),
+        (input: { searchQuery: string }) => ({
+            search_query: input.searchQuery,
+        }),
     ),
     IGDComposerRichContentStickersV2_recentStickersQuery: query(
         FRIENDLY_NAMES.recentStickers,
@@ -443,7 +488,12 @@ export const INSTAGRAM_GRAPHQL_OPERATIONS = {
     IGDirectCutoutStickerShareMutation: mutation(
         FRIENDLY_NAMES.sendCutoutSticker,
         DOC_IDS.sendCutoutSticker,
-        (input: { threadFbid: string; offlineThreadingId: string; stickerId: string; replyToMessageId?: string }) => ({
+        (input: {
+            threadFbid: string;
+            offlineThreadingId: string;
+            stickerId: string;
+            replyToMessageId?: string;
+        }) => ({
             send_data: {
                 forwarded_from_thread_id: null,
                 is_forwarded_from_own_message: null,
@@ -458,7 +508,9 @@ export const INSTAGRAM_GRAPHQL_OPERATIONS = {
     IGDComposerRichContentMusicQuery: query(
         FRIENDLY_NAMES.music,
         DOC_IDS.music,
-        (input: { playlistId: string }) => ({ params: musicParams(input.playlistId) }),
+        (input: { playlistId: string }) => ({
+            params: musicParams(input.playlistId),
+        }),
     ),
     IGDComposerRichContentMusicSearchQuery: query(
         FRIENDLY_NAMES.musicSearch,

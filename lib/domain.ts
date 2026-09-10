@@ -116,17 +116,17 @@ export type ReelMediaItem = {
 } & (
     | { kind: 'image'; imageUrl: string }
     | {
-        kind: 'video';
-        videoUrl: string;
-        variants: Array<{
-            url: string;
-            type?: number;
-            width?: number;
-            height?: number;
-            bandwidth?: number;
-        }>;
-        durationSec: number;
-    }
+          kind: 'video';
+          videoUrl: string;
+          variants: Array<{
+              url: string;
+              type?: number;
+              width?: number;
+              height?: number;
+              bandwidth?: number;
+          }>;
+          durationSec: number;
+      }
 );
 export type ReelAuthor = User & { isVerified: boolean };
 export type AttachedAudio = {
@@ -180,7 +180,9 @@ export type ReelComments = Page<ReelComment> & {
 export type ReelLikeReceipt = { mediaId: string; hasLiked: boolean };
 export type ReelSaveReceipt = { mediaId: string; hasSaved: boolean };
 export type ReelCommentLikeReceipt = { commentId: string; hasLiked: boolean };
-export type ReelCommentReplies = Page<ReelComment> & { parentCommentId: string };
+export type ReelCommentReplies = Page<ReelComment> & {
+    parentCommentId: string;
+};
 export type Page<T> = { items: T[]; cursor?: string; hasNextPage: boolean };
 export type ThreadMessages = Page<Message> & {
     thread?: Thread;
@@ -459,4 +461,11 @@ export type InstagramRpcMap = {
 
 /** Capabilities exposed to the extension UI and routed through the background. */
 export type RpcMap = CoreRpcMap &
-    Pick<InstagramRpcMap, 'sendText' | 'editText' | 'forwardMessage' | 'setReaction' | 'markThreadRead'>;
+    Pick<
+        InstagramRpcMap,
+        | 'sendText'
+        | 'editText'
+        | 'forwardMessage'
+        | 'setReaction'
+        | 'markThreadRead'
+    >;

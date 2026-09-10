@@ -17,6 +17,4 @@ Checklist:
 - [ ] Add a settings page or settings view reachable from App.svelte.
 - [ ] Verify the popup UI build/typecheck for the changed path.
 
-
-
 Superseded by the Teact dark visual refresh in docs/frontend-visual-refresh-plan.md. Dark-by-default styling is complete; the removed Svelte settings-page scope is not part of the current product design.

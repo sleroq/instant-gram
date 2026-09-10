@@ -9,7 +9,8 @@ import {
 const context = { viewerId: 'viewer-1', deviceId: 'device-1' };
 
 test('inbox pagination uses the captured generation and exact relay variables', () => {
-    const operation = INSTAGRAM_GRAPHQL_OPERATIONS.IGDThreadListOffMsysPaginationQuery;
+    const operation =
+        INSTAGRAM_GRAPHQL_OPERATIONS.IGDThreadListOffMsysPaginationQuery;
     assert.equal(operation.docId, '28035404249479587');
     assert.equal(operation.kind, 'query');
     assert.deepEqual(
@@ -82,7 +83,8 @@ test('text and read builders preserve captured nulls and string timestamps', () 
         ],
     );
     assert.equal(
-        INSTAGRAM_GRAPHQL_OPERATIONS.useIGDMarkThreadAsReadValidationMutation.docId,
+        INSTAGRAM_GRAPHQL_OPERATIONS.useIGDMarkThreadAsReadValidationMutation
+            .docId,
         '35211594988486314',
     );
     assert.deepEqual(
@@ -108,68 +110,86 @@ test('message editing uses the captured mutation variables', () => {
     const operation = INSTAGRAM_GRAPHQL_OPERATIONS.IGDirectEditMessageMutation;
     assert.equal(operation.docId, '32480262318254796');
     assert.equal(operation.friendlyName, 'IGDirectEditMessageMutation');
-    assert.deepEqual(operation.buildVariables({
-        threadFbid: '1020994220298545',
-        targetMessageId: 'mid.$message',
-        text: 'edited text',
-        offlineThreadingId: '7492703599464415944',
-    }, context), {
-        thread_id: '1020994220298545',
-        target_item_id: null,
-        body: { sensitive_string_value: 'edited text' },
-        offline_threading_id: '7492703599464415944',
-        target_message_id: 'mid.$message',
-    });
+    assert.deepEqual(
+        operation.buildVariables(
+            {
+                threadFbid: '1020994220298545',
+                targetMessageId: 'mid.$message',
+                text: 'edited text',
+                offlineThreadingId: '7492703599464415944',
+            },
+            context,
+        ),
+        {
+            thread_id: '1020994220298545',
+            target_item_id: null,
+            body: { sensitive_string_value: 'edited text' },
+            offline_threading_id: '7492703599464415944',
+            target_message_id: 'mid.$message',
+        },
+    );
 });
 
 test('reel forwarding uses the existing-thread branch from the captured client', () => {
     const operation = INSTAGRAM_GRAPHQL_OPERATIONS.IGDirectReelShareMutation;
     assert.equal(operation.docId, '26212720875066239');
-    assert.deepEqual(operation.buildVariables({
-        targetThreadFbid: 'target-operation-id',
-        sourceThreadIgId: 'source-large-id',
-        sourceIsViewer: false,
-        offlineThreadingId: '7492301276698669817',
-        mediaId: '3958077625981405644',
-    }, context), {
-        ig_media_igid: '3958077625981405644',
-        otid: '7492301276698669817',
-        data: {
-            forwarded_from_thread_id: 'source-large-id',
-            is_forwarded_from_own_message: false,
-            offline_threading_id: '7492301276698669817',
-            recipient_users: null,
-            thread_id: 'target-operation-id',
+    assert.deepEqual(
+        operation.buildVariables(
+            {
+                targetThreadFbid: 'target-operation-id',
+                sourceThreadIgId: 'source-large-id',
+                sourceIsViewer: false,
+                offlineThreadingId: '7492301276698669817',
+                mediaId: '3958077625981405644',
+            },
+            context,
+        ),
+        {
+            ig_media_igid: '3958077625981405644',
+            otid: '7492301276698669817',
+            data: {
+                forwarded_from_thread_id: 'source-large-id',
+                is_forwarded_from_own_message: false,
+                offline_threading_id: '7492301276698669817',
+                recipient_users: null,
+                thread_id: 'target-operation-id',
+            },
+            clip_share_params: {
+                inventory_source: null,
+                send_attribution: null,
+                social_context_share_type: null,
+                text: null,
+                tracking_token: null,
+            },
         },
-        clip_share_params: {
-            inventory_source: null,
-            send_attribution: null,
-            social_context_share_type: null,
-            text: null,
-            tracking_token: null,
-        },
-    });
+    );
 });
 
 test('post forwarding uses the captured media-share existing-thread variables', () => {
     const operation = INSTAGRAM_GRAPHQL_OPERATIONS.IGDirectMediaShareMutation;
     assert.equal(operation.docId, '27442850591982122');
-    assert.deepEqual(operation.buildVariables({
-        targetThreadFbid: 'target-operation-id',
-        sourceThreadIgId: 'source-large-id',
-        sourceIsViewer: false,
-        offlineThreadingId: '7492366277580327777',
-        mediaId: '3954299726581330343',
-    }, context), {
-        send_data: {
-            forwarded_from_thread_id: 'source-large-id',
-            is_forwarded_from_own_message: false,
-            offline_threading_id: '7492366277580327777',
-            recipient_users: null,
-            thread_id: 'target-operation-id',
+    assert.deepEqual(
+        operation.buildVariables(
+            {
+                targetThreadFbid: 'target-operation-id',
+                sourceThreadIgId: 'source-large-id',
+                sourceIsViewer: false,
+                offlineThreadingId: '7492366277580327777',
+                mediaId: '3954299726581330343',
+            },
+            context,
+        ),
+        {
+            send_data: {
+                forwarded_from_thread_id: 'source-large-id',
+                is_forwarded_from_own_message: false,
+                offline_threading_id: '7492366277580327777',
+                recipient_users: null,
+                thread_id: 'target-operation-id',
+            },
+            data: { media_id: '3954299726581330343' },
         },
-        data: { media_id: '3954299726581330343' },
-    });
+    );
 });
 
 test('reaction builder matches the HAR-backed mutation variables exactly', () => {
@@ -194,12 +214,24 @@ test('reaction builder matches the HAR-backed mutation variables exactly', () =>
         },
     );
     assert.deepEqual(
-        INSTAGRAM_GRAPHQL_OPERATIONS.IGDirectReactionSendMutation.buildVariables({
-            threadFbid: 'thread', messageId: 'message', emoji: '❤', remove: true,
-        }, context),
-        { input: {
-            emoji: '❤', item_id: '', message_id: 'message', reaction_status: 'deleted', thread_id: 'thread',
-        } },
+        INSTAGRAM_GRAPHQL_OPERATIONS.IGDirectReactionSendMutation.buildVariables(
+            {
+                threadFbid: 'thread',
+                messageId: 'message',
+                emoji: '❤',
+                remove: true,
+            },
+            context,
+        ),
+        {
+            input: {
+                emoji: '❤',
+                item_id: '',
+                message_id: 'message',
+                reaction_status: 'deleted',
+                thread_id: 'thread',
+            },
+        },
     );
 });
 
@@ -212,42 +244,61 @@ test('reel like and save mutations match captured documents and variables', () =
             client_mutation_id: '7',
         },
     };
-    assert.deepEqual([
-        INSTAGRAM_GRAPHQL_OPERATIONS.PolarisAPILikePostMutation.docId,
-        INSTAGRAM_GRAPHQL_OPERATIONS.PolarisAPILikePostMutation.buildVariables(input, context),
-        INSTAGRAM_GRAPHQL_OPERATIONS.PolarisAPIUnlikePostMutation.docId,
-        INSTAGRAM_GRAPHQL_OPERATIONS.PolarisAPISavePostMutation.docId,
-        INSTAGRAM_GRAPHQL_OPERATIONS.PolarisAPIUnsavePostMutation.docId,
-    ], [
-        '27358573637160660', variables,
-        '37071567952434061',
-        '27326721586982367',
-        '27203919972607144',
-    ]);
+    assert.deepEqual(
+        [
+            INSTAGRAM_GRAPHQL_OPERATIONS.PolarisAPILikePostMutation.docId,
+            INSTAGRAM_GRAPHQL_OPERATIONS.PolarisAPILikePostMutation.buildVariables(
+                input,
+                context,
+            ),
+            INSTAGRAM_GRAPHQL_OPERATIONS.PolarisAPIUnlikePostMutation.docId,
+            INSTAGRAM_GRAPHQL_OPERATIONS.PolarisAPISavePostMutation.docId,
+            INSTAGRAM_GRAPHQL_OPERATIONS.PolarisAPIUnsavePostMutation.docId,
+        ],
+        [
+            '27358573637160660',
+            variables,
+            '37071567952434061',
+            '27326721586982367',
+            '27203919972607144',
+        ],
+    );
 });
 
 test('comment like mutation matches the captured document and variables', () => {
-    const operation = INSTAGRAM_GRAPHQL_OPERATIONS.PolarisCommentActionsLikeMutation;
-    assert.deepEqual([
-        operation.friendlyName,
-        operation.docId,
-        operation.kind,
-        operation.buildVariables({ commentId: '18137453275573708', clientMutationId: '3' }, context),
-    ], [
-        'PolarisCommentActionsLikeMutation',
-        '27184292767848867',
-        'mutation',
-        { input: {
-            comment_id: '18137453275573708',
-            actor_id: context.viewerId,
-            client_mutation_id: '3',
-        } },
-    ]);
+    const operation =
+        INSTAGRAM_GRAPHQL_OPERATIONS.PolarisCommentActionsLikeMutation;
+    assert.deepEqual(
+        [
+            operation.friendlyName,
+            operation.docId,
+            operation.kind,
+            operation.buildVariables(
+                { commentId: '18137453275573708', clientMutationId: '3' },
+                context,
+            ),
+        ],
+        [
+            'PolarisCommentActionsLikeMutation',
+            '27184292767848867',
+            'mutation',
+            {
+                input: {
+                    comment_id: '18137453275573708',
+                    actor_id: context.viewerId,
+                    client_mutation_id: '3',
+                },
+            },
+        ],
+    );
 });
 
 test('comment reply requests preserve the captured initial and continuation query exactly', () => {
     assert.equal(
-        buildReelCommentRepliesPath({ mediaId: '3934614549645286134', commentId: '18118594957890789' }),
+        buildReelCommentRepliesPath({
+            mediaId: '3934614549645286134',
+            commentId: '18118594957890789',
+        }),
         '/api/v1/media/3934614549645286134/comments/18118594957890789/child_comments/?min_id=&is_chronological=true&paging_direction=view_more',
     );
     assert.equal(
@@ -261,36 +312,63 @@ test('comment reply requests preserve the captured initial and continuation quer
 });
 
 test('hover-card friendship lookup uses the captured liker identity request', () => {
-    const operation = INSTAGRAM_GRAPHQL_OPERATIONS.PolarisUserHoverCardContentV2Query;
-    assert.deepEqual([
-        operation.friendlyName,
-        operation.docId,
-        operation.kind,
-        operation.buildVariables({ userId: '35122899956' }, context),
-    ], [
-        'PolarisUserHoverCardContentV2Query',
-        '27756568060663620',
-        'query',
-        { userID: '35122899956' },
-    ]);
+    const operation =
+        INSTAGRAM_GRAPHQL_OPERATIONS.PolarisUserHoverCardContentV2Query;
+    assert.deepEqual(
+        [
+            operation.friendlyName,
+            operation.docId,
+            operation.kind,
+            operation.buildVariables({ userId: '35122899956' }, context),
+        ],
+        [
+            'PolarisUserHoverCardContentV2Query',
+            '27756568060663620',
+            'query',
+            { userID: '35122899956' },
+        ],
+    );
 });
 
 test('conversation pin and unpin use distinct current web documents and exact variables', () => {
     const pin = INSTAGRAM_GRAPHQL_OPERATIONS.useIGDPinThreadMutation;
     const unpin = INSTAGRAM_GRAPHQL_OPERATIONS.useIGDUnpinThreadMutation;
     assert.deepEqual(
-        [pin.friendlyName, pin.docId, pin.kind, pin.buildVariables({ threadFbid: 'fbid' }, context)],
-        ['useIGDPinThreadMutation', '26491513390471063', 'mutation', { thread_fbid: 'fbid', pin: true }],
+        [
+            pin.friendlyName,
+            pin.docId,
+            pin.kind,
+            pin.buildVariables({ threadFbid: 'fbid' }, context),
+        ],
+        [
+            'useIGDPinThreadMutation',
+            '26491513390471063',
+            'mutation',
+            { thread_fbid: 'fbid', pin: true },
+        ],
     );
     assert.deepEqual(
-        [unpin.friendlyName, unpin.docId, unpin.kind, unpin.buildVariables({ threadFbid: 'fbid' }, context)],
-        ['useIGDUnpinThreadMutation', '26719492947719993', 'mutation', { thread_fbid: 'fbid', pin: false }],
+        [
+            unpin.friendlyName,
+            unpin.docId,
+            unpin.kind,
+            unpin.buildVariables({ threadFbid: 'fbid' }, context),
+        ],
+        [
+            'useIGDUnpinThreadMutation',
+            '26719492947719993',
+            'mutation',
+            { thread_fbid: 'fbid', pin: false },
+        ],
     );
 });
 
 test('catalog is a closed DM allowlist', () => {
     assert.equal(Object.keys(INSTAGRAM_GRAPHQL_OPERATIONS).length, 40);
-    assert.equal(isInstagramGraphqlOperationName('IGDirectReactionSendMutation'), true);
+    assert.equal(
+        isInstagramGraphqlOperationName('IGDirectReactionSendMutation'),
+        true,
+    );
     for (const shellOperation of [
         'PolarisFeedTimelinePaginationQuery',
         'PolarisStoriesV3TrayContainerQuery',
@@ -298,6 +376,9 @@ test('catalog is a closed DM allowlist', () => {
         'PolarisViewerSettingsQuery',
     ]) {
         assert.equal(isInstagramGraphqlOperationName(shellOperation), false);
-        assert.equal(Object.hasOwn(INSTAGRAM_GRAPHQL_OPERATIONS, shellOperation), false);
+        assert.equal(
+            Object.hasOwn(INSTAGRAM_GRAPHQL_OPERATIONS, shellOperation),
+            false,
+        );
     }
 });

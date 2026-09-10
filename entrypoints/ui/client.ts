@@ -1,12 +1,32 @@
-import { createStore, onCleanup, onSettled, reconcile, type Store } from 'solid-js';
+import {
+    createStore,
+    onCleanup,
+    onSettled,
+    reconcile,
+    type Store,
+} from 'solid-js';
 import browser from 'webextension-polyfill';
 import type { InboxProjection } from '../../lib/engine/inbox';
-import { INBOX_CLIENT_PORT, type SnapshotMessage } from '../../lib/engine/protocol';
+import {
+    INBOX_CLIENT_PORT,
+    type SnapshotMessage,
+} from '../../lib/engine/protocol';
 
-export type InboxClient = { readonly state: Store<InboxProjection>; refresh(): void };
+export type InboxClient = {
+    readonly state: Store<InboxProjection>;
+    refresh(): void;
+};
 function empty(): InboxProjection {
-    return { accountId: null, accountEpoch: 0, workerEpoch: '', commitRevision: 0,
-        availability: 'absent', freshness: 'stale', synchronization: 'refreshing', inbox: null };
+    return {
+        accountId: null,
+        accountEpoch: 0,
+        workerEpoch: '',
+        commitRevision: 0,
+        availability: 'absent',
+        freshness: 'stale',
+        synchronization: 'refreshing',
+        inbox: null,
+    };
 }
 
 export function createInboxClient(): InboxClient {
@@ -17,7 +37,9 @@ export function createInboxClient(): InboxClient {
         const previousPort = currentPort;
         removeCurrent?.();
         previousPort?.disconnect();
-        setState(draft => { reconcile(empty())(draft); });
+        setState((draft) => {
+            reconcile(empty())(draft);
+        });
         let sequence = 0;
         let workerEpoch = '';
         const port = browser.runtime.connect({ name: INBOX_CLIENT_PORT });
@@ -42,14 +64,17 @@ export function createInboxClient(): InboxClient {
             }
             sequence = message.sequence;
             workerEpoch = message.projection.workerEpoch;
-            const accountChanged = state.accountEpoch !== message.projection.accountEpoch;
-            setState(draft => {
+            const accountChanged =
+                state.accountEpoch !== message.projection.accountEpoch;
+            setState((draft) => {
                 if (accountChanged) draft.inbox = null;
                 reconcile(message.projection)(draft);
             });
         }
         // SAFETY: this named client port receives only SnapshotMessage values from the worker counterpart.
-        const receiveListener = receive as Parameters<typeof port.onMessage.addListener>[0];
+        const receiveListener = receive as Parameters<
+            typeof port.onMessage.addListener
+        >[0];
         function remove() {
             port.onMessage.removeListener(receiveListener);
             port.onDisconnect.removeListener(reconnect);
@@ -67,5 +92,8 @@ export function createInboxClient(): InboxClient {
         currentPort = undefined;
         port?.disconnect();
     });
-    return { state, refresh: () => currentPort?.postMessage({ kind: 'refresh' }) };
+    return {
+        state,
+        refresh: () => currentPort?.postMessage({ kind: 'refresh' }),
+    };
 }

@@ -23,8 +23,6 @@ Harden refresh, de-duplication, and failure UX after future text/reply/reaction 
 
 Do not add MQTT/live-websocket support; active-thread refresh is the intended first path.
 
-
-
 ## Disposition
 
 Merged into `icr-9qjx`. Reconciliation, de-duplication, failure recovery, inbox metadata, and scroll behavior are definition-of-done requirements rather than a deferred hardening milestone.

@@ -63,15 +63,15 @@ For ICR, **every animation, including continuous loading rotation, is optional**
 motion. The milestone should consolidate and gate it rather than add parallel
 rules.
 
-| Surface | Existing behavior | ICR target |
-| --- | --- | --- |
-| Sidebar resize grip | Opacity fade on hover/focus | Keep as optional feedback; resizing itself remains direct and non-animated. |
-| Virtual inbox row | `opacity`/`transform` transition; row position is a transform used for virtualization | Never animate the virtual positioning transform, `top`, height, or reorder. Limit optional feedback to an inner/select-state element so scrolling stays exact. |
-| Status, error, and menu-like surfaces | Short `surface-in` fade/translate | Optional enter and real exit lifecycle where a surface currently disappears. |
-| History message rows | `message-in` fade/translate | Only animate newly accepted local/incoming tail messages. Never animate initial history, cached-window replacement, older prepend, reply positioning, or rows recycled by the 80-row window. |
-| Reaction rail and preview play badge | Opacity/scale transitions | Keep optional; preserve pointer/focus usability with no motion. |
-| Reel modal | Backdrop fade and dialog scale/translate enter | Add symmetric, retained exit before inertness/scroll lock/focus restoration are released. |
-| Spinner | Infinite rotation | Optional; reduced mode presents a static busy indicator plus existing accessible status. |
+| Surface                               | Existing behavior                                                                     | ICR target                                                                                                                                                                                   |
+| ------------------------------------- | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Sidebar resize grip                   | Opacity fade on hover/focus                                                           | Keep as optional feedback; resizing itself remains direct and non-animated.                                                                                                                  |
+| Virtual inbox row                     | `opacity`/`transform` transition; row position is a transform used for virtualization | Never animate the virtual positioning transform, `top`, height, or reorder. Limit optional feedback to an inner/select-state element so scrolling stays exact.                               |
+| Status, error, and menu-like surfaces | Short `surface-in` fade/translate                                                     | Optional enter and real exit lifecycle where a surface currently disappears.                                                                                                                 |
+| History message rows                  | `message-in` fade/translate                                                           | Only animate newly accepted local/incoming tail messages. Never animate initial history, cached-window replacement, older prepend, reply positioning, or rows recycled by the 80-row window. |
+| Reaction rail and preview play badge  | Opacity/scale transitions                                                             | Keep optional; preserve pointer/focus usability with no motion.                                                                                                                              |
+| Reel modal                            | Backdrop fade and dialog scale/translate enter                                        | Add symmetric, retained exit before inertness/scroll lock/focus restoration are released.                                                                                                    |
+| Spinner                               | Infinite rotation                                                                     | Optional; reduced mode presents a static busy indicator plus existing accessible status.                                                                                                     |
 
 The existing global reduced-motion rule is a useful safety net, but a duration
 near zero still creates lifecycle ambiguity and cannot represent a user choice.

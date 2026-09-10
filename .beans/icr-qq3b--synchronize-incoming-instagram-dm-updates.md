@@ -34,8 +34,6 @@ Acceptance criteria:
 - Rendering stays bounded and preserves the reader's anchor unless they were following the newest messages.
 - Transport remains credential-safe, typed, and isolated outside UI components.
 
-
-
 ## Implementation handoff (high-confidence repository fit)
 
 The current tree has no inbound transport: `entrypoints/ui/store.ts` calls `loadInbox()` only from `start`, pagination, and retry; `entrypoints/ig-anchor.content.ts` registers request/response RPC handlers only; and `entrypoints/background.ts` only routes UI-initiated RPC. This task is therefore new capability work, not a small bug fix.
@@ -67,15 +65,11 @@ The current tree has no inbound transport: `entrypoints/ui/store.ts` calls `load
 - stale events after UI/anchor teardown are ignored;
 - two-account manual check proves an incoming message and reaction appear without UI reload.
 
-
-
 ## Implementation result (2026-08-09)
 
 Implemented the documented polling fallback because no authenticated two-account session or decoded Iris/MQTT event contract was available. The visible UI polls the proven initial inbox and selected-thread newest-detail queries every 5 seconds, backs off to 60 seconds, and feeds normalized entities through one typed `IncomingDmSnapshot` reconciliation boundary. Lifecycle is single-flight, visibility-aware, generation-gated, and fully disposed. Store and browser coverage protects deduplication/order, pins, optimistic send row identity, reaction receipt races, bounded follow versus anchor preservation, backoff, visibility, and teardown.
 
 Verification: `npm run check`, `npm run build`, `git diff --check`, focused store tests, and the focused incoming browser regression pass. Full `npm test` passes 157/158; the unrelated pre-existing `extreme finite reel ratios keep both production media axes renderable` browser test fails at `history.browser.test.ts:684` against pre-existing reel work. Iris/MQTT capture and manual two-account validation were not performed and remain intentionally unchecked.
-
-
 
 ## Independent review remediation (2026-08-09)
 

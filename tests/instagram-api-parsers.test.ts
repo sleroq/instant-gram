@@ -33,18 +33,31 @@ import {
 } from '../lib/instagram-api/reels.ts';
 
 test('edited text parser requires the captured matching IDs and timestamp', () => {
-    assert.deepEqual(parseEditedTextResponse({ data: {
-        direct_edit_message_with_slide_messaging_response: {
-            message_id: 'mid.$message',
-            timestamp_ms: '1786399709281',
-            id: 'mid.$message',
-        },
-    } }), { messageId: 'mid.$message', timestampMs: 1_786_399_709_281 });
-    assert.throws(() => parseEditedTextResponse({ data: {
-        direct_edit_message_with_slide_messaging_response: {
-            message_id: 'mid.$message', timestamp_ms: '1786399709281', id: 'other',
-        },
-    } }), /receipt/);
+    assert.deepEqual(
+        parseEditedTextResponse({
+            data: {
+                direct_edit_message_with_slide_messaging_response: {
+                    message_id: 'mid.$message',
+                    timestamp_ms: '1786399709281',
+                    id: 'mid.$message',
+                },
+            },
+        }),
+        { messageId: 'mid.$message', timestampMs: 1_786_399_709_281 },
+    );
+    assert.throws(
+        () =>
+            parseEditedTextResponse({
+                data: {
+                    direct_edit_message_with_slide_messaging_response: {
+                        message_id: 'mid.$message',
+                        timestamp_ms: '1786399709281',
+                        id: 'other',
+                    },
+                },
+            }),
+        /receipt/,
+    );
 });
 
 const user = {
@@ -127,17 +140,28 @@ test('thread unread state compares the latest incoming message with the viewer w
         thread_id: 'read-receipt-1',
         viewer: { interop_messaging_user_fbid: 'viewer-fbid' },
         marked_as_unread: false,
-        slide_read_receipts: [{
-            participant_fbid: 'viewer-fbid',
-            watermark_timestamp_ms: '1786269297000',
-        }],
-        slide_messages: { edges: [{ node: {
-            id: 'latest-message',
-            sender_fbid: 'peer-fbid',
-            timestamp_ms: '1786269297434',
-            content_type: 'TEXT',
-            content: { __typename: 'SlideMessageText', text_body: 'new' },
-        } }] },
+        slide_read_receipts: [
+            {
+                participant_fbid: 'viewer-fbid',
+                watermark_timestamp_ms: '1786269297000',
+            },
+        ],
+        slide_messages: {
+            edges: [
+                {
+                    node: {
+                        id: 'latest-message',
+                        sender_fbid: 'peer-fbid',
+                        timestamp_ms: '1786269297434',
+                        content_type: 'TEXT',
+                        content: {
+                            __typename: 'SlideMessageText',
+                            text_body: 'new',
+                        },
+                    },
+                },
+            ],
+        },
     });
 
     assert.equal(parsed?.isUnread, true);
@@ -154,19 +178,35 @@ test('thread FBID is retained independently from the stable UI key', () => {
 });
 
 test('conversation pin receipt requires authoritative id and boolean state', () => {
-    assert.deepEqual(parsePinnedThreadResponse({
-        data: { xig_direct_pin_thread: { is_pin: false, id: '1789001' } },
-    }), { threadFbid: '1789001', isPinned: false });
+    assert.deepEqual(
+        parsePinnedThreadResponse({
+            data: { xig_direct_pin_thread: { is_pin: false, id: '1789001' } },
+        }),
+        { threadFbid: '1789001', isPinned: false },
+    );
     assert.throws(
-        () => parsePinnedThreadResponse({ data: { xig_direct_pin_thread: { is_pin: 'false', id: '1789001' } } }),
+        () =>
+            parsePinnedThreadResponse({
+                data: {
+                    xig_direct_pin_thread: { is_pin: 'false', id: '1789001' },
+                },
+            }),
         /receipt was not returned/,
     );
     assert.throws(
-        () => parsePinnedThreadResponse({ data: { xig_direct_pin_thread: { is_pin: true } } }),
+        () =>
+            parsePinnedThreadResponse({
+                data: { xig_direct_pin_thread: { is_pin: true } },
+            }),
         /receipt was not returned/,
     );
     assert.throws(
-        () => parsePinnedThreadResponse({ data: { xig_direct_pin_thread: { is_pin: true, id: 'route-key' } } }),
+        () =>
+            parsePinnedThreadResponse({
+                data: {
+                    xig_direct_pin_thread: { is_pin: true, id: 'route-key' },
+                },
+            }),
         /receipt was not returned/,
     );
 });
@@ -228,7 +268,8 @@ test('thread parsing keeps images, reactions, structured fallbacks, and pin stat
                                         message_id: 'ai-1',
                                         sender_fbid: 'ai-1',
                                         timestamp_ms: '1000',
-                                        content_type: 'GEN_AI_RICH_RESPONSE_XMA',
+                                        content_type:
+                                            'GEN_AI_RICH_RESPONSE_XMA',
                                         text_body: 'A concise answer',
                                         reactions: [],
                                         content: {
@@ -251,7 +292,7 @@ test('thread parsing keeps images, reactions, structured fallbacks, and pin stat
 
     assert.equal(response.viewerId, 'viewer-1');
     assert.deepEqual(
-        response.items.map(message => message.id),
+        response.items.map((message) => message.id),
         ['ai-1', 'image-1'],
     );
     assert.equal(response.thread?.serverPinnedMessageIds?.[0], 'image-1');
@@ -306,47 +347,99 @@ test('HAR-evidenced message types have an explicit rich, activity, fallback, or 
     const cases = [
         {
             type: 'TEXT',
-            node: { content: { text_fragments: [{ plaintext: 'fragment-only text' }] } },
+            node: {
+                content: {
+                    text_fragments: [{ plaintext: 'fragment-only text' }],
+                },
+            },
             expected: 'text',
         },
         {
             type: 'IMAGES',
-            node: { content: { attachments: [{ preview_cdn_url: 'https://cdn.example/photo.jpg' }] } },
+            node: {
+                content: {
+                    attachments: [
+                        { preview_cdn_url: 'https://cdn.example/photo.jpg' },
+                    ],
+                },
+            },
             expected: 'image',
         },
         {
             type: 'MESSAGE_INLINE_SHARE',
-            node: { content: { xma: {
-                __typename: 'SlideMessageStandardXMA',
-                title_text: 'Shared post',
-                subtitle_text: 'Post caption',
-                preview_image: { url: 'https://cdn.example/post.jpg' },
-            } } },
+            node: {
+                content: {
+                    xma: {
+                        __typename: 'SlideMessageStandardXMA',
+                        title_text: 'Shared post',
+                        subtitle_text: 'Post caption',
+                        preview_image: { url: 'https://cdn.example/post.jpg' },
+                    },
+                },
+            },
             expected: 'inline_share',
         },
         { type: 'REACTION_LOG_XMAT', node: {}, expected: undefined },
         {
             type: 'CHANGE_THREAD_IMAGE_XMAT',
-            node: { content: { text_fragments: [{ plaintext: 'Alice changed the group image.' }] } },
+            node: {
+                content: {
+                    text_fragments: [
+                        { plaintext: 'Alice changed the group image.' },
+                    ],
+                },
+            },
             expected: 'activity',
         },
         {
             type: 'CHANGE_THREAD_NAME_XMAT',
-            node: { content: { text_fragments: [{ plaintext: 'Alice named the group Friends.' }] } },
+            node: {
+                content: {
+                    text_fragments: [
+                        { plaintext: 'Alice named the group Friends.' },
+                    ],
+                },
+            },
             expected: 'activity',
         },
-        { type: 'MONTAGE_SHARE_XMA', node: { text_body: 'Story reply' }, expected: 'unsupported' },
+        {
+            type: 'MONTAGE_SHARE_XMA',
+            node: { text_body: 'Story reply' },
+            expected: 'unsupported',
+        },
         {
             type: 'REMOVE_PARTICIPANT_XMAT',
-            node: { content: { text_fragments: [{ plaintext: 'Alice removed Bob' }] } },
+            node: {
+                content: {
+                    text_fragments: [{ plaintext: 'Alice removed Bob' }],
+                },
+            },
             expected: 'activity',
         },
-        { type: 'GEN_AI_RICH_RESPONSE_XMA', node: { text_body: 'AI answer' }, expected: 'unsupported' },
-        { type: 'GEN_AI_SEARCH_PLUGIN_RESPONSE_XMA', node: { text_body: 'Search answer' }, expected: 'unsupported' },
-        { type: 'IG_REELS_BLEND_VISITATION_XMAT', node: {}, expected: 'unsupported' },
+        {
+            type: 'GEN_AI_RICH_RESPONSE_XMA',
+            node: { text_body: 'AI answer' },
+            expected: 'unsupported',
+        },
+        {
+            type: 'GEN_AI_SEARCH_PLUGIN_RESPONSE_XMA',
+            node: { text_body: 'Search answer' },
+            expected: 'unsupported',
+        },
+        {
+            type: 'IG_REELS_BLEND_VISITATION_XMAT',
+            node: {},
+            expected: 'unsupported',
+        },
         {
             type: 'THREAD_IGD_NEW_FRIEND_BUMP_XMAT',
-            node: { content: { text_fragments: [{ plaintext: 'You can now message each other.' }] } },
+            node: {
+                content: {
+                    text_fragments: [
+                        { plaintext: 'You can now message each other.' },
+                    ],
+                },
+            },
             expected: 'activity',
         },
     ];
@@ -400,15 +493,22 @@ test('inline-share aliases normalize detailed cards and incomplete media to frie
         { content: undefined, label: 'Shared post' },
         { content: {}, label: 'Shared post' },
         {
-            content: { xma: {
-                __typename: 'SlideMessagePlaceholderXMA',
-                title_text: 'Message unavailable',
-                subtitle_text: 'This content is no longer available.',
-            } },
+            content: {
+                xma: {
+                    __typename: 'SlideMessagePlaceholderXMA',
+                    title_text: 'Message unavailable',
+                    subtitle_text: 'This content is no longer available.',
+                },
+            },
             label: 'Message unavailable',
         },
         {
-            content: { xma: { title_text: 'Broken preview', preview_image: { url: '' } } },
+            content: {
+                xma: {
+                    title_text: 'Broken preview',
+                    preview_image: { url: '' },
+                },
+            },
             label: 'Broken preview',
         },
     ];
@@ -432,27 +532,34 @@ test('reel shares normalize captured XMA preview geometry before reel media load
         sender_fbid: 'sender',
         timestamp_ms: '1000',
         content_type: 'MESSAGE_INLINE_SHARE',
-        content: { xma: {
-            target_url: 'https://www.instagram.com/reel/ABC/',
-            target_id: '3953224267254190889_123',
-            title_text: 'alice',
-            preview_image: {
-                url: 'https://cdn.example/reel.jpg',
-                width: 1080,
-                height: 1440,
+        content: {
+            xma: {
+                target_url: 'https://www.instagram.com/reel/ABC/',
+                target_id: '3953224267254190889_123',
+                title_text: 'alice',
+                preview_image: {
+                    url: 'https://cdn.example/reel.jpg',
+                    width: 1080,
+                    height: 1440,
+                },
             },
-        } },
+        },
     });
     assert.equal(message?.kind, 'reel_share');
-    assert.deepEqual(message?.kind === 'reel_share' ? {
-        mediaId: message.mediaId,
-        previewWidth: message.previewWidth,
-        previewHeight: message.previewHeight,
-    } : undefined, {
-        mediaId: '3953224267254190889',
-        previewWidth: 1080,
-        previewHeight: 1440,
-    });
+    assert.deepEqual(
+        message?.kind === 'reel_share'
+            ? {
+                  mediaId: message.mediaId,
+                  previewWidth: message.previewWidth,
+                  previewHeight: message.previewHeight,
+              }
+            : undefined,
+        {
+            mediaId: '3953224267254190889',
+            previewWidth: 1080,
+            previewHeight: 1440,
+        },
+    );
 });
 
 test('feed post shares use the modal media path and normalize attached music', () => {
@@ -461,48 +568,80 @@ test('feed post shares use the modal media path and normalize attached music', (
         sender_fbid: 'sender',
         timestamp_ms: '1000',
         content_type: 'MESSAGE_INLINE_SHARE',
-        content: { xma: {
-            target_url: 'https://www.instagram.com/p/Dbcvq9_MYOc/',
-            target_id: '3953244233886958492',
-            header_title_text: 'alice',
-            preview_image: { url: 'https://cdn.example/post.jpg', width: 1080, height: 1080 },
-        } },
+        content: {
+            xma: {
+                target_url: 'https://www.instagram.com/p/Dbcvq9_MYOc/',
+                target_id: '3953244233886958492',
+                header_title_text: 'alice',
+                preview_image: {
+                    url: 'https://cdn.example/post.jpg',
+                    width: 1080,
+                    height: 1080,
+                },
+            },
+        },
     });
-    assert.deepEqual(message?.kind === 'reel_share' ? {
-        mediaType: message.mediaType,
-        shortcode: message.shortcode,
-        mediaId: message.mediaId,
-    } : undefined, {
-        mediaType: 'post',
-        shortcode: 'Dbcvq9_MYOc',
-        mediaId: '3953244233886958492',
-    });
+    assert.deepEqual(
+        message?.kind === 'reel_share'
+            ? {
+                  mediaType: message.mediaType,
+                  shortcode: message.shortcode,
+                  mediaId: message.mediaId,
+              }
+            : undefined,
+        {
+            mediaType: 'post',
+            shortcode: 'Dbcvq9_MYOc',
+            mediaId: '3953244233886958492',
+        },
+    );
 
-    const media = parseReelInfoResponse({ items: [{
-        pk: '3953244233886958492',
-        code: 'Dbcvq9_MYOc',
-        media_type: 1,
-        product_type: 'feed',
-        original_width: 1080,
-        original_height: 1080,
-        image_versions2: { candidates: [{ url: 'https://cdn.example/post.jpg', width: 1080, height: 1080 }] },
-        user: { pk: 'owner', username: 'alice' },
-        music_metadata: { music_info: {
-            music_asset_info: {
-                audio_asset_id: '1525098932292312',
-                progressive_download_url: 'https://cdn.example/music.mp4',
-                duration_in_ms: 138275,
-                title: 'cloud city',
-                display_artist: 'frutiger pm',
-            },
-            music_consumption_info: {
-                audio_asset_start_time_in_ms: 3000,
-                overlap_duration_in_ms: 30000,
-            },
-        } },
-    }] }, { shortcode: 'Dbcvq9_MYOc', mediaId: '3953244233886958492' });
+    const media = parseReelInfoResponse(
+        {
+            items: [
+                {
+                    pk: '3953244233886958492',
+                    code: 'Dbcvq9_MYOc',
+                    media_type: 1,
+                    product_type: 'feed',
+                    original_width: 1080,
+                    original_height: 1080,
+                    image_versions2: {
+                        candidates: [
+                            {
+                                url: 'https://cdn.example/post.jpg',
+                                width: 1080,
+                                height: 1080,
+                            },
+                        ],
+                    },
+                    user: { pk: 'owner', username: 'alice' },
+                    music_metadata: {
+                        music_info: {
+                            music_asset_info: {
+                                audio_asset_id: '1525098932292312',
+                                progressive_download_url:
+                                    'https://cdn.example/music.mp4',
+                                duration_in_ms: 138275,
+                                title: 'cloud city',
+                                display_artist: 'frutiger pm',
+                            },
+                            music_consumption_info: {
+                                audio_asset_start_time_in_ms: 3000,
+                                overlap_duration_in_ms: 30000,
+                            },
+                        },
+                    },
+                },
+            ],
+        },
+        { shortcode: 'Dbcvq9_MYOc', mediaId: '3953244233886958492' },
+    );
     assert.equal(media.mediaType, 'post');
-    assert.deepEqual(media.displayMusic, { title: 'cloud city', artist: 'frutiger pm' });
+    assert.deepEqual(media.displayMusic, {
+        title: 'cloud city',
+        artist: 'frutiger pm',
+    });
     assert.deepEqual(media.attachedAudio, {
         id: '1525098932292312',
         url: 'https://cdn.example/music.mp4',
@@ -522,20 +661,34 @@ test('reel info exposes visible licensed music without attaching a soundtrack', 
         product_type: 'clips',
         original_width: 1080,
         original_height: 1920,
-        video_versions: [{ url: 'https://cdn.example/reel.mp4', width: 1080, height: 1920 }],
+        video_versions: [
+            { url: 'https://cdn.example/reel.mp4', width: 1080, height: 1920 },
+        ],
     };
-    const media = parseReelInfoResponse({ items: [{
-        ...base,
-        clips_metadata: { music_info: {
-            music_asset_info: {
-                audio_asset_id: '169754582898981',
-                title: 'Redbone (Gloopy)',
-                display_artist: 'kaemvn',
-                progressive_download_url: 'https://cdn.example/music.mp4',
-            },
-            music_consumption_info: { audio_asset_start_time_in_ms: 14500 },
-        } },
-    }] }, { shortcode: 'Db0rkpexp3w' });
+    const media = parseReelInfoResponse(
+        {
+            items: [
+                {
+                    ...base,
+                    clips_metadata: {
+                        music_info: {
+                            music_asset_info: {
+                                audio_asset_id: '169754582898981',
+                                title: 'Redbone (Gloopy)',
+                                display_artist: 'kaemvn',
+                                progressive_download_url:
+                                    'https://cdn.example/music.mp4',
+                            },
+                            music_consumption_info: {
+                                audio_asset_start_time_in_ms: 14500,
+                            },
+                        },
+                    },
+                },
+            ],
+        },
+        { shortcode: 'Db0rkpexp3w' },
+    );
 
     assert.deepEqual(media.displayMusic, {
         title: 'Redbone (Gloopy)',
@@ -543,16 +696,31 @@ test('reel info exposes visible licensed music without attaching a soundtrack', 
     });
     assert.equal(media.attachedAudio, undefined);
 
-    const withoutMusic = parseReelInfoResponse({ items: [base] }, { shortcode: 'Db0rkpexp3w' });
+    const withoutMusic = parseReelInfoResponse(
+        { items: [base] },
+        { shortcode: 'Db0rkpexp3w' },
+    );
     assert.equal(withoutMusic.displayMusic, undefined);
 
-    const originalAudio = parseReelInfoResponse({ items: [{
-        ...base,
-        clips_metadata: { original_sound_info: {
-            original_audio_title: 'Original audio',
-            ig_artist: { username: 'reel_author', full_name: 'Reel Author' },
-        } },
-    }] }, { shortcode: 'Db0rkpexp3w' });
+    const originalAudio = parseReelInfoResponse(
+        {
+            items: [
+                {
+                    ...base,
+                    clips_metadata: {
+                        original_sound_info: {
+                            original_audio_title: 'Original audio',
+                            ig_artist: {
+                                username: 'reel_author',
+                                full_name: 'Reel Author',
+                            },
+                        },
+                    },
+                },
+            ],
+        },
+        { shortcode: 'Db0rkpexp3w' },
+    );
     assert.deepEqual(originalAudio.displayMusic, {
         title: 'Original audio',
         artist: 'Reel Author',
@@ -560,11 +728,20 @@ test('reel info exposes visible licensed music without attaching a soundtrack', 
 });
 
 test('attachment-less photos and future types retain safe normalized diagnostics', () => {
-    const photo = parseMessage({ message_id: 'photo', content_type: 'IMAGES', content: {} });
+    const photo = parseMessage({
+        message_id: 'photo',
+        content_type: 'IMAGES',
+        content: {},
+    });
     assert.equal(photo?.kind, 'unsupported');
-    if (photo?.kind === 'unsupported') assert.equal(photo.fallback.label, 'Photo');
+    if (photo?.kind === 'unsupported')
+        assert.equal(photo.fallback.label, 'Photo');
 
-    const unknown = parseMessage({ sender_fbid: 'sender', timestamp_ms: '1234', content_type: 'FUTURE_CARD' });
+    const unknown = parseMessage({
+        sender_fbid: 'sender',
+        timestamp_ms: '1234',
+        content_type: 'FUTURE_CARD',
+    });
     assert.equal(unknown?.kind, 'unsupported');
     if (unknown?.kind === 'unsupported') {
         assert.equal(unknown.contentType, 'FUTURE_CARD');
@@ -591,12 +768,15 @@ test('reply previews use normalized media labels without requiring an image URL'
             },
         },
     });
-    assert.deepEqual(shareReply?.kind === 'text' ? shareReply.replyPreview : undefined, {
-        kind: 'media',
-        title: 'Layered reply',
-        subtitle: 'Reply subtitle',
-        thumbUrl: undefined,
-    });
+    assert.deepEqual(
+        shareReply?.kind === 'text' ? shareReply.replyPreview : undefined,
+        {
+            kind: 'media',
+            title: 'Layered reply',
+            subtitle: 'Reply subtitle',
+            thumbUrl: undefined,
+        },
+    );
 
     const photoReply = parseMessage({
         message_id: 'replying-to-photo',
@@ -608,10 +788,13 @@ test('reply previews use normalized media labels without requiring an image URL'
             content: {},
         },
     });
-    assert.deepEqual(photoReply?.kind === 'text' ? photoReply.replyPreview : undefined, {
-        kind: 'media',
-        title: 'Photo',
-    });
+    assert.deepEqual(
+        photoReply?.kind === 'text' ? photoReply.replyPreview : undefined,
+        {
+            kind: 'media',
+            title: 'Photo',
+        },
+    );
 });
 
 test('reactions are normalized on every renderable message variant', () => {
@@ -625,35 +808,48 @@ test('reactions are normalized on every renderable message variant', () => {
         { content_type: 'ACTION_LOG', text_body: 'activity' },
         {
             content_type: 'IMAGES',
-            content: { attachments: [{ attachment_cdn_url: 'https://cdn.example/image.jpg' }] },
+            content: {
+                attachments: [
+                    { attachment_cdn_url: 'https://cdn.example/image.jpg' },
+                ],
+            },
         },
         {
             content_type: 'MESSAGE_INLINE_SHARE',
-            content: { xma: { header_title_text: 'Post', preview_image: { url: 'https://cdn.example/post.jpg' } } },
+            content: {
+                xma: {
+                    header_title_text: 'Post',
+                    preview_image: { url: 'https://cdn.example/post.jpg' },
+                },
+            },
         },
         { content_type: 'UNKNOWN_RENDERABLE' },
-    ].map((fields, index) => parseMessage({
-        message_id: `message-${index}`,
-        sender_fbid: 'sender-1',
-        timestamp_ms: '1783181919592',
-        reactions: [reaction],
-        ...fields,
-    }));
+    ].map((fields, index) =>
+        parseMessage({
+            message_id: `message-${index}`,
+            sender_fbid: 'sender-1',
+            timestamp_ms: '1783181919592',
+            reactions: [reaction],
+            ...fields,
+        }),
+    );
 
     for (const message of messages)
-        assert.deepEqual(message?.reactions, [{
-            senderId: 'viewer-1',
-            reaction: '😂',
-            timestampMs: 1_783_181_919_592,
-        }]);
+        assert.deepEqual(message?.reactions, [
+            {
+                senderId: 'viewer-1',
+                reaction: '😂',
+                timestampMs: 1_783_181_919_592,
+            },
+        ]);
 });
 
 test('thread info independently preserves divergent UI, operation, and read-receipt identifiers', () => {
     function response(thread: JsonObject) {
         return {
-        data: {
-            get_slide_thread_nullable: { as_ig_direct_thread: thread },
-        },
+            data: {
+                get_slide_thread_nullable: { as_ig_direct_thread: thread },
+            },
         };
     }
     const info = parseThreadInfoResponses(
@@ -677,67 +873,173 @@ test('thread info independently preserves divergent UI, operation, and read-rece
 test('composer responses parse operation-specific emoji, sticker, music, avatar, and thread ID data', () => {
     assert.deepEqual(
         parseSecondaryGraphqlResponse('IGDEmojiPickerQuery', {
-            data: { emoji_categories: { nodes: [{
-                id: 'faces', localized_name: 'Faces',
-                emojis_in_category: [{ codepoint: [128512] }],
-            }] } },
-        }),
-        { operation: 'IGDEmojiPickerQuery', categories: [{ id: 'faces', name: 'Faces', items: ['😀'] }] },
-    );
-    assert.deepEqual(
-        parseSecondaryGraphqlResponse('IGDComposerRichContentStickersV2_cutoutStickersQuery', {
-            data: { xig_igd_stickers_query: { sections: { edges: [{ node: {
-                id: 'cutout', title: 'Your Stickers', stickers: { edges: [{ node: {
-                    id: 'sticker-1', alt_text: 'Wave', sticker_send_type: 'CUTOUT',
-                    animated_info: { webp: { url: 'https://cdn.example/sticker.webp', width: 200, height: 300 } },
-                } }] },
-            } }] } } },
-        }),
-        { operation: 'IGDComposerRichContentStickersV2_cutoutStickersQuery', sections: [{
-            id: 'cutout', title: 'Your Stickers', type: undefined, items: [{
-                id: 'sticker-1', altText: 'Wave', sendType: 'CUTOUT',
-                image: { url: 'https://cdn.example/sticker.webp', width: 200, height: 300, animated: true },
-            }],
-        }] },
-    );
-    assert.deepEqual(
-        parseSecondaryGraphqlResponse('IGDComposerRichContentMusicQuery', {
-            data: { xfb_ig_audio_playlist_connection: { items: {
-                edges: [{ node: { track: {
-                    id: 'track-1', title: 'Title', display_artist: 'Artist', duration_in_ms: 1234,
-                } } }],
-                page_info: { end_cursor: 'next', has_next_page: true },
-            } } },
+            data: {
+                emoji_categories: {
+                    nodes: [
+                        {
+                            id: 'faces',
+                            localized_name: 'Faces',
+                            emojis_in_category: [{ codepoint: [128512] }],
+                        },
+                    ],
+                },
+            },
         }),
         {
-            operation: 'IGDComposerRichContentMusicQuery',
-            tracks: [{ id: 'track-1', title: 'Title', artist: 'Artist', durationMs: 1234, artworkUrl: undefined, previewUrl: undefined }],
-            cursor: 'next', hasNextPage: true,
+            operation: 'IGDEmojiPickerQuery',
+            categories: [{ id: 'faces', name: 'Faces', items: ['😀'] }],
         },
     );
     assert.deepEqual(
-        parseSecondaryGraphqlResponse('IGDComposerRichContentTray_AvatarAvailableQuery', {
-            data: { fetch__IGUser: { user_avatar: null } },
-        }),
-        { operation: 'IGDComposerRichContentTray_AvatarAvailableQuery', available: false },
+        parseSecondaryGraphqlResponse(
+            'IGDComposerRichContentStickersV2_cutoutStickersQuery',
+            {
+                data: {
+                    xig_igd_stickers_query: {
+                        sections: {
+                            edges: [
+                                {
+                                    node: {
+                                        id: 'cutout',
+                                        title: 'Your Stickers',
+                                        stickers: {
+                                            edges: [
+                                                {
+                                                    node: {
+                                                        id: 'sticker-1',
+                                                        alt_text: 'Wave',
+                                                        sticker_send_type:
+                                                            'CUTOUT',
+                                                        animated_info: {
+                                                            webp: {
+                                                                url: 'https://cdn.example/sticker.webp',
+                                                                width: 200,
+                                                                height: 300,
+                                                            },
+                                                        },
+                                                    },
+                                                },
+                                            ],
+                                        },
+                                    },
+                                },
+                            ],
+                        },
+                    },
+                },
+            },
+        ),
+        {
+            operation: 'IGDComposerRichContentStickersV2_cutoutStickersQuery',
+            sections: [
+                {
+                    id: 'cutout',
+                    title: 'Your Stickers',
+                    type: undefined,
+                    items: [
+                        {
+                            id: 'sticker-1',
+                            altText: 'Wave',
+                            sendType: 'CUTOUT',
+                            image: {
+                                url: 'https://cdn.example/sticker.webp',
+                                width: 200,
+                                height: 300,
+                                animated: true,
+                            },
+                        },
+                    ],
+                },
+            ],
+        },
     );
     assert.deepEqual(
-        parseSecondaryGraphqlResponse('IGDComposerRichContentStickersV2ThreadIGIDQuery', {
-            data: { get_slide_thread_nullable: { as_ig_direct_thread: {
-                id: 'sticker-operation-id',
-                thread_id: 'sticker-read-receipt-id',
-            } } },
+        parseSecondaryGraphqlResponse('IGDComposerRichContentMusicQuery', {
+            data: {
+                xfb_ig_audio_playlist_connection: {
+                    items: {
+                        edges: [
+                            {
+                                node: {
+                                    track: {
+                                        id: 'track-1',
+                                        title: 'Title',
+                                        display_artist: 'Artist',
+                                        duration_in_ms: 1234,
+                                    },
+                                },
+                            },
+                        ],
+                        page_info: { end_cursor: 'next', has_next_page: true },
+                    },
+                },
+            },
         }),
-        { operation: 'IGDComposerRichContentStickersV2ThreadIGIDQuery', threadFbid: 'sticker-operation-id' },
+        {
+            operation: 'IGDComposerRichContentMusicQuery',
+            tracks: [
+                {
+                    id: 'track-1',
+                    title: 'Title',
+                    artist: 'Artist',
+                    durationMs: 1234,
+                    artworkUrl: undefined,
+                    previewUrl: undefined,
+                },
+            ],
+            cursor: 'next',
+            hasNextPage: true,
+        },
     );
     assert.deepEqual(
-        parseSecondaryGraphqlResponse('IGDComposerRichContentMusicThreadIGIDQuery', {
-            data: { get_slide_thread_nullable: { as_ig_direct_thread: {
-                id: 'music-operation-id',
-                thread_key: 'music-ui-key',
-            } } },
-        }),
-        { operation: 'IGDComposerRichContentMusicThreadIGIDQuery', threadFbid: 'music-operation-id' },
+        parseSecondaryGraphqlResponse(
+            'IGDComposerRichContentTray_AvatarAvailableQuery',
+            {
+                data: { fetch__IGUser: { user_avatar: null } },
+            },
+        ),
+        {
+            operation: 'IGDComposerRichContentTray_AvatarAvailableQuery',
+            available: false,
+        },
+    );
+    assert.deepEqual(
+        parseSecondaryGraphqlResponse(
+            'IGDComposerRichContentStickersV2ThreadIGIDQuery',
+            {
+                data: {
+                    get_slide_thread_nullable: {
+                        as_ig_direct_thread: {
+                            id: 'sticker-operation-id',
+                            thread_id: 'sticker-read-receipt-id',
+                        },
+                    },
+                },
+            },
+        ),
+        {
+            operation: 'IGDComposerRichContentStickersV2ThreadIGIDQuery',
+            threadFbid: 'sticker-operation-id',
+        },
+    );
+    assert.deepEqual(
+        parseSecondaryGraphqlResponse(
+            'IGDComposerRichContentMusicThreadIGIDQuery',
+            {
+                data: {
+                    get_slide_thread_nullable: {
+                        as_ig_direct_thread: {
+                            id: 'music-operation-id',
+                            thread_key: 'music-ui-key',
+                        },
+                    },
+                },
+            },
+        ),
+        {
+            operation: 'IGDComposerRichContentMusicThreadIGIDQuery',
+            threadFbid: 'music-operation-id',
+        },
     );
 });
 
@@ -781,12 +1083,15 @@ test('request pages, actions, counts, and mutation receipts parse captured shape
         parseMessageRequestsResponse(requestResponse, 'SPAM').items[0]?.folder,
         'REQUESTS',
     );
-    assert.deepEqual(parseUnreadCountResponses(requestResponse, requestResponse), {
-        countedTotal: 3,
-        inbox: { count: 1, hasMore: false },
-        requests: { count: 1, hasMore: false },
-        spam: { count: 1, hasMore: false },
-    });
+    assert.deepEqual(
+        parseUnreadCountResponses(requestResponse, requestResponse),
+        {
+            countedTotal: 3,
+            inbox: { count: 1, hasMore: false },
+            requests: { count: 1, hasMore: false },
+            spam: { count: 1, hasMore: false },
+        },
+    );
 
     assert.deepEqual(
         parseMessageActionsResponse({
@@ -819,25 +1124,39 @@ test('request pages, actions, counts, and mutation receipts parse captured shape
     );
 
     assert.deepEqual(
-        parseSentTextResponse({
-            data: {
-                xig_direct_text_send_with_slide_messaging_response: {
-                    message_id: 'sent-1',
-                    timestamp_ms: '1785763880444',
+        parseSentTextResponse(
+            {
+                data: {
+                    xig_direct_text_send_with_slide_messaging_response: {
+                        message_id: 'sent-1',
+                        timestamp_ms: '1785763880444',
+                    },
                 },
             },
-        }, '7001'),
-        { messageId: 'sent-1', timestampMs: 1_785_763_880_444, clientRequestId: '7001' },
+            '7001',
+        ),
+        {
+            messageId: 'sent-1',
+            timestampMs: 1_785_763_880_444,
+            clientRequestId: '7001',
+        },
     );
     assert.deepEqual(
-        parseSentCutoutStickerResponse({
-            data: {
-                ig_direct_cutout_sticker_share_with_slide_msg_response: {
-                    message_id: 'sticker-1',
+        parseSentCutoutStickerResponse(
+            {
+                data: {
+                    ig_direct_cutout_sticker_share_with_slide_msg_response: {
+                        message_id: 'sticker-1',
+                    },
                 },
             },
-        }, '7002'),
-        { messageId: 'sticker-1', timestampMs: undefined, clientRequestId: '7002' },
+            '7002',
+        ),
+        {
+            messageId: 'sticker-1',
+            timestampMs: undefined,
+            clientRequestId: '7002',
+        },
     );
     assert.deepEqual(
         parsePinnedMessageResponse({
@@ -858,22 +1177,26 @@ test('request pages, actions, counts, and mutation receipts parse captured shape
                 xig_direct_reaction_send_with_slide_messaging_response: {
                     slide_message: {
                         id: 'message-1',
-                        reactions: [{
-                            reaction: '❤',
-                            reaction_timestamp_ms: '1783181919592',
-                            sender_fbid: 'viewer-1',
-                        }],
+                        reactions: [
+                            {
+                                reaction: '❤',
+                                reaction_timestamp_ms: '1783181919592',
+                                sender_fbid: 'viewer-1',
+                            },
+                        ],
                     },
                 },
             },
         }),
         {
             messageId: 'message-1',
-            reactions: [{
-                senderId: 'viewer-1',
-                reaction: '❤',
-                timestampMs: 1_783_181_919_592,
-            }],
+            reactions: [
+                {
+                    senderId: 'viewer-1',
+                    reaction: '❤',
+                    timestampMs: 1_783_181_919_592,
+                },
+            ],
         },
     );
     assert.deepEqual(
@@ -896,11 +1219,17 @@ test('request pages, actions, counts, and mutation receipts parse captured shape
 
 test('mutation parsers reject malformed successful GraphQL envelopes', () => {
     assert.throws(
-        () => parseSentTextResponse({ data: {
-            xig_direct_text_send_with_slide_messaging_response: {
-                message_id: 'sent-without-timestamp',
-            },
-        } }, '7001'),
+        () =>
+            parseSentTextResponse(
+                {
+                    data: {
+                        xig_direct_text_send_with_slide_messaging_response: {
+                            message_id: 'sent-without-timestamp',
+                        },
+                    },
+                },
+                '7001',
+            ),
         /timestamp was not returned/,
     );
     assert.throws(
@@ -908,22 +1237,30 @@ test('mutation parsers reject malformed successful GraphQL envelopes', () => {
         /message ID was not returned/,
     );
     assert.throws(
-        () => parseReactionMutationResponse({ data: {
-            xig_direct_reaction_send_with_slide_messaging_response: {
-                slide_message: { id: 'message-1' },
-            },
-        } }),
+        () =>
+            parseReactionMutationResponse({
+                data: {
+                    xig_direct_reaction_send_with_slide_messaging_response: {
+                        slide_message: { id: 'message-1' },
+                    },
+                },
+            }),
         /malformed/,
     );
     assert.throws(
-        () => parseReactionMutationResponse({ data: {
-            xig_direct_reaction_send_with_slide_messaging_response: {
-                slide_message: {
-                    id: 'message-1',
-                    reactions: [{ reaction: '❤', sender_fbid: 'viewer-1' }],
+        () =>
+            parseReactionMutationResponse({
+                data: {
+                    xig_direct_reaction_send_with_slide_messaging_response: {
+                        slide_message: {
+                            id: 'message-1',
+                            reactions: [
+                                { reaction: '❤', sender_fbid: 'viewer-1' },
+                            ],
+                        },
+                    },
                 },
-            },
-        } }),
+            }),
         /malformed/,
     );
 });
@@ -933,8 +1270,11 @@ test('reel info represents captured video variants and complete carousel media',
         pk: '3953224267254190889',
         code: 'ABC',
         user: {
-            pk: 'owner-1', username: 'alice', full_name: 'Alice',
-            profile_pic_url: 'https://cdn.example/avatar.jpg', is_verified: true,
+            pk: 'owner-1',
+            username: 'alice',
+            full_name: 'Alice',
+            profile_pic_url: 'https://cdn.example/avatar.jpg',
+            is_verified: true,
         },
         caption: { text: 'Caption' },
         like_count: 3,
@@ -944,57 +1284,143 @@ test('reel info represents captured video variants and complete carousel media',
         can_viewer_save: true,
         is_third_party_downloads_eligible: true,
     };
-    const parsed = parseReelInfoResponse({ items: [{
-        ...base,
-        media_type: 8,
-        product_type: 'carousel_container',
-        carousel_media: [{
-            pk: 'slide-video', video_duration: 5,
-            original_width: 1080, original_height: 1920,
-            video_versions: [
-                { url: 'https://cdn.example/video-low.mp4', type: 101, width: 360, height: 640 },
-                { url: 'https://cdn.example/video-high.mp4', type: 102, width: 720, height: 1280 },
-                { url: 'https://cdn.example/video-alt.mp4', type: 103, width: 720, height: 1280 },
+    const parsed = parseReelInfoResponse(
+        {
+            items: [
+                {
+                    ...base,
+                    media_type: 8,
+                    product_type: 'carousel_container',
+                    carousel_media: [
+                        {
+                            pk: 'slide-video',
+                            video_duration: 5,
+                            original_width: 1080,
+                            original_height: 1920,
+                            video_versions: [
+                                {
+                                    url: 'https://cdn.example/video-low.mp4',
+                                    type: 101,
+                                    width: 360,
+                                    height: 640,
+                                },
+                                {
+                                    url: 'https://cdn.example/video-high.mp4',
+                                    type: 102,
+                                    width: 720,
+                                    height: 1280,
+                                },
+                                {
+                                    url: 'https://cdn.example/video-alt.mp4',
+                                    type: 103,
+                                    width: 720,
+                                    height: 1280,
+                                },
+                            ],
+                            image_versions2: {
+                                candidates: [
+                                    {
+                                        url: 'https://cdn.example/poster.jpg',
+                                        width: 720,
+                                        height: 1280,
+                                    },
+                                ],
+                            },
+                        },
+                        {
+                            pk: 'slide-image',
+                            image_versions2: {
+                                candidates: [
+                                    {
+                                        url: 'https://cdn.example/image.jpg',
+                                        width: 1080,
+                                        height: 1080,
+                                    },
+                                ],
+                            },
+                        },
+                        {
+                            pk: 'slide-landscape',
+                            original_width: 1920,
+                            original_height: 1080,
+                            image_versions2: {
+                                candidates: [
+                                    {
+                                        url: 'https://cdn.example/landscape.jpg',
+                                        width: 960,
+                                        height: 540,
+                                    },
+                                ],
+                            },
+                        },
+                    ],
+                },
             ],
-            image_versions2: { candidates: [{ url: 'https://cdn.example/poster.jpg', width: 720, height: 1280 }] },
-        }, {
-            pk: 'slide-image',
-            image_versions2: { candidates: [{ url: 'https://cdn.example/image.jpg', width: 1080, height: 1080 }] },
-        }, {
-            pk: 'slide-landscape', original_width: 1920, original_height: 1080,
-            image_versions2: { candidates: [{ url: 'https://cdn.example/landscape.jpg', width: 960, height: 540 }] },
-        }],
-    }] }, { shortcode: 'ABC' });
+        },
+        { shortcode: 'ABC' },
+    );
 
     assert.equal(parsed.id, '3953224267254190889');
     assert.deepEqual(parsed.author, {
-        id: 'owner-1', username: 'alice', fullName: 'Alice',
-        picUrl: 'https://cdn.example/avatar.jpg', isVerified: true,
+        id: 'owner-1',
+        username: 'alice',
+        fullName: 'Alice',
+        picUrl: 'https://cdn.example/avatar.jpg',
+        isVerified: true,
     });
-    assert.deepEqual(parsed.items.map(item => item.kind), ['video', 'image', 'image']);
-    assert.deepEqual(parsed.items.map(item => [item.width, item.height]), [
-        [1080, 1920], [1080, 1080], [1920, 1080],
-    ]);
+    assert.deepEqual(
+        parsed.items.map((item) => item.kind),
+        ['video', 'image', 'image'],
+    );
+    assert.deepEqual(
+        parsed.items.map((item) => [item.width, item.height]),
+        [
+            [1080, 1920],
+            [1080, 1080],
+            [1920, 1080],
+        ],
+    );
     assert.equal(parsed.items[0]?.posterUrl, 'https://cdn.example/poster.jpg');
-    assert.equal(parsed.items[0]?.kind === 'video' && parsed.items[0].videoUrl,
-        'https://cdn.example/video-high.mp4');
-    assert.deepEqual(parsed.items[0]?.kind === 'video' &&
-        parsed.items[0].variants.map(variant => variant.type), [102, 103, 101]);
+    assert.equal(
+        parsed.items[0]?.kind === 'video' && parsed.items[0].videoUrl,
+        'https://cdn.example/video-high.mp4',
+    );
+    assert.deepEqual(
+        parsed.items[0]?.kind === 'video' &&
+            parsed.items[0].variants.map((variant) => variant.type),
+        [102, 103, 101],
+    );
     assert.equal(parsed.items[0]?.canDownload, true);
-    assert.equal(parsed.items[0]?.downloadUrl, 'https://cdn.example/video-high.mp4');
+    assert.equal(
+        parsed.items[0]?.downloadUrl,
+        'https://cdn.example/video-high.mp4',
+    );
     assert.equal(parsed.hasLiked, true);
     assert.equal(parsed.hasSaved, true);
     assert.equal(parsed.canDownload, true);
 
-    const incompleteOriginal = parseReelInfoResponse({ items: [{
-        ...base,
-        media_type: 1,
-        product_type: 'feed',
-        original_width: 2_000,
-        image_versions2: { candidates: [{
-            url: 'https://cdn.example/fallback-landscape.jpg', width: 640, height: 360,
-        }] },
-    }] }, { shortcode: 'ABC' });
+    const incompleteOriginal = parseReelInfoResponse(
+        {
+            items: [
+                {
+                    ...base,
+                    media_type: 1,
+                    product_type: 'feed',
+                    original_width: 2_000,
+                    image_versions2: {
+                        candidates: [
+                            {
+                                url: 'https://cdn.example/fallback-landscape.jpg',
+                                width: 640,
+                                height: 360,
+                            },
+                        ],
+                    },
+                },
+            ],
+        },
+        { shortcode: 'ABC' },
+    );
     assert.deepEqual(
         [incompleteOriginal.items[0].width, incompleteOriginal.items[0].height],
         [640, 360],
@@ -1004,53 +1430,135 @@ test('reel info represents captured video variants and complete carousel media',
 
 test('reel identities and complete mixed carousels are required end to end', () => {
     const media = {
-        pk: '3953224267254190889', id: '3953224267254190889_5654194264', code: 'ABC',
-        media_type: 8, product_type: 'carousel_container',
+        pk: '3953224267254190889',
+        id: '3953224267254190889_5654194264',
+        code: 'ABC',
+        media_type: 8,
+        product_type: 'carousel_container',
         is_third_party_downloads_eligible: false,
-        carousel_media: [{ image_versions2: { candidates: [{ url: 'https://cdn/one.jpg' }] } },
+        carousel_media: [
+            {
+                image_versions2: {
+                    candidates: [{ url: 'https://cdn/one.jpg' }],
+                },
+            },
             null,
-            { video_versions: [{ url: 'https://cdn/three.mp4' }] }],
+            { video_versions: [{ url: 'https://cdn/three.mp4' }] },
+        ],
     };
     assert.throws(
-        () => parseReelInfoResponse({ items: [media] }, {
-            shortcode: 'ABC', mediaId: '3953224267254190889',
-        }),
+        () =>
+            parseReelInfoResponse(
+                { items: [media] },
+                {
+                    shortcode: 'ABC',
+                    mediaId: '3953224267254190889',
+                },
+            ),
         /malformed media/,
     );
-    assert.throws(() => parseReelInfoResponse({ items: [{
-        ...media, carousel_media: media.carousel_media.filter(Boolean), code: 'WRONG',
-    }] }, { shortcode: 'ABC', mediaId: '3953224267254190889' }), /identity did not match/);
-    assert.throws(() => parseReelInfoResponse({ items: [{
-        ...media, carousel_media: media.carousel_media.filter(Boolean), pk: '3953224267254190999',
-        id: '3953224267254190999_5654194264',
-    }] }, { shortcode: 'ABC', mediaId: '3953224267254190889' }), /identity did not match/);
+    assert.throws(
+        () =>
+            parseReelInfoResponse(
+                {
+                    items: [
+                        {
+                            ...media,
+                            carousel_media:
+                                media.carousel_media.filter(Boolean),
+                            code: 'WRONG',
+                        },
+                    ],
+                },
+                { shortcode: 'ABC', mediaId: '3953224267254190889' },
+            ),
+        /identity did not match/,
+    );
+    assert.throws(
+        () =>
+            parseReelInfoResponse(
+                {
+                    items: [
+                        {
+                            ...media,
+                            carousel_media:
+                                media.carousel_media.filter(Boolean),
+                            pk: '3953224267254190999',
+                            id: '3953224267254190999_5654194264',
+                        },
+                    ],
+                },
+                { shortcode: 'ABC', mediaId: '3953224267254190889' },
+            ),
+        /identity did not match/,
+    );
 
     for (const carousel_media of [undefined, null, {}, []]) {
-        assert.throws(() => parseReelInfoResponse({ items: [{
-            ...media,
-            carousel_media,
-        }] }, { shortcode: 'ABC' }), /carousel media was not returned/);
+        assert.throws(
+            () =>
+                parseReelInfoResponse(
+                    {
+                        items: [
+                            {
+                                ...media,
+                                carousel_media,
+                            },
+                        ],
+                    },
+                    { shortcode: 'ABC' },
+                ),
+            /carousel media was not returned/,
+        );
     }
-    assert.throws(() => parseReelInfoResponse({ items: [{
-        ...media,
-        media_type: 1,
-        product_type: 'carousel_container',
-        carousel_media: null,
-    }] }, { shortcode: 'ABC' }), /carousel media was not returned/);
+    assert.throws(
+        () =>
+            parseReelInfoResponse(
+                {
+                    items: [
+                        {
+                            ...media,
+                            media_type: 1,
+                            product_type: 'carousel_container',
+                            carousel_media: null,
+                        },
+                    ],
+                },
+                { shortcode: 'ABC' },
+            ),
+        /carousel media was not returned/,
+    );
 
     const single = {
         ...media,
         media_type: 1,
         product_type: 'feed',
-        image_versions2: { candidates: [{ url: 'https://cdn/parent.jpg', width: 1080, height: 1080 }] },
+        image_versions2: {
+            candidates: [
+                { url: 'https://cdn/parent.jpg', width: 1080, height: 1080 },
+            ],
+        },
     };
-    for (const carousel_media of [[], [{
-        image_versions2: { candidates: [{ url: 'https://cdn/not-a-slide.jpg' }] },
-    }]]) {
-        const parsed = parseReelInfoResponse({ items: [{
-            ...single,
-            carousel_media,
-        }] }, { shortcode: 'ABC' });
+    for (const carousel_media of [
+        [],
+        [
+            {
+                image_versions2: {
+                    candidates: [{ url: 'https://cdn/not-a-slide.jpg' }],
+                },
+            },
+        ],
+    ]) {
+        const parsed = parseReelInfoResponse(
+            {
+                items: [
+                    {
+                        ...single,
+                        carousel_media,
+                    },
+                ],
+            },
+            { shortcode: 'ABC' },
+        );
         assert.equal(parsed.items.length, 1);
         assert.equal(parsed.items[0]?.kind, 'image');
         assert.equal(parsed.items[0]?.downloadUrl, undefined);
@@ -1061,84 +1569,185 @@ test('reel identities and complete mixed carousels are required end to end', () 
 test('media-ID shares bypass GraphQL and shortcode fallback decodes the captured identity', async () => {
     const calls: string[] = [];
     function fixture(mediaId: string, code: string) {
-        return { items: [{
-            pk: mediaId,
-            code,
-            media_type: 1,
-            product_type: 'feed',
-            image_versions2: { candidates: [{ url: 'https://cdn.example/post.jpg', width: 1080, height: 1080 }] },
-            user: { pk: 'owner', username: 'owner' },
-        }] };
+        return {
+            items: [
+                {
+                    pk: mediaId,
+                    code,
+                    media_type: 1,
+                    product_type: 'feed',
+                    image_versions2: {
+                        candidates: [
+                            {
+                                url: 'https://cdn.example/post.jpg',
+                                width: 1080,
+                                height: 1080,
+                            },
+                        ],
+                    },
+                    user: { pk: 'owner', username: 'owner' },
+                },
+            ],
+        };
     }
-    const mediaBacked = await loadReelMedia({ shortcode: 'ABC', mediaId: '9001' }, async mediaId => {
-        calls.push(mediaId);
-        return fixture(mediaId, 'ABC');
-    });
+    const mediaBacked = await loadReelMedia(
+        { shortcode: 'ABC', mediaId: '9001' },
+        async (mediaId) => {
+            calls.push(mediaId);
+            return fixture(mediaId, 'ABC');
+        },
+    );
     assert.equal(mediaBacked.items[0]?.kind, 'image');
     assert.deepEqual(calls, ['9001']);
 
     const decoded = instagramMediaIdFromShortcode('ABC');
-    const fallback = await loadReelMedia({ shortcode: 'ABC' }, async mediaId => {
-        calls.push(mediaId);
-        return fixture(mediaId, 'ABC');
-    });
+    const fallback = await loadReelMedia(
+        { shortcode: 'ABC' },
+        async (mediaId) => {
+            calls.push(mediaId);
+            return fixture(mediaId, 'ABC');
+        },
+    );
     assert.equal(fallback.id, decoded);
     assert.deepEqual(calls, ['9001', decoded]);
 });
 
 test('reel comments retain the captured opaque pagination cursor', () => {
-    assert.deepEqual(parseReelCommentsResponse({
-        comments: [{
-            pk: 'comment-1', text: 'Hello', created_at: 1_700_000_000,
-            comment_like_count: 2, has_liked_comment: false, child_comment_count: 1,
-            user: { pk: 'user-1', username: 'bob', full_name: 'Bob', is_verified: false },
-        }],
-        has_more_comments: true,
-        next_min_id: '{"cached_comments_cursor":"next","bifilter_token":"token"}',
-    }), {
-        items: [{
-            id: 'comment-1', text: 'Hello', createdAtMs: 1_700_000_000_000,
-            likeCount: 2, hasLiked: false, childCommentCount: 1,
-            author: { id: 'user-1', username: 'bob', fullName: 'Bob', picUrl: null, isVerified: false },
-        }],
-        cursor: '{"cached_comments_cursor":"next","bifilter_token":"token"}',
-        hasNextPage: true,
-    });
-    assert.deepEqual(parseReelLikeResponse({ data: {
-        xig_media_unlike: { media: { id: '3953224267254190889_5654194264', has_liked: true } },
-    } }, false), { mediaId: '3953224267254190889', hasLiked: false });
-    assert.deepEqual(parseReelSaveResponse({ data: {
-        xig_media_save: { media: { id: '3953224267254190889_5654194264' } },
-    } }, true), { mediaId: '3953224267254190889', hasSaved: true });
+    assert.deepEqual(
+        parseReelCommentsResponse({
+            comments: [
+                {
+                    pk: 'comment-1',
+                    text: 'Hello',
+                    created_at: 1_700_000_000,
+                    comment_like_count: 2,
+                    has_liked_comment: false,
+                    child_comment_count: 1,
+                    user: {
+                        pk: 'user-1',
+                        username: 'bob',
+                        full_name: 'Bob',
+                        is_verified: false,
+                    },
+                },
+            ],
+            has_more_comments: true,
+            next_min_id:
+                '{"cached_comments_cursor":"next","bifilter_token":"token"}',
+        }),
+        {
+            items: [
+                {
+                    id: 'comment-1',
+                    text: 'Hello',
+                    createdAtMs: 1_700_000_000_000,
+                    likeCount: 2,
+                    hasLiked: false,
+                    childCommentCount: 1,
+                    author: {
+                        id: 'user-1',
+                        username: 'bob',
+                        fullName: 'Bob',
+                        picUrl: null,
+                        isVerified: false,
+                    },
+                },
+            ],
+            cursor: '{"cached_comments_cursor":"next","bifilter_token":"token"}',
+            hasNextPage: true,
+        },
+    );
+    assert.deepEqual(
+        parseReelLikeResponse(
+            {
+                data: {
+                    xig_media_unlike: {
+                        media: {
+                            id: '3953224267254190889_5654194264',
+                            has_liked: true,
+                        },
+                    },
+                },
+            },
+            false,
+        ),
+        { mediaId: '3953224267254190889', hasLiked: false },
+    );
+    assert.deepEqual(
+        parseReelSaveResponse(
+            {
+                data: {
+                    xig_media_save: {
+                        media: { id: '3953224267254190889_5654194264' },
+                    },
+                },
+            },
+            true,
+        ),
+        { mediaId: '3953224267254190889', hasSaved: true },
+    );
 });
 
 test('comment action responses normalize created replies and opaque child cursors', () => {
     const author = {
-        id: '74742604942', username: 'sleroqq', full_name: 'Sleroq',
+        id: '74742604942',
+        username: 'sleroqq',
+        full_name: 'Sleroq',
         profile_picture: 'https://cdn.example/viewer.jpg',
     };
-    assert.deepEqual(parseCreatedReelCommentResponse({
-        id: '17974739376065649', from: author, text: '@author reply',
-        created_time: 1_786_399_227, status: 'ok',
-    }, '18020579816703103'), {
-        id: '17974739376065649', text: '@author reply', createdAtMs: 1_786_399_227_000,
-        likeCount: 0, hasLiked: false, childCommentCount: 0,
-        parentCommentId: '18020579816703103', repliedToCommentId: '18020579816703103',
-        author: {
-            id: '74742604942', username: 'sleroqq', fullName: 'Sleroq',
-            picUrl: 'https://cdn.example/viewer.jpg', isVerified: false,
+    assert.deepEqual(
+        parseCreatedReelCommentResponse(
+            {
+                id: '17974739376065649',
+                from: author,
+                text: '@author reply',
+                created_time: 1_786_399_227,
+                status: 'ok',
+            },
+            '18020579816703103',
+        ),
+        {
+            id: '17974739376065649',
+            text: '@author reply',
+            createdAtMs: 1_786_399_227_000,
+            likeCount: 0,
+            hasLiked: false,
+            childCommentCount: 0,
+            parentCommentId: '18020579816703103',
+            repliedToCommentId: '18020579816703103',
+            author: {
+                id: '74742604942',
+                username: 'sleroqq',
+                fullName: 'Sleroq',
+                picUrl: 'https://cdn.example/viewer.jpg',
+                isVerified: false,
+            },
         },
-    });
+    );
     const reply = {
-        pk: '17960232189149842', text: '@parent reply', created_at: 1_784_152_061,
-        comment_like_count: 251, has_liked_comment: false,
-        parent_comment_id: '18118594957890789', replied_to_comment_id: '18118594957890789',
-        user: { pk: '60803639014', username: 'reply-user', full_name: 'Reply User', is_verified: false },
+        pk: '17960232189149842',
+        text: '@parent reply',
+        created_at: 1_784_152_061,
+        comment_like_count: 251,
+        has_liked_comment: false,
+        parent_comment_id: '18118594957890789',
+        replied_to_comment_id: '18118594957890789',
+        user: {
+            pk: '60803639014',
+            username: 'reply-user',
+            full_name: 'Reply User',
+            is_verified: false,
+        },
     };
-    const parsed = parseReelCommentRepliesResponse({
-        child_comments: [reply], parent_comment: { pk: '18118594957890789' },
-        next_min_child_cursor: 'opaque-child-cursor', status: 'ok',
-    }, '18118594957890789');
+    const parsed = parseReelCommentRepliesResponse(
+        {
+            child_comments: [reply],
+            parent_comment: { pk: '18118594957890789' },
+            next_min_child_cursor: 'opaque-child-cursor',
+            status: 'ok',
+        },
+        '18118594957890789',
+    );
     assert.equal(parsed.cursor, 'opaque-child-cursor');
     assert.equal(parsed.hasNextPage, true);
     assert.equal(parsed.items[0]?.parentCommentId, '18118594957890789');
@@ -1146,52 +1755,132 @@ test('comment action responses normalize created replies and opaque child cursor
 
 test('reel social context requires proven viewer-following and explicit ranked-comment markers', async () => {
     const media = {
-        pk: '3953224267254190889', code: 'ABC', media_type: 1, product_type: 'feed',
-        original_width: 1080, original_height: 1080,
-        image_versions2: { candidates: [{ url: 'https://cdn.example/post.jpg', width: 1080, height: 1080 }] },
+        pk: '3953224267254190889',
+        code: 'ABC',
+        media_type: 1,
+        product_type: 'feed',
+        original_width: 1080,
+        original_height: 1080,
+        image_versions2: {
+            candidates: [
+                {
+                    url: 'https://cdn.example/post.jpg',
+                    width: 1080,
+                    height: 1080,
+                },
+            ],
+        },
         user: { pk: 'owner', username: 'owner' },
-        top_likers: ['friend-1', 'friend-2', 'friend-3', 'friend-4', 'friend-5', 'friend-6'],
-        facepile_top_likers: ['friend-6', 'friend-5', 'friend-4', 'friend-3', 'friend-2', 'friend-1'].map(username => ({
-            pk: `${username}-id`, username, full_name: username, profile_pic_url: `https://cdn.example/${username}.jpg`,
+        top_likers: [
+            'friend-1',
+            'friend-2',
+            'friend-3',
+            'friend-4',
+            'friend-5',
+            'friend-6',
+        ],
+        facepile_top_likers: [
+            'friend-6',
+            'friend-5',
+            'friend-4',
+            'friend-3',
+            'friend-2',
+            'friend-1',
+        ].map((username) => ({
+            pk: `${username}-id`,
+            username,
+            full_name: username,
+            profile_pic_url: `https://cdn.example/${username}.jpg`,
         })),
     };
     const requestedIds: string[] = [];
-    const followed = await loadReelMedia({ shortcode: 'ABC', mediaId: media.pk }, async () => ({ items: [media] }), async userId => {
-        requestedIds.push(userId);
-        return { data: { xig_user_by_igid_v2: { user_dict: {
-            pk: userId, friendship_status: { following: true },
-        } } } };
-    });
-    assert.deepEqual(requestedIds, ['friend-1-id', 'friend-2-id', 'friend-3-id', 'friend-4-id', 'friend-5-id']);
-    assert.deepEqual(followed.followedLikers?.map(user => user.id), requestedIds);
-    const notFollowed = await loadReelMedia({ shortcode: 'ABC', mediaId: media.pk }, async () => ({ items: [media] }), async userId => ({
-        data: { xig_user_by_igid_v2: { user_dict: {
-            pk: userId, friendship_status: { following: false },
-        } } },
-    }));
+    const followed = await loadReelMedia(
+        { shortcode: 'ABC', mediaId: media.pk },
+        async () => ({ items: [media] }),
+        async (userId) => {
+            requestedIds.push(userId);
+            return {
+                data: {
+                    xig_user_by_igid_v2: {
+                        user_dict: {
+                            pk: userId,
+                            friendship_status: { following: true },
+                        },
+                    },
+                },
+            };
+        },
+    );
+    assert.deepEqual(requestedIds, [
+        'friend-1-id',
+        'friend-2-id',
+        'friend-3-id',
+        'friend-4-id',
+        'friend-5-id',
+    ]);
+    assert.deepEqual(
+        followed.followedLikers?.map((user) => user.id),
+        requestedIds,
+    );
+    const notFollowed = await loadReelMedia(
+        { shortcode: 'ABC', mediaId: media.pk },
+        async () => ({ items: [media] }),
+        async (userId) => ({
+            data: {
+                xig_user_by_igid_v2: {
+                    user_dict: {
+                        pk: userId,
+                        friendship_status: { following: false },
+                    },
+                },
+            },
+        }),
+    );
     assert.equal(notFollowed.followedLikers, undefined);
-    const mismatchedUser = await loadReelMedia({ shortcode: 'ABC', mediaId: media.pk }, async () => ({ items: [media] }), async () => ({
-        data: { xig_user_by_igid_v2: { user_dict: {
-            pk: 'different-user', friendship_status: { following: true },
-        } } },
-    }));
+    const mismatchedUser = await loadReelMedia(
+        { shortcode: 'ABC', mediaId: media.pk },
+        async () => ({ items: [media] }),
+        async () => ({
+            data: {
+                xig_user_by_igid_v2: {
+                    user_dict: {
+                        pk: 'different-user',
+                        friendship_status: { following: true },
+                    },
+                },
+            },
+        }),
+    );
     assert.equal(mismatchedUser.followedLikers, undefined);
     const unavailableFriendship = await loadReelMedia(
         { shortcode: 'ABC', mediaId: media.pk },
         async () => ({ items: [media] }),
-        async () => { throw new Error('Hover card unavailable'); },
+        async () => {
+            throw new Error('Hover card unavailable');
+        },
     );
     assert.equal(unavailableFriendship.followedLikers, undefined);
     assert.equal(unavailableFriendship.id, media.pk);
 
     const rankedComment = {
-        pk: 'ranked', text: 'A friend was here', comment_index: 0, is_ranked_comment: true,
+        pk: 'ranked',
+        text: 'A friend was here',
+        comment_index: 0,
+        is_ranked_comment: true,
         user: { pk: 'friend-id', username: 'friend' },
     };
-    assert.equal(parseReelCommentsResponse({
-        is_ranked: true, comments: [rankedComment],
-    }).featuredCommentId, 'ranked');
-    assert.equal(parseReelCommentsResponse({
-        is_ranked: false, comments: [rankedComment],
-    }).featuredCommentId, undefined);
+    assert.equal(
+        parseReelCommentsResponse({
+            is_ranked: true,
+            comments: [rankedComment],
+        }).featuredCommentId,
+        'ranked',
+    );
+    assert.equal(
+        parseReelCommentsResponse({
+            is_ranked: false,
+            comments: [rankedComment],
+        }).featuredCommentId,
+        undefined,
+    );
 });

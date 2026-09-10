@@ -49,9 +49,7 @@ type PageRequire = <Name extends keyof PageModules>(
     name: Name,
 ) => PageModules[Name] | undefined;
 
-function hasPageRequire(
-    value: Window['require'],
-): value is PageRequire {
+function hasPageRequire(value: Window['require']): value is PageRequire {
     return typeof value === 'function';
 }
 
@@ -85,7 +83,7 @@ function findString(root: JsonValue, keys: string[]): string | undefined {
     for (const value of Object.values(root)) {
         if (value === undefined) continue;
         const found = Array.isArray(value)
-            ? value.map(item => findString(item, keys)).find(Boolean)
+            ? value.map((item) => findString(item, keys)).find(Boolean)
             : findString(value, keys);
         if (found) return found;
     }
@@ -98,8 +96,8 @@ function pageJson(): JsonValue[] {
             'script[type="application/json"][data-sjs], script[data-sjs]',
         ),
     )
-        .map(node => node.textContent ?? '')
-        .flatMap(text => {
+        .map((node) => node.textContent ?? '')
+        .flatMap((text) => {
             try {
                 return [parseJson(text)];
             } catch {
@@ -112,7 +110,7 @@ function pageText(): string {
     return `${document.documentElement.innerHTML}\n${Array.from(
         document.scripts,
     )
-        .map(script => script.textContent ?? '')
+        .map((script) => script.textContent ?? '')
         .join('\n')}`;
 }
 
@@ -125,7 +123,10 @@ function firstMatch(text: string, patterns: RegExp[]): string | undefined {
     return undefined;
 }
 
-function optionalString(value: JsonValue | undefined, field: string): string | undefined {
+function optionalString(
+    value: JsonValue | undefined,
+    field: string,
+): string | undefined {
     if (value === undefined) return undefined;
     if (isString(value) && value.length > 0) return value;
     throw new Error(`Invalid Instagram auth probe ${field}`);
@@ -141,8 +142,7 @@ function parseAuthProbe(detail: string): AuthProbePayload {
     const data = parseJson(detail);
     if (!isJsonObject(data))
         throw new Error('Invalid Instagram auth probe payload');
-    if (!isNumber(data.at))
-        throw new Error('Invalid Instagram auth probe at');
+    if (!isNumber(data.at)) throw new Error('Invalid Instagram auth probe at');
     if (!isBoolean(data.requireAvailable))
         throw new Error('Invalid Instagram auth probe requireAvailable');
     if (!isJsonObject(data.sources) || Object.keys(data.sources).length === 0)
@@ -202,7 +202,7 @@ function deviceIdFallback(sources: TokenSources): string {
 function cookie(name: string): string | undefined {
     return document.cookie
         .split('; ')
-        .find(part => part.startsWith(`${name}=`))
+        .find((part) => part.startsWith(`${name}=`))
         ?.split('=')
         .slice(1)
         .join('=');
@@ -223,7 +223,7 @@ function authError(values: Partial<Tokens>): Error {
         'deviceId',
         'viewerId',
     ];
-    const missing = keys.filter(key => !values[key]);
+    const missing = keys.filter((key) => !values[key]);
     return new Error(
         `Instagram auth tokens were not found (${missing.join(', ')}); open or refresh instagram.com/direct/inbox first.`,
     );
@@ -234,7 +234,7 @@ function requestAuthProbe() {
 }
 
 export function startAuthProbeListener() {
-    window.addEventListener(AUTH_PROBE_EVENT, event => {
+    window.addEventListener(AUTH_PROBE_EVENT, (event) => {
         const detail = event.detail;
         if (!detail) return;
 
@@ -255,7 +255,7 @@ function waitForAuthProbe(
     timeoutMs: number,
 ): Promise<void> {
     if (authProbeSequence > afterSequence) return Promise.resolve();
-    return new Promise(resolve => {
+    return new Promise((resolve) => {
         let timeoutId: number | undefined;
         function cleanup() {
             window.removeEventListener(AUTH_PROBE_EVENT, onProbe);
@@ -284,7 +284,7 @@ function harvestTokensNow(): Tokens {
         source(
             sources,
             'fbDtsg',
-            roots.map(root => findString(root, ['fb_dtsg'])).find(Boolean),
+            roots.map((root) => findString(root, ['fb_dtsg'])).find(Boolean),
             'script[data-sjs] JSON',
         ) ??
         source(
@@ -307,7 +307,7 @@ function harvestTokensNow(): Tokens {
         source(
             sources,
             'lsd',
-            roots.map(root => findString(root, ['lsd'])).find(Boolean),
+            roots.map((root) => findString(root, ['lsd'])).find(Boolean),
             'script[data-sjs] JSON',
         ) ??
         source(
@@ -330,7 +330,7 @@ function harvestTokensNow(): Tokens {
         source(
             sources,
             'jazoest',
-            roots.map(root => findString(root, ['jazoest'])).find(Boolean),
+            roots.map((root) => findString(root, ['jazoest'])).find(Boolean),
             'script[data-sjs] JSON',
         ) ??
         source(
@@ -359,7 +359,7 @@ function harvestTokensNow(): Tokens {
             sources,
             'deviceId',
             roots
-                .map(root =>
+                .map((root) =>
                     findString(root, ['device_id_for_iris_subscription']),
                 )
                 .find(Boolean),
@@ -386,7 +386,7 @@ function harvestTokensNow(): Tokens {
             sources,
             'viewerId',
             roots
-                .map(root =>
+                .map((root) =>
                     userId(
                         findString(root, [
                             'viewer_fbid',
@@ -478,9 +478,7 @@ function moduleToken(
     name: 'DTSGInitialData' | 'LSD' | 'LSDToken',
 ): string | undefined {
     const mod = requireModule(name);
-    return isString(mod?.token) && mod.token.length > 0
-        ? mod.token
-        : undefined;
+    return isString(mod?.token) && mod.token.length > 0 ? mod.token : undefined;
 }
 
 function moduleUserId(): string | undefined {

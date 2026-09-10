@@ -23,7 +23,6 @@ Dependencies/order: post layout establishes the target DOM geometry; reaction co
 
 Acceptance: shared posts have no post-card/bubble border or unused right/bottom space; author identity is compact and truncated; reactions sit below content; time appears only on hover/focus inside the bottom-right of the post; preview videos do not autoplay; opening a visible/near-visible post uses cached or already-queued media without duplicate requests.
 
-
 Completed 2026-08-06: all child requirements implemented. Shared posts are media-forward and space-efficient, reactions use the accessible rail/full chooser, timestamps are contextual overlays, and bounded store-owned media readiness avoids autoplay and duplicate open requests. Architecture documentation and focused store/browser regressions were updated; prescribed frontend verification passes.
 
 Manual-feedback remediation preserves true portrait media ratios, progressively

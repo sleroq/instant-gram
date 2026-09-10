@@ -43,8 +43,6 @@ Acceptance criteria:
 - scrollToMessage behavior is deterministic across loaded/unloaded/missing targets.
 - Known limitations and verification results are documented in this bean before completion.
 
-
-
 ## Disposition (2026-08-03)
 
 Scrapped after codebase review. This describes the removed Svelte/TanStack virtualizer and a 200-message background buffer, neither of which exists nor fits the current Teact architecture. The implemented supported behavior is the normalized 40–80 row history window with one-page lookahead and anchor correction documented in `docs/frontend-architecture.md`. Reply navigation/prefetch is not an active product requirement and should be re-scoped from the current architecture if needed later.

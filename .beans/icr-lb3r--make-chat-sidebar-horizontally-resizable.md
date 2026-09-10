@@ -15,12 +15,12 @@ Replace the current non-resizable sidebar behavior with horizontal width resizin
 The prior sidebar-resize bean `icr-w5fx` was scrapped under an earlier non-resizable product decision; this task supersedes that decision.
 
 Acceptance criteria:
+
 - Provide an accessible horizontal resize handle for the chat sidebar.
 - Resize smoothly with sensible minimum and maximum widths without disrupting chat-list virtualization or the active chat layout.
 - Preserve the selected width across reloads if that matches the referenced product behavior and existing persistence patterns.
 - Support pointer and keyboard interaction, reduced-motion preferences, and narrow viewports.
 - Update the relevant frontend architecture/product documentation and add focused coverage for the resize state and interaction boundary.
-
 
 Implementation completed:
 
@@ -31,7 +31,6 @@ Implementation completed:
 - Added focused pure and production-browser coverage for bounds, invalid persistence values, pointer/keyboard interaction, reload persistence, compact layout, and virtualization invariants.
 
 Verification: focused resize browser tests and pure tests pass; `npm run check`, `npm run build`, and `git diff --check` pass. Full `npm test` ran 140 tests: 137 passed; three failures are in unrelated in-progress reel/reaction work (exact 300px floating-point assertion, reaction picker behavior) plus the former intermediate non-resizable assertion, which was updated and now passes in the focused run.
-
 
 Final verification supersedes the earlier in-progress run: all 140 `npm test` tests pass after integrating the updated intermediate-layout assertion. `npm run check`, `npm run build`, and `git diff --check` also pass.
 

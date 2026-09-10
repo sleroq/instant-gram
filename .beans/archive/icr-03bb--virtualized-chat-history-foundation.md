@@ -45,6 +45,4 @@ Acceptance criteria:
 - A thread with hundreds of loaded messages renders only a bounded DOM window.
 - Existing open reel and jump-to-bottom interactions still work.
 
-
-
 Superseded by the Teact rewrite in docs/frontend-rewrite-plan.md. The Svelte/TanStack implementation was removed; its remaining behavioral requirements are carried by Milestone 2 of that plan.

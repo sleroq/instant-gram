@@ -15,7 +15,7 @@ export default defineBackground(() => {
     });
     const engine = createInboxEngine(createInboxRepository(), provider);
 
-    browser.runtime.onConnect.addListener(port => {
+    browser.runtime.onConnect.addListener((port) => {
         if (port.name === PROVIDER_PORT) {
             provider.accept({
                 name: port.name,
@@ -23,15 +23,22 @@ export default defineBackground(() => {
                 onMessage: {
                     addListener(listener) {
                         // SAFETY: the named provider port's content counterpart posts only ProviderResponse values.
-                        port.onMessage.addListener(listener as Parameters<typeof port.onMessage.addListener>[0]);
+                        port.onMessage.addListener(
+                            listener as Parameters<
+                                typeof port.onMessage.addListener
+                            >[0],
+                        );
                     },
                 },
-                onDisconnect: { addListener: listener => port.onDisconnect.addListener(listener) },
-                postMessage: message => port.postMessage(message),
+                onDisconnect: {
+                    addListener: (listener) =>
+                        port.onDisconnect.addListener(listener),
+                },
+                postMessage: (message) => port.postMessage(message),
                 disconnect: () => port.disconnect(),
             });
-        }
-        else if (port.name === INBOX_CLIENT_PORT) registerInboxClientPorts(port, engine);
+        } else if (port.name === INBOX_CLIENT_PORT)
+            registerInboxClientPorts(port, engine);
     });
     browser.action.onClicked.addListener(() => {
         void browser.tabs.create({ url: browser.runtime.getURL('/ui.html') });

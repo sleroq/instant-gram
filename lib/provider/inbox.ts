@@ -1,19 +1,38 @@
 import type { Page, Thread } from '../domain.ts';
 import { InboxError, type InboxProvider } from '../engine/inbox.ts';
-import { PROVIDER_PORT, type ProviderRequest, type ProviderResponse } from './protocol.ts';
+import {
+    PROVIDER_PORT,
+    type ProviderRequest,
+    type ProviderResponse,
+} from './protocol.ts';
 
 export type ProviderPort = {
     name: string;
-    sender?: { id?: string; frameId?: number; url?: string; tab?: { id?: number } };
-    onMessage: { addListener(listener: (message: ProviderResponse) => void): void };
+    sender?: {
+        id?: string;
+        frameId?: number;
+        url?: string;
+        tab?: { id?: number };
+    };
+    onMessage: {
+        addListener(listener: (message: ProviderResponse) => void): void;
+    };
     onDisconnect: { addListener(listener: () => void): void };
     postMessage(message: ProviderRequest): void;
     disconnect(): void;
 };
-type Pending = { method: 'account' | 'inbox'; resolve(value: string | Page<Thread>): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> };
+type Pending = {
+    method: 'account' | 'inbox';
+    resolve(value: string | Page<Thread>): void;
+    reject(error: Error): void;
+    timer: ReturnType<typeof setTimeout>;
+};
 type Connection = { port: ProviderPort; pending: Map<number, Pending> };
 
-export function createInboxProvider(options: { ensureAnchor(): Promise<number>; extensionId: string }): InboxProvider & { accept(port: ProviderPort): void } {
+export function createInboxProvider(options: {
+    ensureAnchor(): Promise<number>;
+    extensionId: string;
+}): InboxProvider & { accept(port: ProviderPort): void } {
     const connections = new Map<number, Connection>();
     const waiters = new Map<number, Set<() => void>>();
     let nextId = 0;
@@ -27,8 +46,14 @@ export function createInboxProvider(options: { ensureAnchor(): Promise<number>; 
     function accept(port: ProviderPort) {
         const tabId = port.sender?.tab?.id;
         const url = port.sender?.url ? new URL(port.sender.url) : undefined;
-        if (port.name !== PROVIDER_PORT || port.sender?.id !== options.extensionId || port.sender?.frameId !== 0 ||
-            !Number.isInteger(tabId) || tabId === undefined || url?.origin !== 'https://www.instagram.com') {
+        if (
+            port.name !== PROVIDER_PORT ||
+            port.sender?.id !== options.extensionId ||
+            port.sender?.frameId !== 0 ||
+            !Number.isInteger(tabId) ||
+            tabId === undefined ||
+            url?.origin !== 'https://www.instagram.com'
+        ) {
             port.disconnect();
             return;
         }
@@ -51,7 +76,8 @@ export function createInboxProvider(options: { ensureAnchor(): Promise<number>; 
             else pending.reject(new InboxError(response.result.error.kind));
         });
         port.onDisconnect.addListener(() => {
-            if (connections.get(tabId) === connection) connections.delete(tabId);
+            if (connections.get(tabId) === connection)
+                connections.delete(tabId);
             retire(connection);
         });
     }
@@ -79,16 +105,27 @@ export function createInboxProvider(options: { ensureAnchor(): Promise<number>; 
         if (!connected) throw new InboxError('provider_unavailable');
         return connected;
     }
-    function request(request: Extract<ProviderRequest, { method: 'account' }>): Promise<string>;
-    function request(request: Extract<ProviderRequest, { method: 'inbox' }>): Promise<Page<Thread>>;
-    async function request(request: ProviderRequest): Promise<string | Page<Thread>> {
+    function request(
+        request: Extract<ProviderRequest, { method: 'account' }>,
+    ): Promise<string>;
+    function request(
+        request: Extract<ProviderRequest, { method: 'inbox' }>,
+    ): Promise<Page<Thread>>;
+    async function request(
+        request: ProviderRequest,
+    ): Promise<string | Page<Thread>> {
         const connected = await connection();
         return new Promise((resolve, reject) => {
             const timer = setTimeout(() => {
                 connected.pending.delete(request.id);
                 reject(new InboxError('provider_unavailable'));
             }, 15_000);
-            connected.pending.set(request.id, { method: request.method, resolve, reject, timer });
+            connected.pending.set(request.id, {
+                method: request.method,
+                resolve,
+                reject,
+                timer,
+            });
             try {
                 connected.port.postMessage(request);
             } catch {
@@ -104,7 +141,12 @@ export function createInboxProvider(options: { ensureAnchor(): Promise<number>; 
         return request({ kind: 'request', id: ++nextId, method: 'account' });
     }
     async function inbox(expectedAccountId: string) {
-        return request({ kind: 'request', id: ++nextId, method: 'inbox', expectedAccountId });
+        return request({
+            kind: 'request',
+            id: ++nextId,
+            method: 'inbox',
+            expectedAccountId,
+        });
     }
     return { accept, account, inbox };
 }

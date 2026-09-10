@@ -21,8 +21,6 @@ Checklist:
 - [ ] Preserve loading, empty, and error states for the chat list.
 - [ ] Verify the sidebar loads additional chats smoothly without duplicate requests or duplicated chat rows.
 
-
-
 ## Completion evidence
 
 Current `ChatList` uses the bounded 72px virtual window and asks `store.loadNextInboxPage()` when within five loaded rows of the tail. The store has cursor, no-progress, failed-cursor, and global single-flight gates, so the requested sidebar loading behavior is already implemented.

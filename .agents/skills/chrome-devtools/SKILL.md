@@ -45,12 +45,12 @@ You can send multiple tool calls in parallel, but maintain correct order: naviga
 >
 > ```json
 > {
->   "mcpServers": {
->     "chrome-devtools": {
->       "command": "npx",
->       "args": ["chrome-devtools-mcp@latest", "--categoryExtensions"]
+>     "mcpServers": {
+>         "chrome-devtools": {
+>             "command": "npx",
+>             "args": ["chrome-devtools-mcp@latest", "--categoryExtensions"]
+>         }
 >     }
->   }
 > }
 > ```
 >

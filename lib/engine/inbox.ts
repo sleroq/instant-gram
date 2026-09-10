@@ -1,6 +1,10 @@
 import type { Message, Page, Thread, User } from '../domain.ts';
 
-export type InboxErrorKind = 'auth' | 'provider_unavailable' | 'protocol' | 'storage';
+export type InboxErrorKind =
+    | 'auth'
+    | 'provider_unavailable'
+    | 'protocol'
+    | 'storage';
 export type EngineError = { kind: InboxErrorKind; message: string };
 const MESSAGES = {
     auth: 'Instagram authentication is unavailable.',
@@ -16,7 +20,10 @@ export class InboxError extends Error {
     }
 }
 
-export type ThreadFact = Omit<Thread, 'users' | 'lastMessage'> & { userIds: string[]; lastMessageId?: string };
+export type ThreadFact = Omit<Thread, 'users' | 'lastMessage'> & {
+    userIds: string[];
+    lastMessageId?: string;
+};
 export type InboxData = {
     orderedIds: string[];
     threadsById: Record<string, ThreadFact>;
@@ -38,7 +45,9 @@ export type InboxProjection = {
     inbox: InboxData | null;
 };
 export interface InboxRepository {
-    readInbox(accountId: string): Promise<{ data: InboxData | null; revision: number }>;
+    readInbox(
+        accountId: string,
+    ): Promise<{ data: InboxData | null; revision: number }>;
     replaceInbox(accountId: string, data: InboxData): Promise<number>;
     close(): Promise<void>;
 }
@@ -52,7 +61,10 @@ export type InboxEngine = {
     snapshot(): InboxProjection;
 };
 
-export function normalizeInbox(page: Page<Thread>, fetchedAt = Date.now()): InboxData {
+export function normalizeInbox(
+    page: Page<Thread>,
+    fetchedAt = Date.now(),
+): InboxData {
     const orderedIds: string[] = [];
     const threadsById: Record<string, ThreadFact> = {};
     const usersById: Record<string, User> = {};
@@ -64,29 +76,50 @@ export function normalizeInbox(page: Page<Thread>, fetchedAt = Date.now()): Inbo
             orderedIds.push(thread.key);
         }
         for (const user of thread.users) usersById[user.id] = user;
-        if (thread.lastMessage) messagesById[thread.lastMessage.id] = thread.lastMessage;
+        if (thread.lastMessage)
+            messagesById[thread.lastMessage.id] = thread.lastMessage;
         const { users, lastMessage, ...fact } = thread;
-        const threadFact: ThreadFact = { ...fact, userIds: users.map(user => user.id) };
+        const threadFact: ThreadFact = {
+            ...fact,
+            userIds: users.map((user) => user.id),
+        };
         if (lastMessage) threadFact.lastMessageId = lastMessage.id;
         threadsById[thread.key] = threadFact;
     }
-    const inbox: InboxData = { orderedIds, threadsById, usersById, messagesById, fetchedAt, hasNextPage: page.hasNextPage };
+    const inbox: InboxData = {
+        orderedIds,
+        threadsById,
+        usersById,
+        messagesById,
+        fetchedAt,
+        hasNextPage: page.hasNextPage,
+    };
     if (page.cursor) inbox.cursor = page.cursor;
     return inbox;
 }
 
 function publicError(cause: unknown, fallback: InboxErrorKind): EngineError {
-    const known = cause instanceof InboxError ? cause : new InboxError(fallback);
+    const known =
+        cause instanceof InboxError ? cause : new InboxError(fallback);
     return { kind: known.kind, message: known.message };
 }
 
-export function createInboxEngine(repository: InboxRepository, provider: InboxProvider): InboxEngine {
+export function createInboxEngine(
+    repository: InboxRepository,
+    provider: InboxProvider,
+): InboxEngine {
     const listeners = new Set<(value: InboxProjection) => void>();
     let flight: Promise<void> | undefined;
     let identityVerified = false;
     let state: InboxProjection = {
-        accountId: null, accountEpoch: 0, workerEpoch: crypto.randomUUID(), commitRevision: 0,
-        availability: 'absent', freshness: 'stale', synchronization: 'idle', inbox: null,
+        accountId: null,
+        accountEpoch: 0,
+        workerEpoch: crypto.randomUUID(),
+        commitRevision: 0,
+        availability: 'absent',
+        freshness: 'stale',
+        synchronization: 'idle',
+        inbox: null,
     };
     function publish(patch: Partial<InboxProjection>) {
         state = { ...state, ...patch };
@@ -94,8 +127,15 @@ export function createInboxEngine(repository: InboxRepository, provider: InboxPr
     }
     function clear(error: EngineError) {
         identityVerified = false;
-        publish({ accountId: null, accountEpoch: state.accountEpoch + 1, inbox: null,
-            availability: 'absent', freshness: 'stale', synchronization: 'error', error });
+        publish({
+            accountId: null,
+            accountEpoch: state.accountEpoch + 1,
+            inbox: null,
+            availability: 'absent',
+            freshness: 'stale',
+            synchronization: 'error',
+            error,
+        });
     }
     async function run() {
         identityVerified = false;
@@ -108,18 +148,38 @@ export function createInboxEngine(repository: InboxRepository, provider: InboxPr
         }
         identityVerified = true;
         if (accountId !== state.accountId) {
-            publish({ accountId, accountEpoch: state.accountEpoch + 1, inbox: null,
-                availability: 'absent', freshness: 'stale', synchronization: 'refreshing', error: undefined });
+            publish({
+                accountId,
+                accountEpoch: state.accountEpoch + 1,
+                inbox: null,
+                availability: 'absent',
+                freshness: 'stale',
+                synchronization: 'refreshing',
+                error: undefined,
+            });
             try {
                 const cached = await repository.readInbox(accountId);
-                if (cached.data) publish({ inbox: cached.data, commitRevision: cached.revision,
-                    availability: 'present', freshness: 'stale', synchronization: 'refreshing' });
+                if (cached.data)
+                    publish({
+                        inbox: cached.data,
+                        commitRevision: cached.revision,
+                        availability: 'present',
+                        freshness: 'stale',
+                        synchronization: 'refreshing',
+                    });
             } catch (error) {
-                publish({ synchronization: 'error', error: publicError(error, 'storage') });
+                publish({
+                    synchronization: 'error',
+                    error: publicError(error, 'storage'),
+                });
                 return;
             }
         } else {
-            publish({ freshness: 'stale', synchronization: 'refreshing', error: undefined });
+            publish({
+                freshness: 'stale',
+                synchronization: 'refreshing',
+                error: undefined,
+            });
         }
         let inbox: InboxData;
         try {
@@ -127,25 +187,55 @@ export function createInboxEngine(repository: InboxRepository, provider: InboxPr
         } catch (error) {
             const classified = publicError(error, 'protocol');
             if (classified.kind === 'auth') clear(classified);
-            else publish({ freshness: 'stale', synchronization: 'error', error: classified });
+            else
+                publish({
+                    freshness: 'stale',
+                    synchronization: 'error',
+                    error: classified,
+                });
             return;
         }
         try {
-            const commitRevision = await repository.replaceInbox(accountId, inbox);
-            publish({ inbox, commitRevision, availability: 'present', freshness: 'fresh', synchronization: 'idle' });
+            const commitRevision = await repository.replaceInbox(
+                accountId,
+                inbox,
+            );
+            publish({
+                inbox,
+                commitRevision,
+                availability: 'present',
+                freshness: 'fresh',
+                synchronization: 'idle',
+            });
         } catch (error) {
-            publish({ freshness: 'stale', synchronization: 'error', error: publicError(error, 'storage') });
+            publish({
+                freshness: 'stale',
+                synchronization: 'error',
+                error: publicError(error, 'storage'),
+            });
         }
     }
     function refresh() {
-        if (!flight) flight = run().finally(() => { flight = undefined; });
+        if (!flight)
+            flight = run().finally(() => {
+                flight = undefined;
+            });
         return flight;
     }
     function subscribe(listener: (value: InboxProjection) => void) {
         listeners.add(listener);
         void refresh();
         if (identityVerified) listener(state);
-        else listener({ ...state, accountId: null, inbox: null, availability: 'absent', freshness: 'stale', synchronization: 'refreshing', error: undefined });
+        else
+            listener({
+                ...state,
+                accountId: null,
+                inbox: null,
+                availability: 'absent',
+                freshness: 'stale',
+                synchronization: 'refreshing',
+                error: undefined,
+            });
         return () => listeners.delete(listener);
     }
     return { subscribe, refresh, snapshot: () => state };

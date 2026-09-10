@@ -20,27 +20,37 @@ export async function fetchInbox(
         fb_dtsg: tokens.fbDtsg,
         lsd: tokens.lsd,
         jazoest: tokens.jazoest,
-        variables: JSON.stringify(operation.buildVariables({}, {
-            viewerId: tokens.viewerId,
-            deviceId: tokens.deviceId,
-        })),
+        variables: JSON.stringify(
+            operation.buildVariables(
+                {},
+                {
+                    viewerId: tokens.viewerId,
+                    deviceId: tokens.deviceId,
+                },
+            ),
+        ),
         doc_id: operation.docId,
     });
-    const response = await request(`https://www.instagram.com${operation.endpoint}`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-            'content-type': 'application/x-www-form-urlencoded',
-            'x-ig-app-id': '936619743392459',
-            'x-asbd-id': '359341',
-            'x-fb-lsd': tokens.lsd,
-            'x-fb-friendly-name': operation.friendlyName,
-            'x-csrftoken': tokens.csrfToken,
+    const response = await request(
+        `https://www.instagram.com${operation.endpoint}`,
+        {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+                'content-type': 'application/x-www-form-urlencoded',
+                'x-ig-app-id': '936619743392459',
+                'x-asbd-id': '359341',
+                'x-fb-lsd': tokens.lsd,
+                'x-fb-friendly-name': operation.friendlyName,
+                'x-csrftoken': tokens.csrfToken,
+            },
+            body,
         },
-        body,
-    });
+    );
     if (!response.ok)
-        throw new Error(`Instagram inbox request failed with status ${response.status}`);
+        throw new Error(
+            `Instagram inbox request failed with status ${response.status}`,
+        );
     let json: JsonValue;
     try {
         json = parseJson(await response.text());

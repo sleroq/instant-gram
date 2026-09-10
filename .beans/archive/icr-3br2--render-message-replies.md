@@ -31,8 +31,6 @@ Render quoted reply context for existing messages before implementing reply send
 
 This milestone is display-only. Do not add composer/reply sending here.
 
-
-
 ## Completion evidence
 
 Reply previews are parsed in `ig-anchor.content.ts` and rendered by the Teact `ReplyPreview` in `App.tsx`; the broader completed `icr-vlgo` records the same delivered UX. This Svelte-era display milestone is therefore complete.

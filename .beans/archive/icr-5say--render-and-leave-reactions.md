@@ -25,8 +25,6 @@ Render structured reactions and let a user create or change one from the current
 - Route `sendReaction({ threadKey, messageId, emoji })` through domain, UI RPC, background, and anchor using the documented create/change mutation.
 - Optimistically update local state and reconcile failure. Do not implement removal without a confirmed request shape.
 
-
-
 ## Disposition
 
 Merged into `icr-9qjx`. Reaction parsing, optimistic mutation state, UI, rollback, and verification share the same domain/RPC/store boundary as sending and are now phased within one milestone.

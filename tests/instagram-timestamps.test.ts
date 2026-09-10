@@ -29,5 +29,8 @@ test('thread activity preserves numeric timestamps and rejects invalid strings',
         }),
         1_785_755_105_123,
     );
-    assert.equal(parseThreadActivityMs({ last_activity_at_ms: 'not-a-date' }), 0);
+    assert.equal(
+        parseThreadActivityMs({ last_activity_at_ms: 'not-a-date' }),
+        0,
+    );
 });

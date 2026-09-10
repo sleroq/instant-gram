@@ -24,8 +24,6 @@ There is no composer, send RPC, mutation route, or pending-message state. The do
 - Optimistically insert pending messages, reconcile/de-duplicate on success, and preserve user position unless sending from the bottom.
 - Keep Instagram protocol details out of `App.tsx`.
 
-
-
 ## Disposition
 
 Merged into `icr-9qjx`, which now owns the complete mutation contract, optimistic send/reply state, composer UX, reconciliation, scrolling, and verification. Keeping this as a separate milestone would split one behavioral boundary and duplicate acceptance criteria.

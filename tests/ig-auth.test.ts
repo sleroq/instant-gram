@@ -7,8 +7,14 @@ import {
 } from '../lib/ig-auth.ts';
 
 test('auth listener ignores invalid probe events without replacing valid tokens', async () => {
-    const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
-    const originalDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
+    const originalWindow = Object.getOwnPropertyDescriptor(
+        globalThis,
+        'window',
+    );
+    const originalDocument = Object.getOwnPropertyDescriptor(
+        globalThis,
+        'document',
+    );
     const target = new EventTarget();
     const fakeWindow = Object.assign(target, {
         setTimeout(callback: () => void) {

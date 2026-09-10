@@ -62,18 +62,18 @@ the design reduces that risk but must not claim it is impossible.
 
 ### Current quality scorecard
 
-| Area | Score | Assessment |
-| --- | ---: | --- |
-| Instagram boundary and parsing | 8.5/10 | Narrow capability surface, response checks, HAR-backed behavior, safe error redaction. |
-| Correctness under overlapping requests | 8.5/10 | Extensive generation, receipt-revision, cursor, and single-flight handling. |
-| UI responsiveness | 8/10 | Optimistic actions, warmups, bounded lists, reserved media geometry. |
-| Accessibility and keyboard support | 8/10 | Strong modal/focus/error semantics and unusually broad browser coverage. |
-| Test depth | 8.5/10 | 221 focused tests, including 64 browser tests; weak at worker lifecycle and multi-client boundaries because those boundaries do not exist yet. |
-| State ownership | 4/10 | Correct normalization, wrong process and lifetime for a local-first application. |
-| Modularity | 3/10 | `store.ts`, `App.tsx`, `styles.scss`, and the browser harness are change hotspots. |
-| Persistence and offline behavior | 2/10 | Pins and preferences persist; entities, indexes, freshness, and accepted operations do not. |
-| Multi-client consistency | 1/10 | Every UI tab owns an independent cache and polling loop. |
-| Extensibility for watch/likes history | 3/10 | Existing reel-local nesting and two-pane shell resist cross-feature views. |
+| Area                                   |  Score | Assessment                                                                                                                                     |
+| -------------------------------------- | -----: | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Instagram boundary and parsing         | 8.5/10 | Narrow capability surface, response checks, HAR-backed behavior, safe error redaction.                                                         |
+| Correctness under overlapping requests | 8.5/10 | Extensive generation, receipt-revision, cursor, and single-flight handling.                                                                    |
+| UI responsiveness                      |   8/10 | Optimistic actions, warmups, bounded lists, reserved media geometry.                                                                           |
+| Accessibility and keyboard support     |   8/10 | Strong modal/focus/error semantics and unusually broad browser coverage.                                                                       |
+| Test depth                             | 8.5/10 | 221 focused tests, including 64 browser tests; weak at worker lifecycle and multi-client boundaries because those boundaries do not exist yet. |
+| State ownership                        |   4/10 | Correct normalization, wrong process and lifetime for a local-first application.                                                               |
+| Modularity                             |   3/10 | `store.ts`, `App.tsx`, `styles.scss`, and the browser harness are change hotspots.                                                             |
+| Persistence and offline behavior       |   2/10 | Pins and preferences persist; entities, indexes, freshness, and accepted operations do not.                                                    |
+| Multi-client consistency               |   1/10 | Every UI tab owns an independent cache and polling loop.                                                                                       |
+| Extensibility for watch/likes history  |   3/10 | Existing reel-local nesting and two-pane shell resist cross-feature views.                                                                     |
 
 ## Scope and weighting
 
@@ -560,14 +560,14 @@ flowchart LR
 
 ### Ownership matrix
 
-| Layer | Owns | Must not own |
-| --- | --- | --- |
-| Instagram provider/content script | Auth extraction, request descriptors, network calls, external payload validation, protocol error classification | Cache freshness, UI state, optimistic policy |
-| Worker repositories | IndexedDB schema, migrations, transactions, normalized facts and indexes | DOM state, request prioritization |
-| Worker engine | Cache-first queries, command acceptance, merge reducers, overlays, outbox, account epoch, subscriptions | DOM geometry, component state |
-| Worker scheduler | Read coalescing, priorities, backoff, visibility/interest policy, safe retry, cancellation | Entity shape interpretation |
-| Solid projection client | Connection/reconnect, bounded local replica, subscription generations/sequences, synchronous speculative command overlay | Instagram calls, cursor policy, canonical merges |
-| Solid feature UI | Selection, routes, drafts, scroll/focus, open surfaces, media element state | Canonical entities, retries, persistence |
+| Layer                             | Owns                                                                                                                     | Must not own                                     |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------ |
+| Instagram provider/content script | Auth extraction, request descriptors, network calls, external payload validation, protocol error classification          | Cache freshness, UI state, optimistic policy     |
+| Worker repositories               | IndexedDB schema, migrations, transactions, normalized facts and indexes                                                 | DOM state, request prioritization                |
+| Worker engine                     | Cache-first queries, command acceptance, merge reducers, overlays, outbox, account epoch, subscriptions                  | DOM geometry, component state                    |
+| Worker scheduler                  | Read coalescing, priorities, backoff, visibility/interest policy, safe retry, cancellation                               | Entity shape interpretation                      |
+| Solid projection client           | Connection/reconnect, bounded local replica, subscription generations/sequences, synchronous speculative command overlay | Instagram calls, cursor policy, canonical merges |
+| Solid feature UI                  | Selection, routes, drafts, scroll/focus, open surfaces, media element state                                              | Canonical entities, retries, persistence         |
 
 ### Proposed source layout
 
@@ -612,17 +612,17 @@ query library.
 
 ### Durable stores
 
-| Store | Key | Important fields |
-| --- | --- | --- |
-| `accounts` | `accountId` | schema metadata, last seen, active partition marker |
-| `users` | `[accountId,id]` | normalized profile facts |
-| `threads` | `[accountId,id]` | normalized thread facts and latest-message reference |
-| `messages` | `[accountId,id]` | normalized message facts; client/server alias metadata |
-| `media` | `[accountId,id]` | shortcode, author ID, media item metadata, engagement facts |
-| `comments` | `[accountId,id]` | author ID, parent IDs, text and engagement facts |
-| `resources` | `[accountId,key]` | ordered IDs, cursor, exhausted flag, fetched time, error metadata |
-| `operations` | `[accountId,operationId]` | immutable command payload, target, overlay, status, attempts, retry safety, error |
-| `activityEvents` | `[accountId,eventId]` | local watch/like/save/comment events and reconciliation status |
+| Store            | Key                       | Important fields                                                                  |
+| ---------------- | ------------------------- | --------------------------------------------------------------------------------- |
+| `accounts`       | `accountId`               | schema metadata, last seen, active partition marker                               |
+| `users`          | `[accountId,id]`          | normalized profile facts                                                          |
+| `threads`        | `[accountId,id]`          | normalized thread facts and latest-message reference                              |
+| `messages`       | `[accountId,id]`          | normalized message facts; client/server alias metadata                            |
+| `media`          | `[accountId,id]`          | shortcode, author ID, media item metadata, engagement facts                       |
+| `comments`       | `[accountId,id]`          | author ID, parent IDs, text and engagement facts                                  |
+| `resources`      | `[accountId,key]`         | ordered IDs, cursor, exhausted flag, fetched time, error metadata                 |
+| `operations`     | `[accountId,operationId]` | immutable command payload, target, overlay, status, attempts, retry safety, error |
+| `activityEvents` | `[accountId,eventId]`     | local watch/like/save/comment events and reconciliation status                    |
 
 Resource keys are explicit and protocol-neutral, for example `inbox:primary`,
 `history:<threadId>`, `comments:<mediaId>`, and `commentReplies:<commentId>`. Cursors
@@ -975,7 +975,7 @@ fabricate an event timestamp from a snapshot that has none.
    poll, cursor, retry, and prefetch authority as each handoff occurs.
 4. Add one worker-level flight per resource/cursor and provider readiness handshake.
 5. Test cold worker start, cached response, stale refresh, account switch, no-progress
-    cursor, and worker restart.
+   cursor, and worker restart.
 
 Read ownership cannot move independently of writes to the same facts. Start with a
 read-only development slice, then bring forward the necessary Phase 2 mutation
