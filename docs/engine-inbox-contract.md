@@ -1,5 +1,9 @@
 # Inbox engine contract
 
+**Status:** current first-resource implementation. Expansion must preserve the
+[application architecture contract](application-architecture.md) and follow the
+[restoration checklist](solid-restoration-checklist.md).
+
 The production worker owns one account-partitioned `inbox:primary` resource: only the
 first server page, normalized as ordered thread IDs and thread, user, and message
 dictionaries. IndexedDB replaces that account's retained facts atomically and
@@ -25,3 +29,7 @@ Repository and engine tests use native IndexedDB semantics through
 
 The only client page is `/ui.html`; this contract intentionally provides no
 history, media, pagination, or mutation capability.
+
+The current replacement transaction is intentionally valid only for this single
+resource. It must be migrated to resource-scoped, reference-aware writes before
+another persisted resource is introduced.

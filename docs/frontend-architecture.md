@@ -1,5 +1,9 @@
 # Frontend architecture
 
+**Status:** current implementation. The durable ownership and evolution rules
+are defined by the [application architecture contract](application-architecture.md).
+The [restoration checklist](solid-restoration-checklist.md) tracks planned work.
+
 `entrypoints/ui/index.html` is the sole production extension page and canonical
 `/ui.html` browser-action destination. Its Solid 2 application renders only the
 read-only primary inbox from complete worker snapshots.
@@ -21,6 +25,5 @@ independent references for future functionality; they are not exposed by the
 runtime. Any future history implementation must define its own bounded rendering
 and pagination contract before entering production.
 
-See the [Solid restoration checklist](solid-restoration-checklist.md) for the
-audited **planned** restoration sequence. It is a plan, not a statement that any
+The retained protocol modules and restoration documents do not imply that an
 excluded capability is currently implemented.
