@@ -4,8 +4,11 @@ title: Add focused-message Enter and Space shortcuts
 status: completed
 type: feature
 priority: normal
+tags:
+    - solid-restoration
 created_at: 2026-08-03T21:27:15Z
-updated_at: 2026-08-03T21:39:56Z
+updated_at: 2026-09-13T12:05:14Z
+parent: icr-jce7
 ---
 
 Implemented focused-message Enter and Space shortcuts.
@@ -17,3 +20,9 @@ Implemented focused-message Enter and Space shortcuts.
 - No RPC or Instagram protocol capability was added; no GPL source/assets or HAR content was used.
 
 Verified focused browser/store tests, two consecutive full `npm test` runs at 126/126 on an isolated workspace snapshot (the shared workspace had concurrent build/HMR activity), `npm run check`, `npm run build`, `git diff --check`, and `beans check`.
+
+
+
+## Solid restoration handoff (2026-09-13)
+
+This completion records retired behavior. Restore it only as part of R3.17–R3.18 under `icr-jce7`, after durable reaction/media capabilities exist, while preserving bounded views and shortcut exclusions.

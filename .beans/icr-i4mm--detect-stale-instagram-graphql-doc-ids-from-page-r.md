@@ -7,8 +7,10 @@ priority: normal
 tags:
     - instagram
     - graphql
+    - solid-restoration
 created_at: 2026-07-04T14:21:00Z
-updated_at: 2026-07-04T14:21:00Z
+updated_at: 2026-09-13T12:04:44Z
+parent: icr-kj7d
 ---
 
 Add a passive MAIN-world monitor that watches Instagram's own GraphQL requests and warns when known operation names use doc_ids different from the extension's hardcoded values.
@@ -22,3 +24,9 @@ Checklist:
 - [ ] Surface the warning somewhere developer-visible, such as debugAuth output, console warning, extension storage, or UI diagnostic.
 - [ ] Do not auto-update doc_ids; document that matching friendly names do not guarantee compatible variables or response shape.
 - [ ] Verify with a mocked/simulated request or local instrumentation without exposing Instagram session data.
+
+
+
+## Solid restoration handoff (2026-09-13)
+
+This proposal is R5.6–R5.7 under `icr-kj7d`, not a blocker for R1–R4. Keep it passive and diagnostics-only; never capture tokens/message bodies, auto-update descriptors, or expose protocol details in ordinary UI.

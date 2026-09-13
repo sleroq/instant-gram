@@ -5,11 +5,13 @@ status: todo
 type: bug
 priority: high
 tags:
+    - parsing
+    - solid-restoration
     - browser
     - inbox
-    - parsing
 created_at: 2026-08-03T13:17:25Z
-updated_at: 2026-08-03T13:17:25Z
+updated_at: 2026-09-13T12:04:44Z
+parent: icr-siiy
 ---
 
 ## Browser finding (2026-08-03)
@@ -23,3 +25,9 @@ Inbox previews expose protocol identifiers such as `Unsupported message (MESSAGE
 - Fall back to “Unsupported message” without exposing raw protocol identifiers in normal UI.
 - Preserve a developer-visible diagnostic path if raw content type is needed for investigation.
 - Cover parser/summary mapping with focused tests.
+
+
+
+## Solid restoration handoff (2026-09-13)
+
+The retired UI referenced above is no longer production. Deliver the parser semantics and Solid projection as R1.20 under `icr-siiy`; do not recreate a UI-owned store. Keep raw protocol identifiers outside ordinary user copy and preserve a redacted diagnostic path.

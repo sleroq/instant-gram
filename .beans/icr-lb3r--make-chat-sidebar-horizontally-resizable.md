@@ -5,9 +5,11 @@ status: completed
 type: feature
 priority: normal
 tags:
+    - solid-restoration
     - ui
 created_at: 2026-08-06T14:48:42Z
-updated_at: 2026-08-06T15:19:46Z
+updated_at: 2026-09-13T12:05:14Z
+parent: icr-siiy
 ---
 
 Replace the current non-resizable sidebar behavior with horizontal width resizing, using Ajaxy/telegram-tt as a behavioral reference: https://github.com/Ajaxy/telegram-tt.
@@ -44,3 +46,9 @@ width. The focused resize/storage tests, typecheck, production build,
 hit an unrelated timing-sensitive reply-prefetch retry timeout; that exact test
 passes when rerun alone. All sidebar acceptance criteria pass, so this bean
 remains completed.
+
+
+
+## Solid restoration handoff (2026-09-13)
+
+This completion records retired behavior. R1.12 under `icr-siiy` owns the Solid restoration; width is initially window-local and persistence waits for the single global settings service.

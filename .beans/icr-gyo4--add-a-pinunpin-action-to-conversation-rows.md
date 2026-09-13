@@ -8,8 +8,10 @@ tags:
     - browser
     - pins
     - accessibility
+    - solid-restoration
 created_at: 2026-08-03T13:17:25Z
-updated_at: 2026-08-03T19:30:00Z
+updated_at: 2026-09-13T12:05:14Z
+parent: icr-uizd
 ---
 
 ## Browser finding (2026-08-03)
@@ -50,3 +52,9 @@ Expose a compact, accessible pin/unpin control (or accessible context action) fr
       pagination, while covering DOM editing semantics and stale focus restoration.
 - [x] Two consecutive full test passes with identical discovery counts,
       typecheck, production build, diff-check, and `beans check` all pass.
+
+
+
+## Solid restoration handoff (2026-09-13)
+
+This completion records retired behavior, not current production capability. Restore pin/unpin as R2.4/R2.9 under `icr-uizd` with durable account-partitioned acceptance and receipt validation; do not restore background-only pin persistence or Teact optimistic state.

@@ -1,0 +1,23 @@
+---
+# icr-uizd
+title: 'R2: Restore durable core messaging'
+status: todo
+type: milestone
+priority: high
+tags:
+    - solid-restoration
+    - dm
+    - mutations
+created_at: 2026-09-13T12:04:07Z
+updated_at: 2026-09-13T12:04:21Z
+blocking:
+    - icr-9ib2
+blocked_by:
+    - icr-siiy
+---
+
+Implement R2.1–R2.12 from `docs/solid-restoration-checklist.md` after R1.
+
+Deliver durable per-account command acceptance/deduplication, canonical facts plus ordered overlays, per-target serialization, send/reply, pin/unpin, paired read marking, Solid composer/pending/failure behavior, and worker-owned interest polling fallback. Cut over each mutation family atomically; no UI mutation authority or independent polling.
+
+Exit: accepted operations survive worker restart, two clients converge without duplicate provider dispatch, quota failure dispatches nothing, stale reads cannot erase intent, and all R2 acceptance plus quality gates pass.
