@@ -82,15 +82,15 @@ export default function App() {
                     <Sidebar
                         inbox={list()}
                         conversation={
-                            <Show when={selected()}>
-                                {(id) => conversation(id())}
+                            <Show when={selected()} keyed>
+                                {(id) => conversation(id)}
                             </Show>
                         }
                     />
                 }
             >
-                <Show when={selected()} fallback={list()}>
-                    {(id) => conversation(id())}
+                <Show when={selected()} fallback={list()} keyed>
+                    {(id) => conversation(id)}
                 </Show>
             </Show>
         </main>

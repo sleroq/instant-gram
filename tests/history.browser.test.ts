@@ -152,6 +152,23 @@ async function openHistory(width = 1100): Promise<Page> {
                 },
             ]),
         );
+        projection.entities.messagesById['thread-1-message'] = {
+            id: 'thread-1-message',
+            ts: 1_700_100_000_000,
+            kind: 'text',
+            text: 'Second conversation message',
+            senderId: 'peer',
+        };
+        projection.histories['thread-1'] = {
+            threadId: 'thread-1',
+            orderedIds: ['thread-1-message'],
+            fetchedAt: 1,
+            hasNextPage: false,
+            availability: 'present',
+            freshness: 'fresh',
+            synchronization: 'idle',
+            viewerId: 'viewer',
+        };
         let active: TestActivePort | undefined;
         let sequence = 1;
         window.historyTest = {
@@ -244,6 +261,19 @@ test('cached history stays bounded and local traversal sends no older request', 
     assert.equal(
         await page.evaluate(() => window.historyTest.commands.length),
         before,
+    );
+    await page.close();
+});
+
+test('desktop routing switches between selected conversations', async () => {
+    const page = await openHistory();
+    await page.locator('[data-thread-id="thread-1"]').click();
+    await page.getByRole('heading', { name: 'thread-1' }).waitFor();
+    await page.getByText('Second conversation message').waitFor();
+    assert.equal(await page.evaluate(() => window.location.hash), '#/thread/thread-1');
+    assert.deepEqual(
+        await page.evaluate(() => window.historyTest.commands.at(-1)),
+        { kind: 'subscribe', threadId: 'thread-1' },
     );
     await page.close();
 });
