@@ -20,12 +20,11 @@ Use TypeScript/TSX and SCSS with the pinned Solid 2 stack. Keep Instagram protoc
 knowledge outside components. Documentation and sanitized captures under `docs`
 remain protocol references for future rebuilding.
 
+You can verify UI and UX behaviour by testing the extension via chrome mcp skill yourself if the task requires it.
+
 Verify frontend changes with `npm run lint`, `npm test`, `npm run check`,
 `npm run build`, `git diff --check`, and the shared repository scan:
 
 ```sh
 ast-grep scan --config "$HOME/sgconfig.yml" --no-ignore hidden .
 ```
-
-Do not copy Telegram GPL source or assets. Keep this repository's source and
-assets clean-room and repository-owned.

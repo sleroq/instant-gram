@@ -13,5 +13,6 @@ path=$(sed -n '2p' "$port_file")
 
 exec npx -y chrome-devtools-mcp@latest \
   "--ws-endpoint=ws://127.0.0.1:${port}${path}" \
+  --categoryExtensions \
   --no-usage-statistics \
   --no-performance-crux

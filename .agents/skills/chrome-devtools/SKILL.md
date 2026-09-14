@@ -1,12 +1,12 @@
 ---
 name: chrome-devtools
-description: Uses Chrome DevTools via MCP for efficient debugging, troubleshooting and browser automation. Use when debugging web pages, automating browser interactions, analyzing performance, or inspecting network requests. This skill does not apply to `--slim` mode (MCP configuration).
+description: Chrome DevTools via MCP for efficient debugging, troubleshooting and browser automation. Use when debugging web pages, automating browser interactions, analyzing performance, or inspecting network requests. This skill does not apply to `--slim` mode (MCP configuration).
 ---
 
 ## Core Concepts
 
 **Browser lifecycle**: Browser starts automatically on first tool call using a persistent Chrome profile. Configure via CLI args in the MCP server configuration: `npx chrome-devtools-mcp@latest --help`.
-Addional tooling can be enabled by providing the following flags:
+Additional tooling can be enabled by providing the following flags:
 
 - For extension tooling, use the `--categoryExtensions` flag.
 - For memory tooling, use the `--memoryDebugging` flag.
@@ -41,26 +41,22 @@ You can send multiple tool calls in parallel, but maintain correct order: naviga
 
 ### Testing an extension
 
-> **Before proceeding**: Extension tools (`install_extension`, `list_extensions`, etc.) are only available when the MCP server is started with the `--categoryExtensions` flag. If these tools are not in your tool list, stop and ask the user to update their MCP server configuration:
+> **Before proceeding**: Extension tools (`install_extension`, `list_extensions`, etc.) are only available when the MCP server process is started with the `--categoryExtensions` flag. A "connected" MCP status only confirms the handshake; it does not confirm that optional tool categories are enabled.
 >
-> ```json
-> {
->     "mcpServers": {
->         "chrome-devtools": {
->             "command": "npx",
->             "args": ["chrome-devtools-mcp@latest", "--categoryExtensions"]
->         }
->     }
-> }
+> ```sh
+> npx chrome-devtools-mcp@latest --categoryExtensions
 > ```
 >
-> After updating, the user must restart the MCP server (or their AI client) for the change to take effect.
+> Configuration shapes differ between MCP clients. Inspect the effective launcher, including project wrapper scripts and the running process arguments, rather than assuming a particular config format. If the flag is missing, update the owning configuration or wrapper when authorized; otherwise ask the user to do so. Restart the MCP server or client afterward. Restarting a shared service may interrupt the current tool call.
 
 1. **Install**: Use `install_extension` with the path to the unpacked extension.
 2. **Identify**: Get the extension ID from the response or by calling `list_extensions`.
-3. **Trigger Action**: Use `trigger_extension_action` to open the popup or side panel if applicable.
-4. **Verify Service Worker**: Use `evaluate_script` with `serviceWorkerId` to check extension state or trigger background actions.
-5. **Verify Page Behavior**: Navigate to a page where the extension operates and use `take_snapshot` to check if content scripts injected elements or modified the page correctly.
+3. **Trigger Action**: Use `trigger_extension_action` to open the extension's configured action, then call `list_pages` again to find any new extension page or side panel.
+4. **Open Full-page UI**: If action-triggered page discovery is unreliable and the extension exposes a known page, use `new_page` with `chrome-extension://<id>/<page>`.
+5. **Verify Service Worker**: Reacquire its ID from `list_pages`, then use `evaluate_script` with `serviceWorkerId` to check extension state or trigger background actions.
+6. **Verify Page Behavior**: Navigate to a page where the extension operates and use `take_snapshot` to check if content scripts injected elements or modified the page correctly.
+
+Extension pages can contain private account data. Do not reproduce sensitive snapshot or screenshot contents when a concise behavioral summary is sufficient.
 
 ## Troubleshooting
 
@@ -68,5 +64,7 @@ If `chrome-devtools-mcp` is insufficient, guide users to use Chrome DevTools UI:
 
 - https://developer.chrome.com/docs/devtools
 - https://developer.chrome.com/docs/devtools/ai-assistance
+
+After a browser restart or MCP reconnect, page and service-worker IDs are stale. Call `list_extensions` and `list_pages` again before continuing. For `Target closed`, connection-refused, or browser-crash errors, first ensure the browser is running and reconnect, then reacquire all IDs instead of retrying with old ones.
 
 If there are errors launching `chrome-devtools-mcp` or Chrome, refer to https://github.com/ChromeDevTools/chrome-devtools-mcp/blob/main/docs/troubleshooting.md.
