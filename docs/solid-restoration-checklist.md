@@ -242,11 +242,16 @@ window.
       inbox/detail queries for visible interested clients, stops with no interests,
       and reconciles facts plus overlays without root reset. Historical 5 s active /
       60 s backed-off timing is a benchmark to remeasure, not a universal claim.
+      Normal inbox and selected-thread freshness becomes automatic: refresh buttons
+      are no longer the primary synchronization UX and remain only as an explicit
+      repair/retry affordance when automatic synchronization is delayed or fails.
 - [ ] **R2.12 — No competing authority.** Do not add independent client polling
       or always-on worker alarms.
 
 Acceptance: two clients plus worker restart converge on the same pin/read/message
-state; a stale poll response cannot erase overlays or newer facts.
+state without routine manual refresh; a stale poll response cannot erase overlays
+or newer facts. A visible interested client receives incoming inbox/thread changes
+automatically, while manual refresh remains available for recovery.
 
 ## R3 — Full message interactions
 

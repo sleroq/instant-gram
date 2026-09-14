@@ -9,7 +9,7 @@ tags:
     - dm
     - mutations
 created_at: 2026-09-13T12:04:07Z
-updated_at: 2026-09-13T12:04:21Z
+updated_at: 2026-09-14T08:47:26Z
 blocking:
     - icr-9ib2
 blocked_by:
@@ -18,6 +18,6 @@ blocked_by:
 
 Implement R2.1–R2.12 from `docs/solid-restoration-checklist.md` after R1.
 
-Deliver durable per-account command acceptance/deduplication, canonical facts plus ordered overlays, per-target serialization, send/reply, pin/unpin, paired read marking, Solid composer/pending/failure behavior, and worker-owned interest polling fallback. Cut over each mutation family atomically; no UI mutation authority or independent polling.
+Deliver durable per-account command acceptance/deduplication, canonical facts plus ordered overlays, per-target serialization, send/reply, pin/unpin, paired read marking, Solid composer/pending/failure behavior, and worker-owned interest polling fallback. Normal inbox and selected-thread freshness must become automatic for visible interested clients; Refresh must cease to be the routine synchronization UX and remain only as a repair/retry affordance. Cut over each mutation family atomically; no UI mutation authority or independent polling.
 
 Exit: accepted operations survive worker restart, two clients converge without duplicate provider dispatch, quota failure dispatches nothing, stale reads cannot erase intent, and all R2 acceptance plus quality gates pass.

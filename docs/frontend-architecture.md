@@ -40,3 +40,8 @@ their external targets; no modal player, media-info fetching, comments, composer
 pin/read/reaction/edit/send command, or automatic incoming polling is implied.
 Merely opening history never marks it read. These capabilities belong to later
 restoration milestones, not adapters around the remaining protocol modules.
+
+The visible Refresh controls are transitional R1 synchronization UX. R2.11 must
+make inbox and selected-conversation freshness automatic for interested visible
+clients; manual refresh may remain as recovery, but must not be required for
+ordinary incoming-message updates.
