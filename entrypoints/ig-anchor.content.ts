@@ -1,7 +1,7 @@
 import browser from 'webextension-polyfill';
 import { defineContentScript } from 'wxt/utils/define-content-script';
 import { startAuthProbeListener } from '../lib/ig-auth';
-import { fetchInbox } from '../lib/instagram-api/inbox';
+import { createInboxReader } from '../lib/instagram-api/inbox';
 import { registerInboxProvider } from '../lib/provider/inbox-content';
 
 export default defineContentScript({
@@ -9,6 +9,7 @@ export default defineContentScript({
     runAt: 'document_idle',
     main() {
         startAuthProbeListener();
-        registerInboxProvider(browser.runtime, fetchInbox);
+        const reads = createInboxReader();
+        registerInboxProvider(browser.runtime, reads);
     },
 });

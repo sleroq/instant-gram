@@ -1,4 +1,4 @@
-import type { Page, Thread } from '../domain.ts';
+import type { Page, Thread, ThreadMessages } from '../domain.ts';
 import { InboxError, type InboxProvider } from '../engine/inbox.ts';
 import {
     PROVIDER_PORT,
@@ -22,8 +22,8 @@ export type ProviderPort = {
     disconnect(): void;
 };
 type Pending = {
-    method: 'account' | 'inbox';
-    resolve(value: string | Page<Thread>): void;
+    method: 'account' | 'inbox' | 'history';
+    resolve(value: string | Page<Thread> | ThreadMessages): void;
     reject(error: Error): void;
     timer: ReturnType<typeof setTimeout>;
 };
@@ -111,9 +111,12 @@ export function createInboxProvider(options: {
     function request(
         request: Extract<ProviderRequest, { method: 'inbox' }>,
     ): Promise<Page<Thread>>;
+    function request(
+        request: Extract<ProviderRequest, { method: 'history' }>,
+    ): Promise<ThreadMessages>;
     async function request(
         request: ProviderRequest,
-    ): Promise<string | Page<Thread>> {
+    ): Promise<string | Page<Thread> | ThreadMessages> {
         const connected = await connection();
         return new Promise((resolve, reject) => {
             const timer = setTimeout(() => {
@@ -140,13 +143,28 @@ export function createInboxProvider(options: {
     async function account() {
         return request({ kind: 'request', id: ++nextId, method: 'account' });
     }
-    async function inbox(expectedAccountId: string) {
+    async function inbox(expectedAccountId: string, cursor?: string) {
         return request({
             kind: 'request',
             id: ++nextId,
             method: 'inbox',
             expectedAccountId,
+            cursor,
         });
     }
-    return { accept, account, inbox };
+    async function history(
+        expectedAccountId: string,
+        threadKey: string,
+        cursor?: string,
+    ) {
+        return request({
+            kind: 'request',
+            id: ++nextId,
+            method: 'history',
+            expectedAccountId,
+            threadKey,
+            cursor,
+        });
+    }
+    return { accept, account, inbox, history };
 }

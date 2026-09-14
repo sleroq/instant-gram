@@ -181,6 +181,21 @@ export const INSTAGRAM_GRAPHQL_OPERATIONS = {
             return variables;
         },
     ),
+    IGDMessageListOffMsysQuery: query(
+        FRIENDLY_NAMES.olderMessages,
+        DOC_IDS.olderMessages,
+        (input: { threadKey: string; cursor: string }) => ({
+            after: input.cursor,
+            before: null,
+            first: INSTAGRAM_GRAPHQL_FLAGS.initialMessagePageCount,
+            last: null,
+            newer_than_message_id: null,
+            older_than_message_id: null,
+            id: input.threadKey,
+            __relay_internal__pv__IGDInitialMessagePageCountrelayprovider:
+                INSTAGRAM_GRAPHQL_FLAGS.initialMessagePageCount,
+        }),
+    ),
     IGDInboxHeaderOffMsysQuery: query(
         FRIENDLY_NAMES.inboxHeader,
         DOC_IDS.inboxHeader,

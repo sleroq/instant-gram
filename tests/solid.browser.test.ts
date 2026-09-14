@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
 import { readdir, readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { chromium, type Browser, type Page } from 'playwright';
 import { preview, type PreviewServer } from 'vite';
+import { buildExtension } from './browser-build.ts';
 import type { InboxProjection } from '../lib/engine/inbox';
 import type { SnapshotMessage } from '../lib/engine/protocol';
 
@@ -15,6 +15,7 @@ declare global {
             connections: number;
             disconnections: number;
             subscriptions: number;
+            subscribeThreadIds: Array<string | undefined>;
             refreshes: number;
             current: InboxProjection;
             send(projection: InboxProjection, sequence: number): void;
@@ -32,7 +33,7 @@ test.before(async () => {
     const output = fileURLToPath(
         new URL('../.output/chrome-mv3', import.meta.url),
     );
-    execFileSync('npm', ['run', 'build'], { cwd: root, stdio: 'pipe' });
+    await buildExtension(root);
     const manifest = JSON.parse(
         await readFile(`${output}/manifest.json`, 'utf8'),
     );
@@ -102,17 +103,16 @@ async function openInbox(): Promise<{ page: Page; errors: string[] }> {
             accountEpoch: 1,
             workerEpoch: 'worker',
             commitRevision: 1,
-            availability: 'present',
-            freshness: 'fresh',
-            synchronization: 'idle',
+            entities: { threadsById, usersById: {}, messagesById: {} },
             inbox: {
                 orderedIds: ids,
-                threadsById,
-                usersById: {},
-                messagesById: {},
                 fetchedAt: 1,
                 hasNextPage: false,
+                availability: 'present',
+                freshness: 'fresh',
+                synchronization: 'idle',
             },
+            histories: {},
         };
         let active:
             | {
@@ -127,6 +127,7 @@ async function openInbox(): Promise<{ page: Page; errors: string[] }> {
             connections: 0,
             disconnections: 0,
             subscriptions: 0,
+            subscribeThreadIds: [],
             refreshes: 0,
             current,
             send(projection, sequence) {
@@ -180,11 +181,17 @@ async function openInbox(): Promise<{ page: Page; errors: string[] }> {
                                 removeListener: (listener: () => void) =>
                                     connection.disconnects.delete(listener),
                             },
-                            postMessage(message: { kind: string }) {
+                            postMessage(message: {
+                                kind: string;
+                                threadId?: string;
+                            }) {
                                 if (message.kind === 'refresh')
                                     window.solidTest.refreshes++;
                                 if (message.kind === 'subscribe') {
                                     window.solidTest.subscriptions++;
+                                    window.solidTest.subscribeThreadIds.push(
+                                        message.threadId,
+                                    );
                                     if (window.solidTest.autoSnapshot)
                                         queueMicrotask(() =>
                                             window.solidTest.send(
@@ -228,7 +235,7 @@ test('snapshots preserve rows, cached errors remain usable, and virtualization s
     const original = await page.getByText('thread-0').elementHandle();
     await page.evaluate(() => {
         const projection = structuredClone(window.solidTest.current);
-        projection.inbox!.threadsById['thread-1'].title = 'changed title';
+        projection.entities.threadsById['thread-1'].title = 'changed title';
         window.solidTest.send(projection, 2);
     });
     await page.getByText('changed title').waitFor();
@@ -244,9 +251,9 @@ test('snapshots preserve rows, cached errors remain usable, and virtualization s
 
     await page.evaluate(() => {
         const projection = structuredClone(window.solidTest.current);
-        projection.freshness = 'stale';
-        projection.synchronization = 'error';
-        projection.error = {
+        projection.inbox.freshness = 'stale';
+        projection.inbox.synchronization = 'error';
+        projection.inbox.error = {
             kind: 'protocol',
             message: 'Instagram inbox request failed.',
         };
@@ -265,12 +272,12 @@ test('snapshots preserve rows, cached errors remain usable, and virtualization s
         window.solidTest.send(
             {
                 ...window.solidTest.current,
-                inbox: {
-                    ...window.solidTest.current.inbox!,
+                entities: {
+                    ...window.solidTest.current.entities,
                     threadsById: {
-                        ...window.solidTest.current.inbox!.threadsById,
+                        ...window.solidTest.current.entities.threadsById,
                         'thread-1': {
-                            ...window.solidTest.current.inbox!.threadsById[
+                            ...window.solidTest.current.entities.threadsById[
                                 'thread-1'
                             ],
                             title: 'duplicate ignored',

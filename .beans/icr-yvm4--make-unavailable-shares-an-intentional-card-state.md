@@ -1,7 +1,7 @@
 ---
 # icr-yvm4
 title: Make unavailable shares an intentional card state
-status: todo
+status: completed
 type: bug
 priority: normal
 tags:
@@ -10,7 +10,7 @@ tags:
     - ux
     - solid-restoration
 created_at: 2026-08-03T13:17:25Z
-updated_at: 2026-09-13T12:04:44Z
+updated_at: 2026-09-13T13:24:17Z
 parent: icr-siiy
 ---
 

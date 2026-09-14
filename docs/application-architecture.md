@@ -31,14 +31,14 @@ a second cache, or parallel sync/mutation authority.
 
 ## Ownership boundaries
 
-| Layer | Owns | Must not own |
-| --- | --- | --- |
-| Instagram boundary | Authentication extraction, captured request descriptors, network calls, external JSON validation, protocol error classification | Cache policy, optimistic state, routes, DOM state |
-| Repositories | IndexedDB schema/migrations, account partitions, transactions, normalized facts, resource indexes, durable operations | Request priority, DOM state, presentation |
-| Worker engine | Cache-first reads, resource state, canonical merges, command acceptance, overlays, account epochs, subscriptions | Instagram payload aliases, DOM geometry, drafts |
-| Scheduler/outbox | Shared flights, interest priority, retry timing, cancellation, durable operation dispatch and settlement | Entity interpretation, presentation |
-| Solid projection client | Port lifecycle, sequence/epoch recovery, bounded replica, same-frame speculative command projection | Canonical merges, persistence, cursor selection, provider calls |
-| Solid features | Routes, drafts, focus, scroll anchors, dialogs, native media-element state, rendering | Canonical entities, freshness, mutation settlement, Instagram protocol |
+| Layer                   | Owns                                                                                                                            | Must not own                                                           |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| Instagram boundary      | Authentication extraction, captured request descriptors, network calls, external JSON validation, protocol error classification | Cache policy, optimistic state, routes, DOM state                      |
+| Repositories            | IndexedDB schema/migrations, account partitions, transactions, normalized facts, resource indexes, durable operations           | Request priority, DOM state, presentation                              |
+| Worker engine           | Cache-first reads, resource state, canonical merges, command acceptance, overlays, account epochs, subscriptions                | Instagram payload aliases, DOM geometry, drafts                        |
+| Scheduler/outbox        | Shared flights, interest priority, retry timing, cancellation, durable operation dispatch and settlement                        | Entity interpretation, presentation                                    |
+| Solid projection client | Port lifecycle, sequence/epoch recovery, bounded replica, same-frame speculative command projection                             | Canonical merges, persistence, cursor selection, provider calls        |
+| Solid features          | Routes, drafts, focus, scroll anchors, dialogs, native media-element state, rendering                                           | Canonical entities, freshness, mutation settlement, Instagram protocol |
 
 Top-level entrypoints only compose owners and register listeners. Protocol
 details belong at the provider boundary; transaction details belong in
@@ -70,18 +70,25 @@ account switch is observable.
 Facts are normalized by stable domain identity. Ordered resources contain IDs,
 never embedded entity copies.
 
+Parser-synthesized message IDs are conversation-scoped at normalization; their
+sender/timestamp fallback is not globally unique. Keep `isSyntheticId` and never
+treat such cache keys as provider message IDs or mutation receipt evidence.
+
 ```ts
 type Resource = {
-    key: string
-    orderedIds: string[]
-    cursor?: string
-    exhausted: boolean
-    fetchedAt: number
-    availability: "absent" | "present"
-    freshness: "fresh" | "stale"
-    synchronization: "idle" | "queued" | "refreshing" | "error"
-    error?: EngineError
-}
+    key: string;
+    orderedIds: string[];
+    cursor?: string;
+    hasNextPage: boolean; // Provider continuation, not local retention capacity.
+    /** Transitional R1 state until account-level history retention replaces it. */
+    retentionLimited?: boolean;
+    fetchedAt: number;
+    availability: 'absent' | 'present';
+    freshness: 'fresh' | 'stale';
+    synchronization: 'idle' | 'queued' | 'refreshing' | 'error';
+    error?: EngineError;
+    failedOperation?: 'refresh' | 'continuation';
+};
 ```
 
 Representative keys are `inbox:primary`, `history:<threadId>`,
@@ -103,7 +110,14 @@ are never persisted.
 Resource writes update their own references. Refreshing inbox page one must not
 delete facts retained by another inbox page, history, media, or pending
 operation. Retention is bounded and reference-aware; unsettled operations are
-never evicted.
+never evicted. Runtime bounds and durable retention are separate policies: small
+client/worker projections do not justify deleting successfully loaded history
+from IndexedDB.
+
+Reference-aware means transitive over current facts: retaining a thread also
+retains its current participants and latest-message reference. A resource's old
+reference list must not orphan dependencies after another resource updates that
+shared thread. Projection selection follows the same dependency rule as pruning.
 
 ## Read contract
 
@@ -121,6 +135,34 @@ checks still guard every completion.
 Pagination preserves exact cursors, deduplicates stable IDs, and failure-gates a
 cursor until explicit retry. A successful response that repeats its cursor and
 adds no IDs is a retryable no-progress failure, not a loop.
+
+Retained facts are not proof of contiguous coverage. Refreshing an inbox or
+history head establishes a new active page chain. A retained next page rejoins
+that chain only when its request cursor matches the preceding page's returned
+cursor exactly. Otherwise it remains detached retained data, subject to the same
+retention budget, and is excluded from active ordering and exhaustion claims.
+Do not concatenate cached ranges across an unproven gap.
+
+The durable default is to retain every successfully loaded page for the active
+conversation and a bounded recent-conversation set. Under account-level storage
+pressure, evict whole least-recently-used inactive histories before considering
+individual pages. Never evict active/subscribed or recent protected histories,
+unsettled operations, or facts referenced by another resource. Reopening an
+evicted history is an honest cache miss starting from newest history.
+
+This policy does not require moving per-conversation ranges or bidirectional
+pagination for ordinary scrolling. Exact cursor linkage is still required to
+claim contiguous coverage, but retained active history grows through its proven
+older chain. Provider exhaustion remains distinct from storage pressure.
+Failures and explicit retries belong to the head refresh or exact continuation
+cursor that failed. A head refresh cannot silently clear a still-active
+continuation failure.
+
+Shared normalized facts can occur in several resources. Serialized commit
+acceptance must preserve a fact accepted after an overlapping request started,
+even when that older request's resource generation is still current. History
+viewer evidence is separate: an older-page fallback can fill a missing viewer,
+but cannot replace the viewer established by initial detail.
 
 Freshness values and concurrency budgets are centralized scheduler policy. They
 may change after measurement without changing ownership or data contracts.
@@ -180,6 +222,16 @@ do not create sequence gaps. A durable replay log is not part of the design.
 Complete snapshots remain valid while small. Scoped change batches may replace
 them when measured payload or update costs justify it; that transport choice
 does not move canonical ownership into the UI.
+
+Complete means complete for a client's bounded interests, not the whole retained
+database. Include the inbox, subscribed detail, and a small declared warm-navigation
+working set. Retained histories outside that set remain worker/database-owned;
+loading one is a cache hydration, not permission for a second client cache.
+
+Snapshot data and revision are read coherently. Before publication, acceptance
+is serialized with commits and checks account epoch, subscription generation,
+and revision. A stale hydration result is discarded and reread, not published
+over a later accepted projection. This does not require a replay log.
 
 ## Solid application contract
 

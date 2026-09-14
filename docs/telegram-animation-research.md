@@ -1,5 +1,13 @@
 # Telegram Web A animation research and ICR adaptation
 
+**Status: historical behavioral research, not a current implementation plan.**
+The Teact runtime and UI discussed below have been removed. The
+[application architecture](application-architecture.md) and
+[restoration checklist](solid-restoration-checklist.md) govern Solid restoration:
+honor system reduced-motion from each feature's first version, never animate
+row placement or anchor correction, and defer explicit preferences to their
+single settings owner. Do not restore the old animation machinery.
+
 **Reference reviewed:** [`Ajaxy/telegram-tt@a323b1f`](https://github.com/Ajaxy/telegram-tt/tree/a323b1f29f5b91e9a32b8c14866234e925fb0bfa), independently inspected on 2026-08-09.
 
 This is a clean-room behavioral study. Telegram Web A is GPL-3.0-or-later;

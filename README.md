@@ -1,21 +1,24 @@
 # Instagram Client
 
-A Chromium extension that shows a read-only view of the first page of your
-Instagram primary inbox.
+A Chromium extension with a read-only, cache-backed Instagram Messages UI:
+primary inbox pagination, conversation history, bounded scrolling, and responsive
+navigation on Solid 2.
 
-This is a clean-restart scope: the current product does **not** open conversation
-history, send or mutate messages, paginate, or load avatars and media. Those
-capabilities may be rebuilt later against explicit engine contracts.
+This is the R1 restoration slice, not full parity with the retired client.
+Sending, pinning, read marking, reactions/editing, incoming polling, and the media
+player/comments remain later milestones. Opening history does not mark it read;
+message/share previews are read-only and do not imply those capabilities.
 
 The audited [Solid restoration checklist](docs/solid-restoration-checklist.md)
-describes **planned** restoration and optional scope; it does not claim those
-features are implemented.
+separates implemented slices, remaining restoration, and optional product scope.
+See [R1 verification](docs/r1-verification.md) for checks and release-evidence gaps.
 
 The extension uses your existing Instagram web session. Its background worker
 selects an Instagram tab, verifies the active account through a content-side
-provider, fetches and validates the first inbox page, and persists normalized
-account-partitioned facts in IndexedDB. The Solid 2 `ui.html` page receives
-complete worker snapshots and renders a bounded virtual list.
+provider, validates captured read responses, and persists normalized
+account-partitioned resources in IndexedDB. The Solid 2 `ui.html` page receives
+bounded worker snapshots. Cached content stays visible during refresh/errors;
+unknown account identity and genuinely missing data still require waiting.
 
 ## Develop
 
@@ -53,5 +56,6 @@ npm run build
 ```
 
 Open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**,
-and select `.output/chrome-mv3`. This installs the current clean-restart inbox;
-it does not imply feature parity with earlier releases.
+and select `.output/chrome-mv3`. Reload an existing Instagram tab after updating
+the extension so its content provider uses the current protocol. This does not
+imply feature parity with earlier releases or live-account verification.

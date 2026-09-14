@@ -39,7 +39,7 @@ import {
 } from './parsers.ts';
 
 export type InstagramOperationExecutor = (
-    operation: InstagramGraphqlOperationName | 'IGDMessageListOffMsysQuery',
+    operation: InstagramGraphqlOperationName,
     input: JsonObject,
 ) => Promise<JsonValue>;
 
@@ -799,6 +799,7 @@ export const INSTAGRAM_RPC_OPERATION_REACHABILITY = {
     useFeatureLimitsOffMsysQuery: 'executeInstagramGraphql',
     IGPresenceUnifiedSetupQuery: 'executeInstagramGraphql',
     IGDThreadDetailQuery: 'getThread',
+    IGDMessageListOffMsysQuery: 'getThread',
     IGDInboxHeaderOffMsysQuery: 'getThreadInfo',
     IGDInboxInfoOffMsysQuery: 'getThreadInfo',
     IGDUserMessageRowMoreActionsMenuOffMsysQuery: 'getMessageActions',

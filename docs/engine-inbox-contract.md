@@ -1,35 +1,76 @@
-# Inbox engine contract
+# Inbox and conversation engine contract
 
-**Status:** current first-resource implementation. Expansion must preserve the
-[application architecture contract](application-architecture.md) and follow the
-[restoration checklist](solid-restoration-checklist.md).
+**Status:** R1 read-only resource implementation. Read with the stable
+[application contract](application-architecture.md),
+[restoration checklist](solid-restoration-checklist.md), and
+[verification record](r1-verification.md). There is one worker authority and no
+legacy UI adapter.
 
-The production worker owns one account-partitioned `inbox:primary` resource: only the
-first server page, normalized as ordered thread IDs and thread, user, and message
-dictionaries. IndexedDB replaces that account's retained facts atomically and
-increments one global commit revision. Media bytes, history, pagination,
-mutations, polling, replay logs, and offline account selection are excluded.
+## Storage and projection
 
-Every client Port receives complete snapshots, not deltas. Sequence numbers are
-contiguous only for that Port. A gap, worker epoch change, or disconnect clears
-client state and establishes a fresh subscription. Duplicate snapshots are
-ignored. An account epoch change clears the inbox subtree, then consumes the
-authorized snapshot in the same stream. Solid reconciles dictionaries within an
-authorized account epoch, but never preserves an inbox subtree across epochs.
+`lib/engine/resources.ts` defines the shared normalized facts, resource states,
+errors, and repository contract. IndexedDB v2 migrates the v1 first-page inbox
+without changing its account identity or global commit revision. Resources own
+references to thread, user, and message facts; retaining a thread also retains
+its current participant and latest-message dependencies.
 
-The engine verifies the current Instagram `ds_user_id` through the selected
-content provider before reading or publishing cached data. Cache is delivered
-only after that evidence and is marked stale while the provider refresh runs.
-Authentication failure clears account data; ordinary provider/protocol/storage
-failures after identity retain authorized cache. Cookie evidence reduces account
-disclosure risk but cannot prove that every mid-request switch is observable.
+Head and opaque-cursor page segments are durable resources. A transaction writes
+the affected segments/facts, removes explicitly evicted resources, prunes only
+unreferenced facts, and advances one global revision. No Instagram request runs
+inside the transaction. Fresh canonical state is published only after commit;
+failure preserves the previous accepted projection and reports a storage error.
 
-Repository and engine tests use native IndexedDB semantics through
-`fake-indexeddb` and mocked providers. They do not exercise live Instagram.
+Refreshing a head does not delete unrelated history or later-page facts. Only
+exact request/response cursor linkage establishes active contiguous ordering;
+unlinked segments remain detached retained data until eviction. Synthetic
+message identities are scoped to their stable conversation, consistently across
+inbox previews and history, and are never treated as provider IDs.
 
-The only client page is `/ui.html`; this contract intentionally provides no
-history, media, pagination, or mutation capability.
+Complete snapshots carry `entities`, an aggregate `inbox` resource, and bounded
+`histories` keyed by stable thread ID, plus account/worker epochs and revision.
+Each Port sees its inbox, selected detail, and at most two recently visited warm
+histories—not the entire retained database. Sequence numbers are contiguous for
+that Port, including after its selected interest changes. Gaps, worker restart,
+and account reset recover through snapshots, without a durable replay log.
 
-The current replacement transaction is intentionally valid only for this single
-resource. It must be migrated to resource-scoped, reference-aware writes before
-another persisted resource is introduced.
+## Read ownership
+
+The worker verifies `ds_user_id` before publishing persisted account data. The
+provider checks identity around token preparation and network reads; mailbox
+pagination identity is separately cached per account. History viewer identity
+is not the storage account: an older-page fallback does not replace the viewer
+established by initial detail. Cookie evidence cannot prove that every external
+account switch is observable. Unknown-account offline reopening remains excluded.
+
+The production provider exposes only account, inbox/page, and history/older reads.
+Captured descriptors and response parsing live under `lib/instagram-api`.
+Malformed successful HTTP/GraphQL envelopes are errors, not empty inbox/history
+success. Anchor readiness remains owned by the reverse content-script Port.
+
+Cached history is hydrated before fetching missing content; explicit refresh is
+separate from opening a retained conversation. Read flights are shared by
+account/resource/cursor, with bounded history concurrency and per-interest
+generations. Stale completions cannot replace a current projection. Hydration
+and commit acceptance are serialized; overlapping reads preserve facts accepted
+from a later-started request.
+
+Continuation errors retain usable data, identify the failed operation, and
+require explicit Retry. Cyclic cursors and successful non-progress continuations
+are failure-gated. Retention limits are distinct from server exhaustion and must
+also gate programmatic continuation, not merely disable a UI button. The current
+400-message/20-segment history ceiling is transitional implementation state, not
+the intended durable policy. `icr-itlg` replaces it by retaining complete loaded
+history for active and recent conversations and evicting whole inactive histories
+under account-level pressure. Projection and DOM bounds remain independent.
+
+## Exclusions and evidence
+
+The R1 path is read-only. It provides no mutation/outbox, automatic read marking,
+polling, media player/comments, replay log, or offline account chooser. Small
+global settings will use one `storage.local` owner when a consuming feature ships.
+Media bytes and auth secrets are not persisted.
+
+Repository/engine tests use `fake-indexeddb` and controlled providers; browser
+fixtures exercise the built Solid page with a mocked Port. These are not live
+Instagram or installed-extension lifecycle evidence. R0 release gates remain
+explicit in the verification record.

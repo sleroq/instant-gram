@@ -1,7 +1,7 @@
 ---
 # icr-a0ow
 title: Use friendly inbox and unsupported-message summaries
-status: todo
+status: completed
 type: bug
 priority: high
 tags:
@@ -10,7 +10,7 @@ tags:
     - browser
     - inbox
 created_at: 2026-08-03T13:17:25Z
-updated_at: 2026-09-13T12:04:44Z
+updated_at: 2026-09-13T13:24:17Z
 parent: icr-siiy
 ---
 

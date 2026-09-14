@@ -1,10 +1,10 @@
 import browser from 'webextension-polyfill';
-import type { InboxEngine } from './inbox';
+import type { InboxEngine } from './inbox.ts';
 import {
     INBOX_CLIENT_PORT,
-    type ClientCommand,
+    isClientCommand,
     type SnapshotMessage,
-} from './protocol';
+} from './protocol.ts';
 
 export function registerInboxClientPorts(
     port: browser.Runtime.Port,
@@ -19,20 +19,42 @@ export function registerInboxClientPorts(
     }
     let sequence = 0;
     let unsubscribe: (() => void) | undefined;
-    // SAFETY: the validated /ui.html client posts only the closed ClientCommand protocol.
-    const receive = ((command: ClientCommand) => {
-        if (command?.kind === 'subscribe') {
+    let closed = false;
+    function handle(operation: Promise<void>) {
+        void operation.catch(() => undefined);
+    }
+    function receive(
+        unknownCommand: Parameters<
+            Parameters<typeof port.onMessage.addListener>[0]
+        >[0],
+    ) {
+        if (closed) return;
+        if (!isClientCommand(unknownCommand)) {
+            port.disconnect();
+            return;
+        }
+        const command = unknownCommand;
+        if (command.kind === 'subscribe') {
             unsubscribe?.();
-            unsubscribe = engine.subscribe((projection) =>
+            unsubscribe = engine.subscribe((projection) => {
+                if (closed) return;
                 port.postMessage({
                     kind: 'snapshot',
                     sequence: ++sequence,
                     projection,
-                } satisfies SnapshotMessage),
-            );
-        } else if (command?.kind === 'refresh') void engine.refresh();
-        else port.disconnect();
-    }) as Parameters<typeof port.onMessage.addListener>[0];
+                } satisfies SnapshotMessage);
+            }, command.threadId);
+        } else if (command.kind === 'refresh') handle(engine.refresh());
+        else if (command.kind === 'load-more-inbox')
+            handle(engine.loadMoreInbox());
+        else if (command.kind === 'refresh-history')
+            handle(engine.refreshHistory(command.threadId));
+        else handle(engine.loadOlderHistory(command.threadId));
+    }
     port.onMessage.addListener(receive);
-    port.onDisconnect.addListener(() => unsubscribe?.());
+    port.onDisconnect.addListener(() => {
+        closed = true;
+        unsubscribe?.();
+        unsubscribe = undefined;
+    });
 }

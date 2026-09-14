@@ -14,10 +14,13 @@ Components import reactive primitives from `solid-js` and DOM rendering from
 `@solidjs/web`, retain reactive props, use draft store setters, stable keyed
 `<For>` rows, and `<Show>` for conditionals. Removed Solid 1 APIs are not allowed.
 
-The UI consumes complete, bounded worker snapshots. Dictionary reconciliation
-preserves unchanged records and rows. Refresh is explicit, and the fixed 72px
-list mounts at most 31 rows. The current product has no selection, history,
-media, pagination, polling, or mutations.
+The UI consumes complete, bounded worker snapshots with one normalized entity
+dictionary shared by inbox and selected/retained history resources. Dictionary
+reconciliation preserves unchanged records and rows. Refresh is explicit;
+the fixed 72px inbox mounts at most 31 rows and history mounts at most 80.
+Routes and logical scroll/focus restoration are window state, not a second
+cache. Message previews do not imply a modal player or media-info API. Polling
+and mutations remain later milestones.
 
 Effects separate reactive computation from imperative application: the first
 `createEffect` callback reads and returns tracked state, while the second applies

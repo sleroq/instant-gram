@@ -1,7 +1,7 @@
 # Solid restoration checklist
 
-> **PLANNED, not implemented.** This is an audited restoration plan. The
-> production extension remains the read-only first page described by the
+> **Restoration checklist, with a verified bounded R1 slice.** Unchecked items
+> are not completion claims. The current read-only slice is described by the
 > [frontend architecture](frontend-architecture.md) and
 > [engine inbox contract](engine-inbox-contract.md).
 >
@@ -23,8 +23,9 @@ cannot separate:
 A completed bean does not mean its behavior exists in Solid, and a todo bean
 does not prove its behavior never shipped. Likewise, scrapping an old
 Svelte/Teact design does not reject later restoration of the user behavior.
-Bean statuses are preserved verbatim in the appendix; this plan does not update
-them.
+The appendix preserves bean statuses at the September 10 audit. Current delivery
+status lives in the R0–R5 milestone beans; later edits to historical beans do not
+retroactively change that audit.
 
 The retired behavior reference is commit `d001f89`. Inspect it without restoring
 deleted files into the working tree:
@@ -38,20 +39,26 @@ git show d001f89:entrypoints/ui/store.test.ts
 The most recent old editing/comment behavior is also present in ancestor
 `88b973d`. Current `lib/domain.ts`, catalog, handlers, and parsers are protocol
 evidence only: their presence is not a runtime feature. The
-[`solid-2-successor-review.md`](solid-2-successor-review.md) proposal is a
-roadmap, not implemented state. Teact has already been eliminated; no phase
+[`solid-2-successor-review.md`](solid-2-successor-review.md) is a historical review,
+not the current roadmap or implemented state. Teact has already been eliminated; no phase
 restores its store, adapters, harness, or root force-render mechanism.
 
 ## Ordering and ownership
 
-The next concrete work is **R1: resource-scoped persistence and cached
-conversation reads**, not a large framework build-out.
+The active work is **R1: resource-scoped persistence and cached
+conversation reads**, not a large framework build-out. R2 remains blocked until
+R1 acceptance and the quality gates are complete.
 
-Today `replaceInbox` in `lib/engine/db.ts` deletes all facts for an account. That
-is correct only while the account has one first-page resource. Before history,
-media, or a second inbox page is persisted, it must become resource-scoped with
-reference-aware retention and a tested v1 schema migration; otherwise an inbox
-refresh can erase unrelated history or media facts.
+The bounded read-only implementation passes the full 106-test quality gate;
+see [R1 verification](r1-verification.md). R1 is not closed: complete retention
+for active/recent histories, inactive-conversation eviction, and remaining
+acceptance/performance evidence are still open. Code presence alone does not
+check off an acceptance criterion.
+
+The former `replaceInbox` deleted all account facts and was valid only for the
+one-resource baseline. R1 replaces it with atomic resource-scoped writes,
+transitive reference-aware retention, and a tested v1 schema migration. Do not
+reintroduce account-wide replacement as a convenience for any single resource.
 
 Keep one canonical worker. The worker owns RPC, identity, persistence,
 single-flight, resource generations, and canonical facts. Solid projects worker
@@ -97,7 +104,9 @@ massive empty module tree.
 - [ ] **R0.6 — Cache states.** Record fixture/bundle identity and missing, warm,
       and retained-cold navigation input metrics. Separate mocked test evidence from
       live-account evidence.
-- [ ] **R0.7 — Live-account gate.** If an account is unavailable, record the gate
+- [x] **R0.7 — Live-account gate recorded.** No live-account or installed-extension
+      path was verified in the September 13 session; see
+      [R1 verification](r1-verification.md). If an account is unavailable, record the gate
       rather than blocking unrelated implementation or implying live verification.
 
 The timing and size budgets in the quality section are targets until measured;
@@ -109,34 +118,46 @@ R0 does not claim them.
 
 | Checklist                                     | Lowest owner / implementation                                                                                                                                                                                    | Focused acceptance                                                                                                                                                                                          |
 | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [ ] **R1.1 — Migrate v1 storage.**            | `lib/engine/db.ts`: migrate existing first-page data into explicit `inbox:primary` ownership without changing account identity or `commitRevision`.                                                              | A v1 database opens with the same authorized inbox; migration is atomic and repeatable.                                                                                                                     |
-| [ ] **R1.2 — Resource-scoped writes.**        | Engine DB: generalized explicit keys (`inbox:primary`, page/cursor ownership, `history:<thread>`), resource-to-fact references, and reference-aware deletion. Never hold network work inside an IDB transaction. | Refreshing one resource neither deletes nor reorders facts still referenced by another; writes/deletions remain partition-isolated, and any explicit whole-partition clear is defined only when introduced. |
+| [x] **R1.1 — Migrate v1 storage.**            | `lib/engine/db.ts`: migrate existing first-page data into explicit `inbox:primary` ownership without changing account identity or `commitRevision`.                                                              | A v1 database opens with the same authorized inbox; migration is atomic and repeatable.                                                                                                                     |
+| [x] **R1.2 — Resource-scoped writes.**        | Engine DB: generalized explicit keys (`inbox:primary`, page/cursor ownership, `history:<thread>`), resource-to-fact references, and reference-aware deletion. Never hold network work inside an IDB transaction. | Refreshing one resource neither deletes nor reorders facts still referenced by another; writes/deletions remain partition-isolated, and any explicit whole-partition clear is defined only when introduced. |
 | [ ] **R1.3 — Resource state.**                | Worker engine: per resource expose availability, freshness, sync state, cursor, exhaustion, last sync time, and typed error.                                                                                     | Missing, stale, refreshing, exhausted, and failed resources render distinctly without inventing cached success.                                                                                             |
 | [ ] **R1.4 — Scoped single-flight.**          | Worker: one read flight per account/resource/cursor, bounded client interests, and session generation as routes subscribe/unsubscribe.                                                                           | Two windows share a request; stale generations cannot commit; losing all interests ends eligible detail work.                                                                                               |
 | [ ] **R1.5 — Coherent snapshots.**            | Worker snapshot projector: retain account/worker epoch, client sequence, and global revision coherently across multiple resources.                                                                               | Gaps, duplicate/irrelevant commits, account changes, and snapshot races converge without cross-account state.                                                                                               |
-| [ ] **R1.6 — Keep full snapshots initially.** | Worker RPC: continue complete snapshots while payloads are small. Add scoped delta batches only after measurement.                                                                                               | No durable replay log, generic sync framework, or client-side canonical store is introduced speculatively.                                                                                                  |
+| [x] **R1.6 — Keep full snapshots initially.** | Worker RPC: continue complete snapshots while payloads are small. Add scoped delta batches only after measurement.                                                                                               | No durable replay log, generic sync framework, or client-side canonical store is introduced speculatively.                                                                                                  |
 
 ### Inbox pagination
 
 Historical evidence: retired sidebar pagination and preload behavior (`h7rl`) and
 the `d001f89` tests. It must be rebuilt on resource ownership, not ported.
 
-| Checklist                             | Lowest owner / implementation                                                                                           | Focused acceptance                                                                                      |
-| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| [ ] **R1.7 — Page resources.**        | Provider/parser preserve each exact opaque cursor; engine merges ordered thread IDs while retaining page ownership.     | Loading page 2 keeps page 1 and account-scoped pin ordering; refresh does not erase history.            |
-| [ ] **R1.8 — Progress gates.**        | Engine cursor state detects duplicate cursors and successful responses that add no progress.                            | Duplicate/no-progress becomes a visible retryable resource failure, never an uncontrolled request loop. |
-| [ ] **R1.9 — Explicit continuation.** | Solid sends a load-more intent for the resource; the worker selects its current opaque cursor and provides retry state. | Previous pages stay usable while the next page fails or retries; UI never owns cursor selection.        |
+| Checklist                             | Lowest owner / implementation                                                                                           | Focused acceptance                                                                                                   |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| [ ] **R1.7 — Page resources.**        | Provider/parser preserve each exact opaque cursor; engine merges ordered thread IDs while retaining page ownership.     | Loading page 2 keeps page 1 and server pin facts; refresh does not erase history. Durable pin ordering begins in R2. |
+| [ ] **R1.8 — Progress gates.**        | Engine cursor state detects duplicate cursors and successful responses that add no progress.                            | Duplicate/no-progress becomes a visible retryable resource failure, never an uncontrolled request loop.              |
+| [ ] **R1.9 — Explicit continuation.** | Solid sends a load-more intent for the resource; the worker selects its current opaque cursor and provides retry state. | Previous pages stay usable while the next page fails or retries; UI never owns cursor selection.                     |
 
 ### Selection, routes, and layout
 
 | Checklist                                      | Lowest owner / implementation                                                                                                   | Focused acceptance                                                                                                |
 | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| [ ] **R1.10 — Cached selection.**              | Worker history subscription plus Solid route state opens cached facts first, then explicitly synchronizes.                      | Selecting a row does not discard inbox position and does not require a network response to show retained history. |
-| [ ] **R1.11 — Responsive route.**              | Solid: two panes on desktop; one real history route on compact screens with Back.                                               | Compact Back restores list window and keyboard focus; it is not a CSS-hidden second pane.                         |
-| [ ] **R1.12 — Resizable desktop sidebar.**     | Pointer/keyboard separator in Solid, initially window-local, clamped 280–520 px while leaving at least 320 px for conversation. | Pointer capture cleanup and keyboard resizing work; persistence waits for the global-settings service.            |
-| [ ] **R1.13 — Basic dark visual restoration.** | Solid tokens/media query, independently from a generic settings framework. A light/system choice is an optional later setting.  | All shipped dark surfaces are legible; no settings framework or empty rail placeholders are required.             |
+| [x] **R1.10 — Cached selection.**              | Worker history subscription plus Solid route state opens cached facts first, then explicitly synchronizes.                      | Selecting a row does not discard inbox position and does not require a network response to show retained history. |
+| [x] **R1.11 — Responsive route.**              | Solid: two panes on desktop; one real history route on compact screens with Back.                                               | Compact Back restores list window and keyboard focus; it is not a CSS-hidden second pane.                         |
+| [x] **R1.12 — Resizable desktop sidebar.**     | Pointer/keyboard separator in Solid, initially window-local, clamped 280–520 px while leaving at least 320 px for conversation. | Pointer capture cleanup and keyboard resizing work; persistence waits for the global-settings service.            |
+| [x] **R1.13 — Basic dark visual restoration.** | Solid tokens/media query, independently from a generic settings framework. A light/system choice is an optional later setting.  | All shipped dark surfaces are legible; no settings framework or empty rail placeholders are required.             |
 
 ### Bounded history and scrolling
+
+The first R1 implementation retains at most 400 messages and 20 page segments per
+conversation, 20 conversations per account, and 20 inbox segments. Its local
+`retentionLimited` state is distinct from provider exhaustion, but the
+per-conversation ceiling is transitional—not the intended cache policy.
+
+`icr-itlg` replaces it with the simpler rule: retain all successfully loaded
+pages for active and recent conversations; under account-level storage pressure,
+evict whole least-recently-used inactive histories first. Do not build moving
+per-conversation ranges or evict active/recent history merely to bound runtime
+memory. Solid snapshots and worker working sets remain interest-bounded, and the
+DOM still mounts at most 80 history rows.
 
 Historical evidence: `7ycg`, `zmst`, `os6s`, `b6uv`, `jouw`, and `5uvl` plus
 the retired history/store tests. The old unbounded/200-message buffer design is
@@ -145,9 +166,9 @@ superseded.
 | Checklist                            | Lowest owner / implementation                                                                                                                           | Focused acceptance                                                                                                                            |
 | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
 | [ ] **R1.14 — History resource.**    | Engine/provider/parser: `history:<thread>` starts at newest and persists exact older cursors and normalized facts.                                      | Initial history is bounded and survives inbox refresh/account-safe restart.                                                                   |
-| [ ] **R1.15 — Local-first ranges.**  | Solid history projection asks for newer/older logical IDs already cached before network. Use a 40-message slice and mount no more than 80 message rows. | Scrolling within cached coverage performs no request and never expands the mounted window without bound.                                      |
+| [x] **R1.15 — Local-first ranges.**  | Solid history projection asks for newer/older logical IDs already cached before network. Use a 40-message slice and mount no more than 80 message rows. | Scrolling within cached coverage performs no request and never expands the mounted window without bound.                                      |
 | [ ] **R1.16 — Logical restoration.** | Solid stores visited logical message ID plus offset, not raw scroll height.                                                                             | Return to a conversation restores the same content position after measurement changes.                                                        |
-| [ ] **R1.17 — Stable prepend.**      | History viewport uses measurements/`ResizeObserver` to compensate prepends.                                                                             | Older-page insertion shifts the visual anchor by less than the provisional 1 px budget.                                                       |
+| [x] **R1.17 — Stable prepend.**      | History viewport uses measurements/`ResizeObserver` to compensate prepends.                                                                             | Older-page insertion shifts the visual anchor by less than the provisional 1 px budget.                                                       |
 | [ ] **R1.18 — Controlled fill.**     | Newer traversal is local-only. The older sentinel may fill a short viewport one page at a time through explicit progress/exhaustion gates.              | Exhaustion stops older reads; an empty/short page cannot trigger uncontrolled draining, and no nonexistent newer network endpoint is implied. |
 
 ### Message projection
@@ -155,18 +176,19 @@ superseded.
 Historical evidence: retired rendering/replies work (`vlgo`, `3br2`, `61iz`,
 `4gws`) and surviving friendly parsing/date code (`a0ow`, `2on6`).
 
-- [ ] **R1.19 — Core content.** Project text, image, reel, post, inline/activity,
+- [x] **R1.19 — Core content.** Project text, image, reel, post, inline/activity,
       unsupported, and reply-preview rows from normalized domain facts.
-- [ ] **R1.20 — Semantic and presentation derivation.** Provider/parser code owns
+- [x] **R1.20 — Semantic and presentation derivation.** Provider/parser code owns
       friendly inbox/unsupported semantic summaries and numeric timestamp
       normalization. Solid derived viewport selectors own localized dates/times,
       sender grouping, and avatar layout without adding worker/cache grouping
-      entities. Derive incoming/group avatars and known-private-peer semantics from
-      canonical facts.
-- [ ] **R1.21 — Unavailable facts.** Render captured unavailable shares as an
+      entities. Derive incoming/group avatars and one-to-one peer presentation from
+      canonical `isGroup` and participant facts; do not infer Instagram account
+      privacy, which the current `User` contract does not expose.
+- [x] **R1.21 — Unavailable facts.** Render captured unavailable shares as an
       intentional accessible placeholder, distinct from network failure, with no
       futile fetch loop.
-- [ ] **R1.22 — Read remains explicit.** Merely opening or scrolling history must
+- [x] **R1.22 — Read remains explicit.** Merely opening or scrolling history must
       not mark it read before the durable command stage exists.
 
 Acceptance for R1.19–R1.22: each supported fixture has stable keys and accessible

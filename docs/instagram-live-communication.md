@@ -1,5 +1,13 @@
 # Instagram DM live communication
 
+**Status: protocol evidence and historical implementation notes.** The current
+Solid client does not poll or mark messages read. R2 restores worker-owned
+interest-driven polling and durable paired read commands; passive Iris/MQTT
+observation remains gated by fresh evidence in R5. See the
+[application contract](application-architecture.md) and
+[restoration checklist](solid-restoration-checklist.md). Do not restore a UI
+polling loop or UI-owned reconciliation store from the notes below.
+
 Source: `examples/www.instagram.com-live-communication.har`. Use the same common GraphQL form fields and headers as `instagram-har-useful-requests.md`; all calls below are `POST https://www.instagram.com/api/graphql`.
 
 ## Listen for new messages
@@ -7,7 +15,7 @@ Source: `examples/www.instagram.com-live-communication.har`. Use the same common
 - Bootstrap with `PolarisDirectInboxQuery` / `IGDThreadDetailQuery`, passing the live `device_id_for_iris_subscription`.
 - Instagram web keeps DMs live through its Iris/MQTT subscription; the HAR does not include decoded WebSocket frames, but the page CSP allows `wss://edge-chat.instagram.com` and the inbox queries are named `*_for_iris_subscription`.
 - Practical implementation path: keep an Instagram anchor tab open and listen in the page context to the app's live thread updates, or poll `IGDThreadDetailQuery` as a fallback using the newest seen message id/timestamp for de-dupe.
-- The extension currently uses that fallback. No authenticated two-account
+- The retired implementation used that fallback. No authenticated two-account
   session or decoded Iris/MQTT fixture was available to prove a narrow passive
   page-runtime event contract, so implementing a page observer would have meant
   guessing at private runtime or raw frame behavior. While the UI is visible it

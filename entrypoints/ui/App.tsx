@@ -1,132 +1,97 @@
-import { createMemo, createSignal, For, Show } from 'solid-js';
-import type { Message } from '../../lib/domain';
-import type { InboxData } from '../../lib/engine/inbox';
-import { computeChatWindow } from './virtual-list';
+import { createEffect, createSignal, onCleanup, Show } from 'solid-js';
+import { ConversationPane } from './ConversationPane';
 import { createInboxClient } from './client';
-
-function preview(message: Message | undefined) {
-    if (!message) return '';
-    if (message.kind === 'text' || message.kind === 'activity')
-        return message.text;
-    if (message.kind === 'reaction_log') return message.fragment;
-    if (message.kind === 'reel_share')
-        return (
-            message.caption ?? `${message.author} shared a ${message.mediaType}`
-        );
-    if (message.kind === 'inline_share') return message.title;
-    if (message.kind === 'image') return 'Photo';
-    return message.fallback.preview ?? message.fallback.label;
-}
-
-function ThreadRow(props: { id: string; inbox: InboxData; index: number }) {
-    const thread = () => props.inbox.threadsById[props.id];
-    const message = () => {
-        const id = thread().lastMessageId;
-        return id ? props.inbox.messagesById[id] : undefined;
-    };
-    return (
-        <li style={{ transform: `translateY(${props.index * 72}px)` }}>
-            <span class="solid-inbox__avatar" aria-hidden="true">
-                {thread().title.slice(0, 2).toUpperCase()}
-            </span>
-            <div>
-                <strong>{thread().title}</strong>
-                <p>{preview(message())}</p>
-            </div>
-            <Show when={thread().isUnread}>
-                <span class="solid-inbox__unread">Unread</span>
-            </Show>
-        </li>
-    );
-}
-
-function InboxList(props: { inbox: InboxData }) {
-    const [scrollTop, setScrollTop] = createSignal(0);
-    const chatWindow = createMemo(() =>
-        computeChatWindow(scrollTop(), props.inbox.orderedIds.length),
-    );
-    const ids = createMemo(() =>
-        props.inbox.orderedIds.slice(chatWindow().start, chatWindow().end),
-    );
-    return (
-        <div
-            class="solid-inbox__viewport"
-            role="region"
-            aria-label="Primary inbox"
-            tabindex={0}
-            onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
-        >
-            <ul
-                aria-label="Conversations"
-                style={{ height: `${props.inbox.orderedIds.length * 72}px` }}
-            >
-                <For each={ids()}>
-                    {(id, index) => (
-                        <ThreadRow
-                            id={id}
-                            inbox={props.inbox}
-                            index={chatWindow().start + index()}
-                        />
-                    )}
-                </For>
-            </ul>
-        </div>
-    );
-}
+import { InboxList } from './InboxList';
+import { createRouteController } from './route';
+import { Sidebar } from './Sidebar';
+import type { HistoryAnchor } from './history-window';
+import type { ListAnchor } from './virtual-list';
 
 export default function App() {
     const client = createInboxClient();
-    const status = createMemo(() => {
-        if (client.state.availability === 'absent') {
-            return client.state.synchronization === 'refreshing'
-                ? 'Checking Instagram…'
-                : 'Inbox unavailable';
-        }
-        if (client.state.synchronization === 'refreshing')
-            return 'Showing cached conversations · Refreshing…';
-        if (client.state.freshness === 'stale')
-            return 'Showing cached conversations';
-        return 'Up to date';
-    });
+    const route = createRouteController();
+    const [compact, setCompact] = createSignal(window.innerWidth < 700);
+    let listAnchor: ListAnchor | undefined;
+    const anchors: Record<string, HistoryAnchor | undefined> = {};
+    let lastAuthorizedAccountId: string | null = null;
+
+    const onResize = () => setCompact(window.innerWidth < 700);
+    window.addEventListener('resize', onResize);
+    onCleanup(() => window.removeEventListener('resize', onResize));
+
+    createEffect(
+        () => route.route().threadId,
+        (threadId) => client.select(threadId),
+    );
+    createEffect(
+        () => client.state.accountId,
+        (accountId) => {
+            if (
+                accountId &&
+                lastAuthorizedAccountId &&
+                accountId !== lastAuthorizedAccountId
+            ) {
+                route.inbox();
+                listAnchor = undefined;
+                for (const id of Object.keys(anchors)) delete anchors[id];
+            }
+            if (accountId) lastAuthorizedAccountId = accountId;
+        },
+    );
+
+    const inbox = () => client.state.inbox;
+    const facts = () => client.state.entities;
+    const selected = () => route.route().threadId;
+
+    const list = () => (
+        <InboxList
+            facts={facts()}
+            resource={inbox()}
+            selectedId={selected()}
+            restore={listAnchor}
+            onPosition={(anchor) => {
+                listAnchor = anchor;
+            }}
+            onSelect={(id) => route.open(id)}
+            onRefresh={client.refresh}
+            onLoadMore={client.loadMoreInbox}
+        />
+    );
+
+    const conversation = (threadId: string) => (
+        <ConversationPane
+            threadId={threadId}
+            facts={facts()}
+            history={client.state.histories[threadId]}
+            compact={compact()}
+            savedAnchor={anchors[threadId]}
+            saveAnchor={(anchor) => {
+                anchors[threadId] = anchor;
+            }}
+            onBack={route.inbox}
+            onRefresh={() => client.refreshHistory(threadId)}
+            onLoadOlder={() => client.loadOlderHistory(threadId)}
+        />
+    );
+
     return (
-        <main class="solid-inbox">
-            <header>
-                <div>
-                    <p>Read-only inbox</p>
-                    <h1>Messages</h1>
-                </div>
-                <button
-                    type="button"
-                    onClick={() => client.refresh()}
-                    disabled={client.state.synchronization === 'refreshing'}
-                >
-                    Refresh
-                </button>
-            </header>
-            <p class="solid-inbox__status" role="status">
-                {status()}
-            </p>
-            <Show when={client.state.error}>
-                <p class="solid-inbox__error" role="alert">
-                    {client.state.error?.message}{' '}
-                    <button type="button" onClick={() => client.refresh()}>
-                        Retry
-                    </button>
-                </p>
-            </Show>
-            <Show when={client.state.inbox} keyed>
-                {(inbox) => (
-                    <Show
-                        when={inbox.orderedIds.length > 0}
-                        fallback={
-                            <p class="solid-inbox__empty">
-                                No conversations in your primary inbox.
-                            </p>
+        <main class="solid-app">
+            <Show
+                when={compact()}
+                fallback={
+                    <Sidebar
+                        inbox={list()}
+                        conversation={
+                            <Show when={selected()}>
+                                {(id) => conversation(id())}
+                            </Show>
                         }
-                    >
-                        <InboxList inbox={inbox} />
-                    </Show>
-                )}
+                    />
+                }
+            >
+                <Show when={selected()} fallback={list()}>
+                    {(id) => conversation(id())}
+                </Show>
             </Show>
         </main>
     );

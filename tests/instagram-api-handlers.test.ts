@@ -731,18 +731,22 @@ test('every closed catalog operation has a semantic or secondary RPC route', () 
         Object.keys(INSTAGRAM_RPC_OPERATION_REACHABILITY).sort(),
         Object.keys(INSTAGRAM_GRAPHQL_OPERATIONS).sort(),
     );
-    assert.equal(Object.keys(INSTAGRAM_RPC_OPERATION_REACHABILITY).length, 40);
+    assert.equal(Object.keys(INSTAGRAM_RPC_OPERATION_REACHABILITY).length, 41);
     assert.equal(
         INSTAGRAM_RPC_OPERATION_REACHABILITY.IGDirectCutoutStickerShareMutation,
         'sendCutoutSticker',
     );
-    // Legacy operations remain deliberately outside the closed secondary catalog.
+    // Restored older-history reads now share the captured descriptor source.
     assert.equal(
         Object.hasOwn(
             INSTAGRAM_GRAPHQL_OPERATIONS,
             'IGDMessageListOffMsysQuery',
         ),
-        false,
+        true,
+    );
+    assert.equal(
+        INSTAGRAM_RPC_OPERATION_REACHABILITY.IGDMessageListOffMsysQuery,
+        'getThread',
     );
     assert.equal(
         Object.hasOwn(

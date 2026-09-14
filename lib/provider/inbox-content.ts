@@ -1,6 +1,6 @@
 import type browser from 'webextension-polyfill';
-import type { Page, Thread } from '../domain.ts';
-import type { InboxErrorKind } from '../engine/inbox.ts';
+import type { Page, Thread, ThreadMessages } from '../domain.ts';
+import { InboxError } from '../engine/inbox.ts';
 import { currentInstagramAccountId, harvestTokens } from '../ig-auth.ts';
 import {
     PROVIDER_PORT,
@@ -8,106 +8,90 @@ import {
     type ProviderResponse,
 } from './protocol.ts';
 
-function failure(kind: InboxErrorKind) {
-    const messages = {
-        auth: 'Instagram authentication is unavailable.',
-        provider_unavailable: 'Instagram provider is unavailable.',
-        protocol: 'Instagram inbox request failed.',
-        storage: 'Saved inbox data is unavailable.',
-    } satisfies Record<InboxErrorKind, string>;
-    return { ok: false as const, error: { kind, message: messages[kind] } };
-}
+type ReadDependencies = {
+    account(): string;
+    prepare(): Promise<void>;
+    inbox(cursor?: string): Promise<Page<Thread>>;
+    history(threadKey: string, cursor?: string): Promise<ThreadMessages>;
+};
+
 export async function executeInboxProviderRequest(
     request: ProviderRequest,
-    dependencies: {
-        account(): string;
-        prepare(): Promise<void>;
-        inbox(): Promise<Page<Thread>>;
-    },
+    dependencies: ReadDependencies,
 ): Promise<ProviderResponse> {
-    let accountId: string;
-    try {
-        accountId = dependencies.account();
-    } catch {
-        return {
-            kind: 'response',
-            id: request.id,
-            method: request.method,
-            result: failure('auth'),
-        };
+    let expected: string | undefined;
+    function verify() {
+        try {
+            const current = dependencies.account();
+            if (!current || (expected !== undefined && current !== expected))
+                throw new InboxError('auth');
+            return current;
+        } catch {
+            throw new InboxError('auth');
+        }
     }
-    if (request.method === 'account')
-        return {
-            kind: 'response',
-            id: request.id,
-            method: 'account',
-            result: { ok: true, value: accountId },
-        };
-    if (request.expectedAccountId !== accountId)
+    try {
+        expected = verify();
+        if (request.method === 'account') {
+            return {
+                kind: 'response',
+                id: request.id,
+                method: 'account',
+                result: { ok: true, value: expected },
+            };
+        }
+        if (request.expectedAccountId !== expected)
+            throw new InboxError('auth');
+        await dependencies.prepare();
+        verify();
+        if (request.method === 'history') {
+            const value = await dependencies.history(
+                request.threadKey,
+                request.cursor,
+            );
+            verify();
+            return {
+                kind: 'response',
+                id: request.id,
+                method: 'history',
+                result: { ok: true, value },
+            };
+        }
+        const value = await dependencies.inbox(request.cursor);
+        verify();
         return {
             kind: 'response',
             id: request.id,
             method: 'inbox',
-            result: failure('auth'),
+            result: { ok: true, value },
         };
-    let page: Page<Thread>;
-    try {
-        await dependencies.prepare();
-        page = await dependencies.inbox();
-    } catch {
+    } catch (cause) {
+        let error =
+            cause instanceof InboxError ? cause : new InboxError('protocol');
         try {
-            if (dependencies.account() !== accountId)
-                return {
-                    kind: 'response',
-                    id: request.id,
-                    method: 'inbox',
-                    result: failure('auth'),
-                };
+            verify();
         } catch {
-            return {
-                kind: 'response',
-                id: request.id,
-                method: 'inbox',
-                result: failure('auth'),
-            };
+            error = new InboxError('auth');
         }
         return {
             kind: 'response',
             id: request.id,
-            method: 'inbox',
-            result: failure('protocol'),
+            method: request.method,
+            result: {
+                ok: false,
+                error: { kind: error.kind, message: error.message },
+            },
         };
     }
-    try {
-        if (dependencies.account() !== accountId)
-            return {
-                kind: 'response',
-                id: request.id,
-                method: 'inbox',
-                result: failure('auth'),
-            };
-    } catch {
-        return {
-            kind: 'response',
-            id: request.id,
-            method: 'inbox',
-            result: failure('auth'),
-        };
-    }
-    return {
-        kind: 'response',
-        id: request.id,
-        method: 'inbox',
-        result: { ok: true, value: page },
-    };
 }
+
 export function registerInboxProvider(
     runtime: Pick<browser.Runtime.Static, 'connect'>,
-    getInbox: () => Promise<Page<Thread>>,
+    reads: Pick<ReadDependencies, 'inbox' | 'history'>,
 ) {
     function connect() {
         const port = runtime.connect({ name: PROVIDER_PORT });
-        // SAFETY: this named provider port receives only ProviderRequest values from the worker counterpart.
+        // SAFETY: the extension-owned provider Port receives its worker's closed ProviderRequest values.
         const receive = ((request: ProviderRequest) => {
             if (request.kind !== 'request') return;
             void executeInboxProviderRequest(request, {
@@ -115,12 +99,13 @@ export function registerInboxProvider(
                 prepare: async () => {
                     await harvestTokens(true);
                 },
-                inbox: getInbox,
+                inbox: reads.inbox,
+                history: reads.history,
             }).then((response) => {
                 try {
                     port.postMessage(response);
                 } catch {
-                    /* The validated provider port disconnected before delivery. */
+                    /* The requesting worker disconnected. */
                 }
             });
         }) as Parameters<typeof port.onMessage.addListener>[0];

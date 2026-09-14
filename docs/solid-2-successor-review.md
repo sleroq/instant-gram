@@ -2,10 +2,19 @@
 
 Date: 2026-09-10
 
-**Status:** Proposed successor architecture; not implemented. Until a migration phase
-lands and its documentation is updated, `docs/frontend-architecture.md` remains the
-source of truth for the current implementation. Historical review scores below have
-not been re-audited by this proposal.
+**Status: historical review of the retired Teact implementation, not the current
+implementation or delivery plan.** The review findings, scores, source line numbers,
+and migration phases below describe the September 10 baseline. Teact and its store
+have since been removed; do not recreate them or introduce a temporary Teact adapter.
+
+The [application architecture contract](application-architecture.md) supersedes this
+proposal's ownership decisions. The [restoration checklist](solid-restoration-checklist.md)
+and its R0–R5 beans control delivery; [frontend architecture](frontend-architecture.md)
+and the [engine contract](engine-inbox-contract.md) describe shipped functionality.
+In particular, complete bounded snapshots remain preferred over speculative delta
+infrastructure, identity verification precedes cached publication, plain TypeScript
+remains the worker default, and activity history is optional R6 scope. Historical
+lint findings are not current failures: the September 13 baseline passes the shared scan.
 
 ## Executive verdict
 
@@ -950,7 +959,11 @@ claim complete Instagram account history unless a captured authoritative API pro
 that scope. Reconciliation may append `observed_remote` state changes, but should not
 fabricate an event timestamp from a snapshot that has none.
 
-## Migration plan
+## Historical migration proposal — superseded by R0–R5
+
+Do not execute these phases against the current repository. The clean Solid restart
+already removed the old UI. Restore vertical worker/Solid slices directly using the
+restoration checklist; there is no legacy store or mutation authority to migrate.
 
 ### Phase 0 — freeze contracts and measurements
 
@@ -1116,7 +1129,7 @@ performance within budget.
 - `npm test`, typecheck, production build, `git diff --check`, and the shared ast-grep
   scan pass before each migration phase lands.
 
-## Final decision
+## Historical final decision
 
 The present implementation should be treated as a **high-quality behavioral prototype
 and protocol reference**, not as the base class of the next state architecture. Its

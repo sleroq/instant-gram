@@ -364,7 +364,7 @@ test('conversation pin and unpin use distinct current web documents and exact va
 });
 
 test('catalog is a closed DM allowlist', () => {
-    assert.equal(Object.keys(INSTAGRAM_GRAPHQL_OPERATIONS).length, 40);
+    assert.equal(Object.keys(INSTAGRAM_GRAPHQL_OPERATIONS).length, 41);
     assert.equal(
         isInstagramGraphqlOperationName('IGDirectReactionSendMutation'),
         true,

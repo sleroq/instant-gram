@@ -153,6 +153,11 @@ test('content execution preserves the account identity boundary', async () => {
         const response = await executeInboxProviderRequest(inboxRequest, {
             account,
             prepare: async () => undefined,
+            history: async () => ({
+                items: [],
+                hasNextPage: false,
+                viewerId: '1',
+            }),
             inbox: async () => {
                 reads++;
                 return { items: [], hasNextPage: false };
@@ -175,6 +180,11 @@ test('content execution preserves the account identity boundary', async () => {
                 throw new Error('gone');
             },
             prepare: async () => undefined,
+            history: async () => ({
+                items: [],
+                hasNextPage: false,
+                viewerId: '1',
+            }),
             inbox: async () => ({ items: [], hasNextPage: false }),
         });
         assert.equal(
@@ -192,6 +202,11 @@ test('content execution classifies failed reads and returns only parsed first-pa
             {
                 account: () => (++checks > 1 && changed ? '2' : '1'),
                 prepare: async () => undefined,
+                history: async () => ({
+                    items: [],
+                    hasNextPage: false,
+                    viewerId: '1',
+                }),
                 inbox: async () => {
                     throw new Error('read');
                 },
@@ -208,8 +223,38 @@ test('content execution classifies failed reads and returns only parsed first-pa
         {
             account: () => '1',
             prepare: async () => undefined,
+            history: async () => ({
+                items: [],
+                hasNextPage: false,
+                viewerId: '1',
+            }),
             inbox: async () => page,
         },
     );
     assert.deepEqual(response.result, { ok: true, value: page });
+});
+
+test('closed history and pagination requests verify account before reading', async () => {
+    let reads = 0;
+    const mismatch = await executeInboxProviderRequest(
+        {
+            kind: 'request',
+            id: 3,
+            method: 'history',
+            expectedAccountId: '1',
+            threadKey: 't',
+            cursor: 'c',
+        },
+        {
+            account: () => '2',
+            prepare: async () => undefined,
+            inbox: async () => ({ items: [], hasNextPage: false }),
+            history: async () => {
+                reads++;
+                return { items: [], hasNextPage: false, viewerId: '2' };
+            },
+        },
+    );
+    assert.equal(mismatch.result.ok, false);
+    assert.equal(reads, 0);
 });
