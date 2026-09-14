@@ -62,11 +62,21 @@ export function InboxList(props: {
     onPosition?(anchor: ListAnchor): void;
 }) {
     const [scrollTop, setScrollTop] = createSignal(0);
+    const orderedIds = createMemo(() => {
+        const pinned: string[] = [];
+        const unpinned: string[] = [];
+        for (const id of props.resource.orderedIds) {
+            (props.facts.threadsById[id]?.serverIsPin ? pinned : unpinned).push(
+                id,
+            );
+        }
+        return [...pinned, ...unpinned];
+    });
     const chatWindow = createMemo(() =>
-        computeChatWindow(scrollTop(), props.resource.orderedIds.length),
+        computeChatWindow(scrollTop(), orderedIds().length),
     );
     const ids = createMemo(() =>
-        props.resource.orderedIds.slice(chatWindow().start, chatWindow().end),
+        orderedIds().slice(chatWindow().start, chatWindow().end),
     );
     let viewport: HTMLDivElement | undefined;
     let allowRestore = true;
@@ -103,7 +113,7 @@ export function InboxList(props: {
             queueMicrotask(() => {
                 const element = viewport;
                 if (!element) return;
-                const index = props.resource.orderedIds.indexOf(id);
+                const index = orderedIds().indexOf(id);
                 if (index >= 0) {
                     element.scrollTop = Math.max(
                         0,
@@ -172,7 +182,7 @@ export function InboxList(props: {
                 <ul
                     aria-label="Conversations"
                     style={{
-                        height: `${props.resource.orderedIds.length * 72}px`,
+                        height: `${orderedIds().length * 72}px`,
                     }}
                 >
                     <For each={ids()}>
@@ -209,26 +219,32 @@ export function InboxList(props: {
                                             )}
                                         </span>
                                         <span class="solid-inbox__thread-copy">
-                                            <strong>
-                                                {thread()?.title ||
-                                                    'Conversation'}
-                                            </strong>
+                                            <span class="solid-inbox__thread-title">
+                                                <strong>
+                                                    {thread()?.title ||
+                                                        'Conversation'}
+                                                </strong>
+                                                <Show
+                                                    when={thread()?.serverIsPin}
+                                                >
+                                                    <svg
+                                                        class="solid-inbox__pin"
+                                                        aria-label="Pinned"
+                                                        viewBox="0 0 16 16"
+                                                    >
+                                                        <path d="M10.7 1.5 14.5 5.3l-1.4 1.4-.8-.8-2.6 3 .4 1.8-1.2 1.2-2.1-2.1-3.5 3.5-.6-.6 3.5-3.5-2.1-2.1 1.2-1.2 1.8.4 3-2.6-.8-.8 1.4-1.4Z" />
+                                                    </svg>
+                                                </Show>
+                                            </span>
                                             <span>
                                                 {preview(props.facts, id)}
                                             </span>
                                         </span>
-                                        <Show when={thread()?.serverIsPin}>
-                                            <span
-                                                class="solid-inbox__pin"
-                                                aria-label="Pinned"
-                                            >
-                                                ●
-                                            </span>
-                                        </Show>
                                         <Show when={thread()?.isUnread}>
-                                            <span class="solid-inbox__unread">
-                                                Unread
-                                            </span>
+                                            <span
+                                                class="solid-inbox__unread"
+                                                aria-label="Unread"
+                                            />
                                         </Show>
                                     </button>
                                 </li>

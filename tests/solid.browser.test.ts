@@ -98,6 +98,8 @@ async function openInbox(): Promise<{ page: Page; errors: string[] }> {
                 },
             ]),
         );
+        threadsById['thread-20'].serverIsPin = true;
+        threadsById['thread-1'].isUnread = true;
         const current: InboxProjection = {
             accountId: '1',
             accountEpoch: 1,
@@ -297,6 +299,27 @@ test('snapshots preserve rows, cached errors remain usable, and virtualization s
     await page.getByText('thread-800').waitFor();
     assert.ok((await page.getByRole('listitem').count()) <= 31);
     assert.equal(await page.evaluate(() => window.solidTest.refreshes), 1);
+    assert.deepEqual(errors, []);
+    await page.close();
+});
+
+test('pinned conversations lead the inbox and row status uses icons', async () => {
+    const { page, errors } = await openInbox();
+
+    const rows = page.locator('[data-thread-id]');
+    await assert.doesNotReject(() => rows.first().waitFor());
+    assert.equal(
+        await rows.first().getAttribute('data-thread-id'),
+        'thread-20',
+    );
+    assert.equal(
+        await rows.first().locator('[aria-label="Pinned"]').count(),
+        1,
+    );
+
+    const unread = page.locator('[data-thread-id="thread-1"]');
+    assert.equal(await unread.locator('[aria-label="Unread"]').count(), 1);
+    assert.equal((await unread.textContent())?.includes('Unread'), false);
     assert.deepEqual(errors, []);
     await page.close();
 });

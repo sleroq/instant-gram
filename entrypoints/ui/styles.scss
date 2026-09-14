@@ -169,6 +169,16 @@ a:focus-visible {
     min-width: 0;
     flex: 1;
 }
+.solid-inbox__thread-title {
+    display: flex !important;
+    align-items: center;
+    gap: 5px;
+}
+.solid-inbox__thread-title strong {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
 .solid-inbox__thread-copy strong,
 .solid-inbox__thread-copy span {
     display: block;
@@ -182,13 +192,18 @@ a:focus-visible {
     font-size: 13px;
 }
 .solid-inbox__pin {
+    width: 13px;
+    height: 13px;
+    flex: 0 0 13px;
+    fill: currentcolor;
     color: #94b8ff;
-    font-size: 10px;
 }
 .solid-inbox__unread {
-    color: #94b8ff;
-    font-size: 11px;
-    font-weight: 700;
+    width: 8px;
+    height: 8px;
+    flex: 0 0 8px;
+    border-radius: 50%;
+    background: #94b8ff;
 }
 .solid-inbox__list-footer {
     padding: 10px 20px 14px;
