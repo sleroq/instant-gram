@@ -155,7 +155,8 @@ export function ConversationPane(props: {
                 const savedIndex = props.savedAnchor
                     ? ids.indexOf(props.savedAnchor.id)
                     : -1;
-                anchor = savedIndex >= 0 ? props.savedAnchor : undefined;
+                anchor = props.savedAnchor;
+                if (ids.length > 0 && savedIndex < 0) anchor = undefined;
                 setRange(
                     savedIndex >= 0
                         ? windowContaining(ids.length, savedIndex)
@@ -163,7 +164,7 @@ export function ConversationPane(props: {
                 );
                 setOlderIntent('');
                 firstRender = true;
-            } else if (anchor && !ids.includes(anchor.id)) {
+            } else if (anchor && ids.length > 0 && !ids.includes(anchor.id)) {
                 anchor = undefined;
                 setRange(initialHistoryWindow(ids.length));
                 firstRender = true;

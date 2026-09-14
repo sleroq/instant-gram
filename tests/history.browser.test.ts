@@ -278,6 +278,65 @@ test('desktop routing switches between selected conversations', async () => {
     await page.close();
 });
 
+test('desktop chat switching restores each conversation scroll anchor', async () => {
+    const page = await openHistory();
+    const viewport = page.locator('.solid-history__viewport');
+    await viewport.evaluate((element) => {
+        element.scrollTop = element.scrollHeight / 2;
+        element.dispatchEvent(new Event('scroll'));
+    });
+    const before = await viewport.evaluate((element) => {
+        const boundary = element.getBoundingClientRect().top;
+        const row = [...element.querySelectorAll<HTMLElement>('[data-message-id]')]
+            .map((item) => ({ item, rect: item.getBoundingClientRect() }))
+            .find(({ rect }) => rect.bottom > boundary)!;
+        return {
+            id: row.item.dataset.messageId,
+            offset: boundary - row.rect.top,
+        };
+    });
+
+    await page.locator('[data-thread-id="thread-1"]').click();
+    await page.getByText('Second conversation message').waitFor();
+    await page.evaluate(() => {
+        const next = structuredClone(window.historyTest.current);
+        delete next.histories['thread-0'];
+        window.historyTest.send(next, 2);
+    });
+    await page.locator('[data-thread-id="thread-0"]').click();
+    await page.getByText('Loading history…').waitFor();
+    await page.evaluate(() => {
+        const next = structuredClone(window.historyTest.current);
+        next.histories['thread-0'] = structuredClone(
+            window.historyTest.current.histories['thread-1'],
+        );
+        next.histories['thread-0'].threadId = 'thread-0';
+        next.histories['thread-0'].orderedIds = Array.from(
+            { length: 120 },
+            (_, index) => `message-${index}`,
+        );
+        window.historyTest.send(next, 3);
+    });
+    await page.locator(`[data-message-id="${before.id}"]`).waitFor();
+
+    const after = await viewport.evaluate((element) => {
+        const boundary = element.getBoundingClientRect().top;
+        const row = [...element.querySelectorAll<HTMLElement>('[data-message-id]')]
+            .map((item) => ({ item, rect: item.getBoundingClientRect() }))
+            .find(({ rect }) => rect.bottom > boundary)!;
+        return {
+            id: row.item.dataset.messageId,
+            offset: boundary - row.rect.top,
+        };
+    });
+    assert.equal(after.id, before.id);
+    assert.ok(
+        Math.abs(after.offset - before.offset) < 1,
+        `anchor offset moved ${after.offset - before.offset}px`,
+    );
+    await page.close();
+});
+
 test('prepending cached history keeps the logical first visible message anchored', async () => {
     const page = await openHistory();
     const viewport = page.locator('.solid-history__viewport');
