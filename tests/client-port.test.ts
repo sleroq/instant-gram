@@ -50,11 +50,20 @@ test('real client Port forwards detail interest, keeps sequence across routes, a
     };
     const interests: Array<string | undefined> = [];
     let released = 0;
+    let active = 0;
     const engine: InboxEngine = {
         subscribe(listener, threadId) {
             interests.push(threadId);
-            listener(projection);
+            listener({
+                ...projection,
+                inbox: {
+                    ...projection.inbox,
+                    synchronization: active === 0 ? 'refreshing' : 'idle',
+                },
+            });
+            active++;
             return () => {
+                active--;
                 released++;
             };
         },
@@ -95,6 +104,10 @@ test('real client Port forwards detail interest, keeps sequence across routes, a
     assert.deepEqual(
         sent.map((value) => value.sequence),
         [1, 2],
+    );
+    assert.deepEqual(
+        sent.map((value) => value.projection.inbox.synchronization),
+        ['refreshing', 'idle'],
     );
     assert.equal(released, 1);
     port.disconnect();

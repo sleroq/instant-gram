@@ -35,7 +35,9 @@ export function registerInboxClientPorts(
         }
         const command = unknownCommand;
         if (command.kind === 'subscribe') {
-            unsubscribe?.();
+            // Acquire the replacement interest first so a route change cannot
+            // transiently cancel a shared detail flight needed by both routes.
+            const previous = unsubscribe;
             unsubscribe = engine.subscribe((projection) => {
                 if (closed) return;
                 port.postMessage({
@@ -44,6 +46,7 @@ export function registerInboxClientPorts(
                     projection,
                 } satisfies SnapshotMessage);
             }, command.threadId);
+            previous?.();
         } else if (command.kind === 'refresh') handle(engine.refresh());
         else if (command.kind === 'load-more-inbox')
             handle(engine.loadMoreInbox());
