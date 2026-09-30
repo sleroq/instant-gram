@@ -1,4 +1,9 @@
 import type { Message, Page, Thread, ThreadMessages } from '../domain.ts';
+import { Clock, Context, Effect, FiberSet, Layer, Semaphore } from 'effect';
+import type { InboxRepositoryEffects } from './db.ts';
+import { InboxRepositoryService } from './db.ts';
+import type { InboxProviderEffects } from '../provider/inbox.ts';
+import { InboxProviderService } from '../provider/inbox.ts';
 import {
     InboxError,
     emptyEntities,
@@ -50,6 +55,20 @@ export type InboxEngine = {
     loadOlderHistory(threadId: string): Promise<void>;
     snapshot(): InboxProjection;
 };
+
+export interface InboxEngineEffects {
+    readonly subscribe: InboxEngine['subscribe'];
+    readonly refresh: Effect.Effect<void>;
+    readonly loadMoreInbox: Effect.Effect<void>;
+    readonly refreshHistory: (threadId: string) => Effect.Effect<void>;
+    readonly loadOlderHistory: (threadId: string) => Effect.Effect<void>;
+    readonly snapshot: () => InboxProjection;
+}
+
+export class InboxEngineService extends Context.Service<
+    InboxEngineService,
+    InboxEngineEffects
+>()('icr/InboxEngine') {}
 
 const MAX_INBOX_SEGMENTS = 20;
 const MAX_HISTORY_ROOTS = 20;
@@ -242,12 +261,13 @@ type Listener = {
     authorized: boolean;
 };
 
-export function createInboxEngine(
-    repository: InboxRepository,
-    provider: InboxProvider,
-): InboxEngine {
+export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
+    repository: InboxRepositoryEffects,
+    provider: InboxProviderEffects,
+    fork: <A, E>(effect: Effect.Effect<A, E>) => void = Effect.runFork,
+) {
     const listeners = new Map<(value: InboxProjection) => void, Listener>();
-    const flights = new Map<string, Promise<void>>();
+    const flights = new Map<string, Effect.Effect<void>>();
     const inboxSegments = new Map<string, PersistedResource>();
     const historySegments = new Map<string, PersistedResource>();
     const acceptedReadOrder = new Map<string, number>();
@@ -270,41 +290,28 @@ export function createInboxEngine(
         },
         histories: {},
     };
-    let identityFlight: Promise<string> | undefined;
-    let bootstrapFlight: Promise<void> | undefined;
+    let identityFlight: Effect.Effect<string, InboxError> | undefined;
+    let bootstrapFlight: Effect.Effect<void, InboxError> | undefined;
+    let bootstrapInboxFlight: Effect.Effect<void, InboxError> | undefined;
     let hydratedEpoch = -1;
     let verified = false;
     let readOrder = 0;
-    let networkReads = 0;
-    const networkWaiters: Array<() => void> = [];
-    let lane = Promise.resolve();
+    const commitPermit = yield* Semaphore.make(1);
+    const networkPermit = yield* Semaphore.make(MAX_NETWORK_READS);
 
-    function inLane<T>(work: () => Promise<T>): Promise<T> {
-        const result = lane.then(work, work);
-        lane = result.then(
-            () => undefined,
-            () => undefined,
-        );
-        return result;
+    function inLane<A, E>(work: Effect.Effect<A, E>): Effect.Effect<A, E> {
+        return commitPermit.withPermits(1)(work);
     }
 
-    async function network<T>(
-        work: () => Promise<T>,
+    function network<T, E>(
+        work: Effect.Effect<T, E>,
         canStart = () => true,
-    ): Promise<T | undefined> {
-        if (networkReads >= MAX_NETWORK_READS)
-            await new Promise<void>((resolve) => networkWaiters.push(resolve));
-        if (!canStart()) {
-            networkWaiters.shift()?.();
-            return undefined;
-        }
-        networkReads++;
-        try {
-            return await work();
-        } finally {
-            networkReads--;
-            networkWaiters.shift()?.();
-        }
+    ): Effect.Effect<T | undefined, E> {
+        return networkPermit.withPermits(1)(
+            Effect.suspend(() =>
+                canStart() ? work : Effect.succeed(undefined),
+            ),
+        );
     }
 
     function inboxChain(): PersistedResource[] {
@@ -665,52 +672,74 @@ export function createInboxEngine(
         }
     }
 
-    async function hydrate(accountId: string, keys: string[], epoch: number) {
-        await inLane(async () => {
-            const result = await repository.readResources(accountId, keys);
+    function hydrate(accountId: string, keys: string[], epoch: number) {
+        return inLane(
+            Effect.gen(function* () {
+                const result = yield* repository.readResources(accountId, keys);
+                if (
+                    epoch !== state.accountEpoch ||
+                    accountId !== state.accountId
+                )
+                    return;
+                installRead(result);
+                update(state);
+            }),
+        );
+    }
+
+    function bootstrap(
+        accountId: string,
+        epoch: number,
+    ): Effect.Effect<void, InboxError> {
+        return Effect.gen(function* () {
+            const keys = ['inbox:primary', 'inbox:primary:page:*'];
+            for (const id of detailInterest.keys())
+                keys.push(`history:${id}`, `history:${id}:page:*`);
+            const hydrated = yield* Effect.result(
+                hydrate(accountId, [...new Set(keys)], epoch),
+            );
+            if (hydrated._tag === 'Failure') {
+                const cause = hydrated.failure;
+                if (
+                    epoch === state.accountEpoch &&
+                    accountId === state.accountId
+                ) {
+                    setInboxRuntime(
+                        failed('refresh', errorOf(cause, 'storage')),
+                    );
+                }
+            }
+            hydratedEpoch = epoch;
             if (epoch !== state.accountEpoch || accountId !== state.accountId)
                 return;
-            installRead(result);
-            update(state);
+            const inboxFlight = runInbox(undefined, accountId, epoch);
+            const sharedInbox = yield* Effect.cached(inboxFlight);
+            bootstrapInboxFlight = sharedInbox;
+            fork(
+                Effect.andThen(
+                    sharedInbox,
+                    Effect.sync(() => {
+                        for (const id of detailInterest.keys()) {
+                            if (knownThread(id))
+                                fork(runHistory(id, false, false));
+                        }
+                    }),
+                ),
+            );
+            for (const id of detailInterest.keys()) {
+                if (knownThread(id)) fork(runHistory(id, false, false));
+            }
         });
     }
 
-    async function bootstrap(accountId: string, epoch: number) {
-        const keys = ['inbox:primary', 'inbox:primary:page:*'];
-        for (const id of detailInterest.keys())
-            keys.push(`history:${id}`, `history:${id}:page:*`);
-        try {
-            await hydrate(accountId, [...new Set(keys)], epoch);
-        } catch (cause) {
-            if (epoch === state.accountEpoch && accountId === state.accountId) {
-                setInboxRuntime(failed('refresh', errorOf(cause, 'storage')));
-            }
-        }
-        hydratedEpoch = epoch;
-        if (epoch !== state.accountEpoch || accountId !== state.accountId)
-            return;
-        const inboxFlight = runInbox(undefined, accountId, epoch);
-        void inboxFlight
-            .then(() => {
-                for (const id of detailInterest.keys()) {
-                    if (knownThread(id))
-                        void runHistory(id, false, false).catch(
-                            () => undefined,
-                        );
-                }
-            })
-            .catch(() => undefined);
-        for (const id of detailInterest.keys()) {
-            if (knownThread(id))
-                void runHistory(id, false, false).catch(() => undefined);
-        }
-    }
-
-    async function ensureIdentity(force = false): Promise<string> {
-        if (identityFlight) return identityFlight;
+    const ensureIdentity = Effect.fn('InboxEngine.ensureIdentity')(function* (
+        force = false,
+    ): Effect.fn.Return<string, InboxError> {
+        if (identityFlight) return yield* identityFlight;
         if (!force && verified && state.accountId) return state.accountId;
         const identityEpoch = state.accountEpoch;
-        const flight = provider.account().then(async (accountId) => {
+        const flight = Effect.gen(function* () {
+            const accountId = yield* provider.account;
             if (
                 identityEpoch !== state.accountEpoch &&
                 state.accountId !== null
@@ -720,33 +749,45 @@ export function createInboxEngine(
             verified = true;
             if (hydratedEpoch !== state.accountEpoch && !bootstrapFlight) {
                 const epoch = state.accountEpoch;
-                bootstrapFlight = bootstrap(accountId, epoch).finally(() => {
-                    bootstrapFlight = undefined;
-                });
+                const current = bootstrap(accountId, epoch).pipe(
+                    Effect.ensuring(
+                        Effect.sync(() => {
+                            if (bootstrapFlight === current)
+                                bootstrapFlight = undefined;
+                        }),
+                    ),
+                );
+                bootstrapFlight = current;
             }
-            await bootstrapFlight;
+            if (bootstrapFlight) yield* bootstrapFlight;
             return accountId;
         });
-        const checked = flight
-            .catch((cause) => {
-                if (identityEpoch === state.accountEpoch) {
-                    verified = false;
-                    const error = errorOf(cause, 'provider_unavailable');
-                    if (error.kind === 'auth') resetAccount(null, error);
-                    else
-                        setInboxRuntime({
-                            freshness: 'stale',
-                            ...failed('refresh', error),
-                        });
-                }
-                throw cause;
-            })
-            .finally(() => {
-                if (identityFlight === checked) identityFlight = undefined;
-            });
+        let checked!: Effect.Effect<string, InboxError>;
+        checked = yield* flight.pipe(
+            Effect.tapError((cause) =>
+                Effect.sync(() => {
+                    if (identityEpoch === state.accountEpoch) {
+                        verified = false;
+                        const error = errorOf(cause, 'provider_unavailable');
+                        if (error.kind === 'auth') resetAccount(null, error);
+                        else
+                            setInboxRuntime({
+                                freshness: 'stale',
+                                ...failed('refresh', error),
+                            });
+                    }
+                }),
+            ),
+            Effect.ensuring(
+                Effect.sync(() => {
+                    if (identityFlight === checked) identityFlight = undefined;
+                }),
+            ),
+            Effect.cached,
+        );
         identityFlight = checked;
-        return checked;
-    }
+        return yield* checked;
+    });
 
     function knownThread(threadId: string): boolean {
         return Boolean(
@@ -860,15 +901,15 @@ export function createInboxEngine(
         };
     }
 
-    async function runInbox(
+    const runInbox = Effect.fn('InboxEngine.runInbox')(function* (
         cursor: string | undefined,
         accountId?: string,
         epoch = state.accountEpoch,
-    ): Promise<void> {
-        const account = accountId ?? (await ensureIdentity());
+    ): Effect.fn.Return<void, InboxError> {
+        const account = accountId ?? (yield* ensureIdentity());
         const key = `inbox:${state.accountEpoch}:${account}:${cursor ?? 'head'}`;
         const current = flights.get(key);
-        if (current) return current;
+        if (current) return yield* current;
         if (epoch !== state.accountEpoch || account !== state.accountId) return;
         if (cursor && state.inbox.retentionLimited) return;
         const order = ++readOrder;
@@ -881,169 +922,183 @@ export function createInboxEngine(
             ? state.inbox.error
             : undefined;
         setInboxRuntime({ synchronization: 'refreshing' });
-        const work = network(
-            () => provider.inbox(account, cursor),
-            () => epoch === state.accountEpoch && account === state.accountId,
-        )
-            .then((page) =>
-                inLane(async () => {
-                    if (!page) {
-                        if (
-                            epoch === state.accountEpoch &&
-                            account === state.accountId &&
-                            state.inbox.synchronization === 'refreshing'
-                        )
-                            setInboxRuntime({ synchronization: 'idle' });
-                        return;
-                    }
-                    if (
-                        epoch !== state.accountEpoch ||
-                        account !== state.accountId
-                    )
-                        return;
-                    const normalized = normalizePage(page);
-                    const chain = inboxChain();
-                    const activeIds = chain.flatMap(
-                        (resource) => resource.orderedIds,
-                    );
-                    if (
-                        noProgress(
-                            cursor,
-                            page.cursor,
-                            normalized.resource.orderedIds,
-                            activeIds,
-                            chain,
-                            page.hasNextPage,
-                        )
-                    ) {
-                        setInboxRuntime(
-                            failed(
-                                'continuation',
-                                errorOf(
-                                    new InboxError('no_progress'),
-                                    'no_progress',
-                                ),
-                            ),
-                        );
-                        return;
-                    }
-                    const resource = {
-                        ...normalized.resource,
-                        synchronization: 'idle' as const,
-                    };
-                    const resourceKey = resourceKeyForInbox(cursor);
-                    const deleteKeys = inboxDeletes(resourceKey) ?? [];
-                    if (
-                        !inboxSegments.has(resourceKey) &&
-                        deleteKeys.length === 0 &&
-                        inboxSegments.size >= MAX_INBOX_SEGMENTS
-                    ) {
-                        setInboxRuntime({
-                            ...failed('continuation', capacityError()),
-                            retentionLimited: true,
-                        });
-                        return;
-                    }
-                    const merged = copyFacts(state.entities);
-                    const acceptedNow = mergeFacts(
-                        merged,
-                        normalized.entities,
-                        acceptedReadOrder,
-                        order,
-                    );
-                    const record = recordFor(
-                        resourceKey,
-                        resource,
-                        merged,
-                        undefined,
-                        undefined,
-                        cursor,
-                    );
-                    try {
-                        const commitUpdate = {
-                            resources: [record],
-                            entities: merged,
-                            deleteKeys,
-                        };
-                        const committed = await repository.commitResources(
-                            account,
-                            commitUpdate,
-                        );
+        const work = Effect.matchEffect(
+            network(
+                provider.inbox(account, cursor),
+                () =>
+                    epoch === state.accountEpoch && account === state.accountId,
+            ),
+            {
+                onSuccess: (page) =>
+                    inLane(
+                        Effect.gen(function* () {
+                            if (!page) {
+                                if (
+                                    epoch === state.accountEpoch &&
+                                    account === state.accountId &&
+                                    state.inbox.synchronization === 'refreshing'
+                                )
+                                    setInboxRuntime({
+                                        synchronization: 'idle',
+                                    });
+                                return;
+                            }
+                            if (
+                                epoch !== state.accountEpoch ||
+                                account !== state.accountId
+                            )
+                                return;
+                            const fetchedAt = yield* Clock.currentTimeMillis;
+                            const normalized = normalizePage(page, fetchedAt);
+                            const chain = inboxChain();
+                            const activeIds = chain.flatMap(
+                                (resource) => resource.orderedIds,
+                            );
+                            if (
+                                noProgress(
+                                    cursor,
+                                    page.cursor,
+                                    normalized.resource.orderedIds,
+                                    activeIds,
+                                    chain,
+                                    page.hasNextPage,
+                                )
+                            ) {
+                                setInboxRuntime(
+                                    failed(
+                                        'continuation',
+                                        errorOf(
+                                            new InboxError('no_progress'),
+                                            'no_progress',
+                                        ),
+                                    ),
+                                );
+                                return;
+                            }
+                            const resource = {
+                                ...normalized.resource,
+                                synchronization: 'idle' as const,
+                            };
+                            const resourceKey = resourceKeyForInbox(cursor);
+                            const deleteKeys = inboxDeletes(resourceKey) ?? [];
+                            if (
+                                !inboxSegments.has(resourceKey) &&
+                                deleteKeys.length === 0 &&
+                                inboxSegments.size >= MAX_INBOX_SEGMENTS
+                            ) {
+                                setInboxRuntime({
+                                    ...failed('continuation', capacityError()),
+                                    retentionLimited: true,
+                                });
+                                return;
+                            }
+                            const merged = copyFacts(state.entities);
+                            const acceptedNow = mergeFacts(
+                                merged,
+                                normalized.entities,
+                                acceptedReadOrder,
+                                order,
+                            );
+                            const record = recordFor(
+                                resourceKey,
+                                resource,
+                                merged,
+                                undefined,
+                                undefined,
+                                cursor,
+                            );
+                            const commitResult = yield* Effect.result(
+                                repository.commitResources(account, {
+                                    resources: [record],
+                                    entities: merged,
+                                    deleteKeys,
+                                }),
+                            );
+                            if (commitResult._tag === 'Success') {
+                                const committed = commitResult.success;
+                                if (
+                                    epoch !== state.accountEpoch ||
+                                    account !== state.accountId
+                                )
+                                    return;
+                                for (const deleteKey of deleteKeys)
+                                    inboxSegments.delete(deleteKey);
+                                installRead(committed, true, {
+                                    inbox: true,
+                                    histories: new Set(),
+                                });
+                                pruneRuntimeReferences();
+                                for (const key of acceptedNow)
+                                    acceptedReadOrder.set(key, order);
+                                const rebuilt = inboxProjection();
+                                const inbox = {
+                                    ...rebuilt,
+                                    freshness: 'fresh' as const,
+                                    synchronization:
+                                        failedTailCursor &&
+                                        rebuilt.cursor === failedTailCursor
+                                            ? ('error' as const)
+                                            : ('idle' as const),
+                                };
+                                if (
+                                    failedTailCursor &&
+                                    rebuilt.cursor === failedTailCursor &&
+                                    failedTailError
+                                ) {
+                                    inbox.error = failedTailError;
+                                    inbox.failedOperation = 'continuation';
+                                }
+                                update({
+                                    ...state,
+                                    inbox,
+                                });
+                            } else {
+                                const cause = commitResult.failure;
+                                setInboxRuntime({
+                                    freshness: 'stale',
+                                    ...failed(
+                                        cursor ? 'continuation' : 'refresh',
+                                        errorOf(cause, 'storage'),
+                                    ),
+                                });
+                            }
+                        }),
+                    ),
+                onFailure: (cause) =>
+                    Effect.sync(() => {
                         if (
                             epoch !== state.accountEpoch ||
                             account !== state.accountId
                         )
                             return;
-                        for (const deleteKey of deleteKeys)
-                            inboxSegments.delete(deleteKey);
-                        installRead(committed, true, {
-                            inbox: true,
-                            histories: new Set(),
-                        });
-                        pruneRuntimeReferences();
-                        for (const key of acceptedNow)
-                            acceptedReadOrder.set(key, order);
-                        const rebuilt = inboxProjection();
-                        const inbox = {
-                            ...rebuilt,
-                            freshness: 'fresh' as const,
-                            synchronization:
-                                failedTailCursor &&
-                                rebuilt.cursor === failedTailCursor
-                                    ? ('error' as const)
-                                    : ('idle' as const),
-                        };
-                        if (
-                            failedTailCursor &&
-                            rebuilt.cursor === failedTailCursor &&
-                            failedTailError
-                        ) {
-                            inbox.error = failedTailError;
-                            inbox.failedOperation = 'continuation';
-                        }
-                        update({
-                            ...state,
-                            inbox,
-                        });
-                    } catch (cause) {
-                        setInboxRuntime({
-                            freshness: 'stale',
-                            ...failed(
-                                cursor ? 'continuation' : 'refresh',
-                                errorOf(cause, 'storage'),
-                            ),
-                        });
-                    }
-                }),
-            )
-            .catch((cause) => {
-                if (epoch !== state.accountEpoch || account !== state.accountId)
-                    return;
-                const error = errorOf(cause, 'protocol');
-                if (error.kind === 'auth') resetAccount(null, error);
-                else
-                    setInboxRuntime(
-                        failed(cursor ? 'continuation' : 'refresh', error),
-                    );
-            });
-        flights.set(key, work);
-        void work.then(
-            () => {
-                if (flights.get(key) === work) flights.delete(key);
-            },
-            () => {
-                if (flights.get(key) === work) flights.delete(key);
+                        const error = errorOf(cause, 'protocol');
+                        if (error.kind === 'auth') resetAccount(null, error);
+                        else
+                            setInboxRuntime(
+                                failed(
+                                    cursor ? 'continuation' : 'refresh',
+                                    error,
+                                ),
+                            );
+                    }),
             },
         );
-        return work;
-    }
+        const shared = yield* Effect.cached(work);
+        flights.set(key, shared);
+        yield* Effect.ensuring(
+            shared,
+            Effect.sync(() => {
+                if (flights.get(key) === shared) flights.delete(key);
+            }),
+        );
+    });
 
-    async function runHistory(
+    const runHistory = Effect.fn('InboxEngine.runHistory')(function* (
         threadId: string,
         older: boolean,
         force: boolean,
-    ): Promise<void> {
-        const account = await ensureIdentity();
+    ): Effect.fn.Return<void, InboxError> {
+        const account = yield* ensureIdentity();
         const interest = detailInterest.get(threadId) ?? 0;
         const generation = detailGeneration.get(threadId) ?? 0;
         if (!knownThread(threadId) || interest === 0) return;
@@ -1055,272 +1110,295 @@ export function createInboxEngine(
         const cursor = older ? current?.cursor : undefined;
         const key = `history:${state.accountEpoch}:${threadId}:${generation}:${cursor ?? 'head'}`;
         const existing = flights.get(key);
-        if (existing) return existing;
+        if (existing) return yield* existing;
         const epoch = state.accountEpoch;
         const order = ++readOrder;
         setHistoryRuntime(threadId, {
             synchronization: 'refreshing',
             error: undefined,
         });
-        const work = network(
-            () =>
+        const work = Effect.matchEffect(
+            network(
                 provider.history(
                     account,
                     state.entities.threadsById[threadId]?.threadFbid ??
                         threadId,
                     cursor,
                 ),
-            () =>
-                epoch === state.accountEpoch &&
-                account === state.accountId &&
-                (detailInterest.get(threadId) ?? 0) > 0 &&
-                detailGeneration.get(threadId) === generation,
-        )
-            .then((result) =>
-                inLane(async () => {
-                    if (!result) {
+                () =>
+                    epoch === state.accountEpoch &&
+                    account === state.accountId &&
+                    (detailInterest.get(threadId) ?? 0) > 0 &&
+                    detailGeneration.get(threadId) === generation,
+            ),
+            {
+                onSuccess: (result) =>
+                    inLane(
+                        Effect.gen(function* () {
+                            if (!result) {
+                                if (
+                                    epoch === state.accountEpoch &&
+                                    detailGeneration.get(threadId) ===
+                                        generation &&
+                                    (detailInterest.get(threadId) ?? 0) > 0
+                                )
+                                    setHistoryRuntime(threadId, {
+                                        synchronization: 'idle',
+                                    });
+                                return;
+                            }
+                            if (
+                                epoch !== state.accountEpoch ||
+                                account !== state.accountId
+                            )
+                                return;
+                            if (
+                                (detailInterest.get(threadId) ?? 0) === 0 ||
+                                detailGeneration.get(threadId) !== generation
+                            )
+                                return;
+                            const messages = normalizeMessages(
+                                result.items,
+                                threadId,
+                            );
+                            const fetchedAt = yield* Clock.currentTimeMillis;
+                            const normalized: ResourceProjection = {
+                                orderedIds: uniqueIds(
+                                    messages.map((message) => message.id),
+                                ),
+                                fetchedAt,
+                                hasNextPage: result.hasNextPage,
+                                availability: 'present',
+                                freshness: 'fresh',
+                                synchronization: 'idle',
+                            };
+                            if (result.cursor)
+                                normalized.cursor = result.cursor;
+                            const chain = historyChain(threadId);
+                            const activeIds = chain.flatMap(
+                                (resource) => resource.orderedIds,
+                            );
+                            if (
+                                noProgress(
+                                    cursor,
+                                    result.cursor,
+                                    normalized.orderedIds,
+                                    activeIds,
+                                    chain,
+                                    result.hasNextPage,
+                                )
+                            ) {
+                                setHistoryRuntime(
+                                    threadId,
+                                    failed(
+                                        'continuation',
+                                        errorOf(
+                                            new InboxError('no_progress'),
+                                            'no_progress',
+                                        ),
+                                    ),
+                                );
+                                return;
+                            }
+                            const resourceKey = resourceKeyForHistory(
+                                threadId,
+                                cursor,
+                            );
+                            const deletes =
+                                historyDeletes(threadId, resourceKey) ?? [];
+                            if (
+                                !historySegments.has(resourceKey) &&
+                                deletes.length === 0 &&
+                                [...historySegments.keys()].filter((key) =>
+                                    key.startsWith(`history:${threadId}:page:`),
+                                ).length >= MAX_HISTORY_SEGMENTS
+                            ) {
+                                setHistoryRuntime(threadId, {
+                                    ...failed('continuation', capacityError()),
+                                    retentionLimited: true,
+                                });
+                                return;
+                            }
+                            const retainedIds = older
+                                ? uniqueIds(
+                                      historyChain(threadId).flatMap(
+                                          (resource) => resource.orderedIds,
+                                      ),
+                                  )
+                                : [];
+                            const available = Math.max(
+                                0,
+                                MAX_HISTORY_MESSAGES - retainedIds.length,
+                            );
+                            const newIds = normalized.orderedIds.filter(
+                                (id) => !retainedIds.includes(id),
+                            );
+                            normalized.orderedIds = newIds.slice(0, available);
+                            if (newIds.length > available)
+                                normalized.retentionLimited = true;
+                            const isNewRoot = !historySegments.has(
+                                resourceKeyForHistory(threadId),
+                            );
+                            const rootDeletes = isNewRoot
+                                ? evictInactiveHistoryRoot()
+                                : undefined;
+                            const rootCount = new Set(
+                                [...historySegments.values()]
+                                    .filter(
+                                        (resource) =>
+                                            resource.threadId !== undefined &&
+                                            resource.key ===
+                                                resourceKeyForHistory(
+                                                    resource.threadId,
+                                                ),
+                                    )
+                                    .map((resource) => resource.threadId),
+                            ).size;
+                            if (
+                                isNewRoot &&
+                                rootDeletes === undefined &&
+                                rootCount >= MAX_HISTORY_ROOTS
+                            ) {
+                                setHistoryRuntime(
+                                    threadId,
+                                    failed('refresh', capacityError()),
+                                );
+                                return;
+                            }
+                            const allDeletes = uniqueIds([
+                                ...deletes,
+                                ...(rootDeletes ?? []),
+                            ]);
+                            const incoming = copyFacts(state.entities);
+                            const detailThread =
+                                !older && result.thread?.key === threadId
+                                    ? normalizePage({
+                                          items: [result.thread],
+                                          hasNextPage: false,
+                                      }).entities
+                                    : emptyEntities();
+                            const messageFacts = emptyEntities();
+                            for (const message of messages)
+                                messageFacts.messagesById[message.id] = message;
+                            const acceptedNow = mergeFacts(
+                                incoming,
+                                detailThread,
+                                acceptedReadOrder,
+                                order,
+                            );
+                            for (const key of mergeFacts(
+                                incoming,
+                                messageFacts,
+                                acceptedReadOrder,
+                                order,
+                            ))
+                                acceptedNow.add(key);
+                            const viewerId =
+                                current?.viewerId ?? result.viewerId;
+                            const record = recordFor(
+                                resourceKey,
+                                normalized,
+                                incoming,
+                                threadId,
+                                viewerId,
+                                cursor,
+                            );
+                            const commitUpdate = {
+                                resources: [record],
+                                entities: incoming,
+                                deleteKeys: allDeletes,
+                            };
+                            const commitResult = yield* Effect.result(
+                                repository.commitResources(
+                                    account,
+                                    commitUpdate,
+                                ),
+                            );
+                            if (commitResult._tag === 'Success') {
+                                const committed = commitResult.success;
+                                if (
+                                    epoch !== state.accountEpoch ||
+                                    account !== state.accountId
+                                )
+                                    return;
+                                for (const deleteKey of allDeletes) {
+                                    historySegments.delete(deleteKey);
+                                }
+                                installRead(committed, true, {
+                                    inbox: false,
+                                    histories: new Set([threadId]),
+                                });
+                                pruneRuntimeReferences();
+                                for (const key of acceptedNow)
+                                    acceptedReadOrder.set(key, order);
+                                const next = historyProjection(threadId);
+                                if (next) {
+                                    if (
+                                        !older &&
+                                        current?.failedOperation ===
+                                            'continuation' &&
+                                        current.error &&
+                                        next.cursor === current.cursor
+                                    ) {
+                                        next.synchronization = 'error';
+                                        next.failedOperation = 'continuation';
+                                        next.error = current.error;
+                                    }
+                                    touchRecent(threadId);
+                                    update({
+                                        ...state,
+                                        histories: {
+                                            ...state.histories,
+                                            [threadId]: {
+                                                ...next,
+                                                freshness: 'fresh',
+                                            },
+                                        },
+                                    });
+                                }
+                            } else {
+                                const cause = commitResult.failure;
+                                setHistoryRuntime(threadId, {
+                                    freshness: 'stale',
+                                    ...failed(
+                                        older ? 'continuation' : 'refresh',
+                                        errorOf(cause, 'storage'),
+                                    ),
+                                });
+                            }
+                        }),
+                    ),
+                onFailure: (cause) =>
+                    Effect.sync(() => {
                         if (
                             epoch === state.accountEpoch &&
-                            detailGeneration.get(threadId) === generation &&
-                            (detailInterest.get(threadId) ?? 0) > 0
-                        )
-                            setHistoryRuntime(threadId, {
-                                synchronization: 'idle',
-                            });
-                        return;
-                    }
-                    if (
-                        epoch !== state.accountEpoch ||
-                        account !== state.accountId
-                    )
-                        return;
-                    if (
-                        (detailInterest.get(threadId) ?? 0) === 0 ||
-                        detailGeneration.get(threadId) !== generation
-                    )
-                        return;
-                    const messages = normalizeMessages(result.items, threadId);
-                    const normalized: ResourceProjection = {
-                        orderedIds: uniqueIds(
-                            messages.map((message) => message.id),
-                        ),
-                        fetchedAt: Date.now(),
-                        hasNextPage: result.hasNextPage,
-                        availability: 'present',
-                        freshness: 'fresh',
-                        synchronization: 'idle',
-                    };
-                    if (result.cursor) normalized.cursor = result.cursor;
-                    const chain = historyChain(threadId);
-                    const activeIds = chain.flatMap(
-                        (resource) => resource.orderedIds,
-                    );
-                    if (
-                        noProgress(
-                            cursor,
-                            result.cursor,
-                            normalized.orderedIds,
-                            activeIds,
-                            chain,
-                            result.hasNextPage,
-                        )
-                    ) {
-                        setHistoryRuntime(
-                            threadId,
-                            failed(
-                                'continuation',
-                                errorOf(
-                                    new InboxError('no_progress'),
-                                    'no_progress',
-                                ),
-                            ),
-                        );
-                        return;
-                    }
-                    const resourceKey = resourceKeyForHistory(threadId, cursor);
-                    const deletes = historyDeletes(threadId, resourceKey) ?? [];
-                    if (
-                        !historySegments.has(resourceKey) &&
-                        deletes.length === 0 &&
-                        [...historySegments.keys()].filter((key) =>
-                            key.startsWith(`history:${threadId}:page:`),
-                        ).length >= MAX_HISTORY_SEGMENTS
-                    ) {
-                        setHistoryRuntime(threadId, {
-                            ...failed('continuation', capacityError()),
-                            retentionLimited: true,
-                        });
-                        return;
-                    }
-                    const retainedIds = older
-                        ? uniqueIds(
-                              historyChain(threadId).flatMap(
-                                  (resource) => resource.orderedIds,
-                              ),
-                          )
-                        : [];
-                    const available = Math.max(
-                        0,
-                        MAX_HISTORY_MESSAGES - retainedIds.length,
-                    );
-                    const newIds = normalized.orderedIds.filter(
-                        (id) => !retainedIds.includes(id),
-                    );
-                    normalized.orderedIds = newIds.slice(0, available);
-                    if (newIds.length > available)
-                        normalized.retentionLimited = true;
-                    const isNewRoot = !historySegments.has(
-                        resourceKeyForHistory(threadId),
-                    );
-                    const rootDeletes = isNewRoot
-                        ? evictInactiveHistoryRoot()
-                        : undefined;
-                    const rootCount = new Set(
-                        [...historySegments.values()]
-                            .filter(
-                                (resource) =>
-                                    resource.threadId !== undefined &&
-                                    resource.key ===
-                                        resourceKeyForHistory(
-                                            resource.threadId,
-                                        ),
-                            )
-                            .map((resource) => resource.threadId),
-                    ).size;
-                    if (
-                        isNewRoot &&
-                        rootDeletes === undefined &&
-                        rootCount >= MAX_HISTORY_ROOTS
-                    ) {
-                        setHistoryRuntime(
-                            threadId,
-                            failed('refresh', capacityError()),
-                        );
-                        return;
-                    }
-                    const allDeletes = uniqueIds([
-                        ...deletes,
-                        ...(rootDeletes ?? []),
-                    ]);
-                    const incoming = copyFacts(state.entities);
-                    const detailThread =
-                        !older && result.thread?.key === threadId
-                            ? normalizePage({
-                                  items: [result.thread],
-                                  hasNextPage: false,
-                              }).entities
-                            : emptyEntities();
-                    const messageFacts = emptyEntities();
-                    for (const message of messages)
-                        messageFacts.messagesById[message.id] = message;
-                    const acceptedNow = mergeFacts(
-                        incoming,
-                        detailThread,
-                        acceptedReadOrder,
-                        order,
-                    );
-                    for (const key of mergeFacts(
-                        incoming,
-                        messageFacts,
-                        acceptedReadOrder,
-                        order,
-                    ))
-                        acceptedNow.add(key);
-                    const viewerId = current?.viewerId ?? result.viewerId;
-                    const record = recordFor(
-                        resourceKey,
-                        normalized,
-                        incoming,
-                        threadId,
-                        viewerId,
-                        cursor,
-                    );
-                    try {
-                        const commitUpdate = {
-                            resources: [record],
-                            entities: incoming,
-                            deleteKeys: allDeletes,
-                        };
-                        const committed = await repository.commitResources(
-                            account,
-                            commitUpdate,
-                        );
-                        if (
-                            epoch !== state.accountEpoch ||
-                            account !== state.accountId
-                        )
-                            return;
-                        for (const deleteKey of allDeletes) {
-                            historySegments.delete(deleteKey);
+                            (detailInterest.get(threadId) ?? 0) > 0 &&
+                            detailGeneration.get(threadId) === generation
+                        ) {
+                            const error = errorOf(cause, 'protocol');
+                            if (error.kind === 'auth')
+                                resetAccount(null, error);
+                            else
+                                setHistoryRuntime(
+                                    threadId,
+                                    failed(
+                                        older ? 'continuation' : 'refresh',
+                                        error,
+                                    ),
+                                );
                         }
-                        installRead(committed, true, {
-                            inbox: false,
-                            histories: new Set([threadId]),
-                        });
-                        pruneRuntimeReferences();
-                        for (const key of acceptedNow)
-                            acceptedReadOrder.set(key, order);
-                        const next = historyProjection(threadId);
-                        if (next) {
-                            if (
-                                !older &&
-                                current?.failedOperation === 'continuation' &&
-                                current.error &&
-                                next.cursor === current.cursor
-                            ) {
-                                next.synchronization = 'error';
-                                next.failedOperation = 'continuation';
-                                next.error = current.error;
-                            }
-                            touchRecent(threadId);
-                            update({
-                                ...state,
-                                histories: {
-                                    ...state.histories,
-                                    [threadId]: {
-                                        ...next,
-                                        freshness: 'fresh',
-                                    },
-                                },
-                            });
-                        }
-                    } catch (cause) {
-                        setHistoryRuntime(threadId, {
-                            freshness: 'stale',
-                            ...failed(
-                                older ? 'continuation' : 'refresh',
-                                errorOf(cause, 'storage'),
-                            ),
-                        });
-                    }
-                }),
-            )
-            .catch((cause) => {
-                if (
-                    epoch === state.accountEpoch &&
-                    (detailInterest.get(threadId) ?? 0) > 0 &&
-                    detailGeneration.get(threadId) === generation
-                ) {
-                    const error = errorOf(cause, 'protocol');
-                    if (error.kind === 'auth') resetAccount(null, error);
-                    else
-                        setHistoryRuntime(
-                            threadId,
-                            failed(older ? 'continuation' : 'refresh', error),
-                        );
-                }
-            });
-        flights.set(key, work);
-        void work.then(
-            () => {
-                if (flights.get(key) === work) flights.delete(key);
-            },
-            () => {
-                if (flights.get(key) === work) flights.delete(key);
+                    }),
             },
         );
-        return work;
-    }
+        const shared = yield* Effect.cached(work);
+        flights.set(key, shared);
+        yield* Effect.ensuring(
+            shared,
+            Effect.sync(() => {
+                if (flights.get(key) === shared) flights.delete(key);
+            }),
+        );
+    });
 
     function subscribe(
         listener: (value: InboxProjection) => void,
@@ -1368,24 +1446,31 @@ export function createInboxEngine(
         } else {
             listener(checkingProjection());
         }
-        void ensureIdentity(!hadListeners)
-            .then(async (accountId) => {
-                if (listeners.get(listener) !== subscription) return;
-                subscription.authorized = true;
-                listener(projectFor(threadId));
-                if (threadId && !bootstrapFlight) {
-                    await hydrate(
-                        accountId,
-                        [`history:${threadId}`, `history:${threadId}:page:*`],
-                        state.accountEpoch,
-                    );
-                    if (knownThread(threadId))
-                        await runHistory(threadId, false, false);
-                } else if (!threadId) {
-                    notify();
-                }
-            })
-            .catch(() => undefined);
+        fork(
+            Effect.matchEffect(ensureIdentity(!hadListeners), {
+                onSuccess: (accountId) =>
+                    Effect.gen(function* () {
+                        if (listeners.get(listener) !== subscription) return;
+                        subscription.authorized = true;
+                        listener(projectFor(threadId));
+                        if (threadId && !bootstrapFlight) {
+                            yield* hydrate(
+                                accountId,
+                                [
+                                    `history:${threadId}`,
+                                    `history:${threadId}:page:*`,
+                                ],
+                                state.accountEpoch,
+                            );
+                            if (knownThread(threadId))
+                                yield* runHistory(threadId, false, false);
+                        } else if (!threadId) {
+                            notify();
+                        }
+                    }),
+                onFailure: () => Effect.void,
+            }),
+        );
         return () => {
             const current = listeners.get(listener);
             if (!current) return;
@@ -1411,43 +1496,50 @@ export function createInboxEngine(
         };
     }
 
-    async function refresh(): Promise<void> {
-        try {
+    const refresh = Effect.fn('InboxEngine.refresh')(
+        function* (): Effect.fn.Return<void, never> {
             const previousEpoch = state.accountEpoch;
-            const account = await ensureIdentity(true);
-            if (previousEpoch !== state.accountEpoch) return;
-            await runInbox(undefined, account);
-        } catch {
-            // The failed identity is already represented in the projection.
-        }
-    }
+            const identity = yield* Effect.result(ensureIdentity(true));
+            if (identity._tag === 'Failure') return;
+            const account = identity.success;
+            if (previousEpoch !== state.accountEpoch) {
+                if (bootstrapInboxFlight)
+                    yield* Effect.ignore(bootstrapInboxFlight);
+                return;
+            }
+            yield* Effect.ignore(runInbox(undefined, account));
+        },
+    )();
 
-    async function loadMoreInbox(): Promise<void> {
-        const cursor = state.inbox.cursor;
-        if (!state.inbox.hasNextPage || !cursor || state.inbox.retentionLimited)
-            return;
-        await runInbox(cursor);
-    }
+    const loadMoreInbox = Effect.fn('InboxEngine.loadMoreInbox')(
+        function* (): Effect.fn.Return<void, never> {
+            const cursor = state.inbox.cursor;
+            if (
+                !state.inbox.hasNextPage ||
+                !cursor ||
+                state.inbox.retentionLimited
+            )
+                return;
+            yield* Effect.ignore(runInbox(cursor));
+        },
+    )();
 
-    async function refreshHistory(threadId: string): Promise<void> {
-        try {
-            const previousEpoch = state.accountEpoch;
-            await ensureIdentity(true);
-            if (previousEpoch !== state.accountEpoch) return;
-            if (!knownThread(threadId)) await runInbox(undefined);
-            await runHistory(threadId, false, true);
-        } catch {
-            // Explicit operations publish their errors on the resource.
-        }
-    }
+    const refreshHistory = Effect.fn('InboxEngine.refreshHistory')(function* (
+        threadId: string,
+    ): Effect.fn.Return<void, never> {
+        const previousEpoch = state.accountEpoch;
+        const identity = yield* Effect.result(ensureIdentity(true));
+        if (identity._tag === 'Failure') return;
+        if (previousEpoch !== state.accountEpoch) return;
+        if (!knownThread(threadId)) yield* Effect.ignore(runInbox(undefined));
+        yield* Effect.ignore(runHistory(threadId, false, true));
+    });
 
-    async function loadOlderHistory(threadId: string): Promise<void> {
-        try {
-            await runHistory(threadId, true, false);
-        } catch {
-            // Explicit operations publish their errors on the resource.
-        }
-    }
+    const loadOlderHistory = Effect.fn('InboxEngine.loadOlderHistory')(
+        function* (threadId: string): Effect.fn.Return<void, never> {
+            return yield* Effect.ignore(runHistory(threadId, true, false));
+        },
+    );
 
     return {
         subscribe,
@@ -1456,5 +1548,87 @@ export function createInboxEngine(
         refreshHistory,
         loadOlderHistory,
         snapshot: () => state,
+    };
+});
+
+export const inboxEngineLive = Layer.effect(
+    InboxEngineService,
+    Effect.gen(function* () {
+        const repository = yield* InboxRepositoryService;
+        const provider = yield* InboxProviderService;
+        const context = yield* Effect.context<never>();
+        const fibers = yield* FiberSet.make();
+        return yield* makeInboxEngine(repository, provider, (effect) => {
+            Effect.runForkWith(context)(FiberSet.run(fibers)(effect));
+        });
+    }),
+);
+
+/** Promise compatibility boundary for legacy callers and engine tests. */
+export function createInboxEngine(
+    repository: InboxRepository,
+    provider: InboxProvider,
+): InboxEngine {
+    const repositoryEffects: InboxRepositoryEffects = {
+        readResources: (accountId, keys) =>
+            Effect.tryPromise({
+                try: () => repository.readResources(accountId, keys),
+                catch: (cause) =>
+                    cause instanceof InboxError
+                        ? cause
+                        : new InboxError('storage'),
+            }),
+        commitResources: (accountId, update) =>
+            Effect.tryPromise({
+                try: () => repository.commitResources(accountId, update),
+                catch: (cause) =>
+                    cause instanceof InboxError
+                        ? cause
+                        : new InboxError('storage'),
+            }),
+        close: Effect.tryPromise({
+            try: () => repository.close(),
+            catch: (cause) =>
+                cause instanceof InboxError ? cause : new InboxError('storage'),
+        }),
+    };
+    const providerEffects: InboxProviderEffects = {
+        accept: () => undefined,
+        account: Effect.tryPromise({
+            try: () => provider.account(),
+            catch: (cause) =>
+                cause instanceof InboxError
+                    ? cause
+                    : new InboxError('provider_unavailable'),
+        }),
+        inbox: (accountId, cursor) =>
+            Effect.tryPromise({
+                try: () => provider.inbox(accountId, cursor),
+                catch: (cause) =>
+                    cause instanceof InboxError
+                        ? cause
+                        : new InboxError('protocol'),
+            }),
+        history: (accountId, threadId, cursor) =>
+            Effect.tryPromise({
+                try: () => provider.history(accountId, threadId, cursor),
+                catch: (cause) =>
+                    cause instanceof InboxError
+                        ? cause
+                        : new InboxError('protocol'),
+            }),
+    };
+    const engine = Effect.runSync(
+        makeInboxEngine(repositoryEffects, providerEffects),
+    );
+    return {
+        ...engine,
+        refresh: () =>
+            Effect.runPromise(Effect.andThen(engine.refresh, Effect.yieldNow)),
+        loadMoreInbox: () => Effect.runPromise(engine.loadMoreInbox),
+        refreshHistory: (threadId) =>
+            Effect.runPromise(engine.refreshHistory(threadId)),
+        loadOlderHistory: (threadId) =>
+            Effect.runPromise(engine.loadOlderHistory(threadId)),
     };
 }

@@ -2,9 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type browser from 'webextension-polyfill';
 import type { InboxEngine, InboxProjection } from '../lib/engine/inbox.ts';
+import type { InboxClientPort } from '../lib/engine/ports.ts';
 import { emptyEntities, emptyResource } from '../lib/engine/resources.ts';
 import {
     INBOX_CLIENT_PORT,
+    type ClientCommandInput,
     type SnapshotMessage,
 } from '../lib/engine/protocol.ts';
 
@@ -38,7 +40,7 @@ test('real client Port forwards detail interest, keeps sequence across routes, a
             },
         },
     });
-    const { registerInboxClientPorts } = await import('../lib/engine/ports.ts');
+    const { prepareInboxClientPort } = await import('../lib/engine/ports.ts');
     const projection: InboxProjection = {
         accountId: 'account',
         accountEpoch: 1,
@@ -95,9 +97,11 @@ test('real client Port forwards detail interest, keeps sequence across routes, a
             for (const listener of onDisconnect.listeners) listener(port);
         },
     };
-    registerInboxClientPorts(port, engine);
+    const activate = prepareInboxClientPort(port);
     for (const listener of onMessage.listeners)
         listener({ kind: 'subscribe', threadId: 'first' }, port);
+    // Simulate delayed ManagedRuntime layer initialization.
+    activate(engine);
     for (const listener of onMessage.listeners)
         listener({ kind: 'subscribe', threadId: 'second' }, port);
     assert.deepEqual(interests, ['first', 'second']);
@@ -115,4 +119,45 @@ test('real client Port forwards detail interest, keeps sequence across routes, a
     for (const listener of onMessage.listeners)
         listener({ kind: 'subscribe', threadId: 'closed' }, port);
     assert.equal(interests.length, 2);
+});
+
+test('startup buffering supports prototype-backed ports and rejects invalid senders immediately', async () => {
+    const { prepareInboxClientPort } = await import('../lib/engine/ports.ts');
+    const messages = event<(message: ClientCommandInput) => void>();
+    const disconnects = event<() => void>();
+    let subscriptions = 0;
+    const prototype = {
+        name: INBOX_CLIENT_PORT,
+        sender: { url: 'chrome-extension://test-extension/ui.html' },
+        onMessage: messages,
+        onDisconnect: disconnects,
+        postMessage() {},
+        disconnect() {},
+    };
+    const port: InboxClientPort = Object.create(prototype);
+    const activate = prepareInboxClientPort(port);
+    for (const listener of messages.listeners) listener({ kind: 'subscribe' });
+    activate({
+        subscribe: () => {
+            subscriptions++;
+            return () => undefined;
+        },
+        refresh: async () => undefined,
+        loadMoreInbox: async () => undefined,
+        refreshHistory: async () => undefined,
+        loadOlderHistory: async () => undefined,
+        snapshot(): never {
+            throw new Error('snapshot is not used by subscription setup');
+        },
+    });
+    assert.equal(subscriptions, 1);
+
+    let rejected = 0;
+    const invalid: InboxClientPort = Object.create({
+        ...prototype,
+        sender: { url: 'https://example.com/ui.html' },
+        disconnect: () => rejected++,
+    });
+    prepareInboxClientPort(invalid);
+    assert.equal(rejected, 1);
 });

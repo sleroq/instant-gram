@@ -15,6 +15,7 @@
     },
     "dependencies": {
         "@solidjs/web": "2.0.0-rc.7",
+        "effect": "4.0.0-beta.107",
         "solid-js": "2.0.0-rc.7",
         "webextension-polyfill": "0.12.0",
         "wxt": "0.20.27"
@@ -34,5 +35,13 @@
     "overrides": {
         "@solidjs/babel-plugin": "2.0.0-rc.7",
         "@solidjs/compiler": "2.0.0-rc.7"
+    },
+    "allowScripts": {
+        "@parcel/watcher@2.6.0": true,
+        "esbuild@0.27.7": true,
+        "fsevents@2.3.3": true,
+        "fsevents@2.3.2": true,
+        "msgpackr-extract@3.0.4": true,
+        "spawn-sync@1.0.15": true
     }
 }

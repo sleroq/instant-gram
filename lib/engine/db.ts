@@ -1,3 +1,4 @@
+import { Context, Effect, Layer, Result } from 'effect';
 import type { Message, User } from '../domain.ts';
 import {
     isBoolean,
@@ -14,6 +15,7 @@ import {
     type InboxRepository,
     type PersistedResource,
     type RepositoryRead,
+    type ResourceCommit,
     type ThreadFact,
 } from './resources.ts';
 
@@ -913,6 +915,84 @@ export function createInboxRepository(
             openedDatabase = undefined;
             opened = undefined;
         },
+    };
+}
+
+export interface InboxRepositoryEffects {
+    readonly readResources: (
+        accountId: string,
+        keys: string[],
+    ) => Effect.Effect<RepositoryRead, InboxError>;
+    readonly commitResources: (
+        accountId: string,
+        update: ResourceCommit,
+    ) => Effect.Effect<RepositoryRead, InboxError>;
+    readonly close: Effect.Effect<void, InboxError>;
+}
+
+export class InboxRepositoryService extends Context.Service<
+    InboxRepositoryService,
+    InboxRepositoryEffects
+>()('icr/InboxRepository') {}
+
+function storageError(cause: unknown): InboxError {
+    return cause instanceof InboxError ? cause : new InboxError('storage');
+}
+
+export function makeInboxRepository(
+    factory: IDBFactory = globalThis.indexedDB,
+): InboxRepositoryEffects {
+    const repository = createInboxRepository(factory);
+    return {
+        readResources: (accountId, keys) =>
+            Effect.tryPromise({
+                try: () => repository.readResources(accountId, keys),
+                catch: storageError,
+            }),
+        commitResources: (accountId, update) =>
+            Effect.tryPromise({
+                try: () => repository.commitResources(accountId, update),
+                catch: storageError,
+            }),
+        close: Effect.tryPromise({
+            try: () => repository.close(),
+            catch: storageError,
+        }),
+    };
+}
+
+export function inboxRepositoryLive(
+    factory: IDBFactory = globalThis.indexedDB,
+): Layer.Layer<InboxRepositoryService> {
+    return Layer.effect(
+        InboxRepositoryService,
+        Effect.acquireRelease(
+            Effect.sync(() => makeInboxRepository(factory)),
+            (repository) => Effect.orDie(repository.close),
+        ),
+    );
+}
+
+/**
+ * Compatibility boundary for the Promise-based engine and repository tests.
+ * Worker suspension can skip scoped finalizers; committed IDB transactions,
+ * rather than `close`, remain the durability boundary.
+ */
+export function inboxRepositoryPromiseFacade(
+    repository: InboxRepositoryEffects,
+    runPromise: <A>(effect: Effect.Effect<A>) => Promise<A> = Effect.runPromise,
+): InboxRepository {
+    async function run<A>(effect: Effect.Effect<A, InboxError>) {
+        const result = await runPromise(Effect.result(effect));
+        if (Result.isFailure(result)) throw result.failure;
+        return result.success;
+    }
+    return {
+        readResources: (accountId, keys) =>
+            run(repository.readResources(accountId, keys)),
+        commitResources: (accountId, update) =>
+            run(repository.commitResources(accountId, update)),
+        close: () => run(repository.close),
     };
 }
 

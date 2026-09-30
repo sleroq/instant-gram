@@ -29,6 +29,17 @@ worker engine, one account-partitioned database, and one closed provider
 capability surface. Do not add a UI-owned canonical store, direct component RPC,
 a second cache, or parallel sync/mutation authority.
 
+The MV3 worker uses one `ManagedRuntime` from the exactly pinned Effect 4 beta
+(`effect@4.0.0-beta.107`). This prerelease API is unstable and must be migrated
+deliberately when the pin changes. Provider, repository, and
+engine are switchable services/layers; production assembles one shared provider
+instance and one engine layer. Engine workflows and concurrency are Effects,
+and detached subscription/bootstrap fibers are scoped to the engine layer.
+Pure normalization/domain code and the Solid UI remain plain TypeScript. Promise
+and callback adapters exist only at browser-host and compatibility-test
+boundaries. IndexedDB transactions, commit revisions, and account epochs—not a
+runtime fiber—are the durability boundary across worker suspension.
+
 ## Ownership boundaries
 
 | Layer                   | Owns                                                                                                                            | Must not own                                                           |

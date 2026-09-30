@@ -1,4 +1,5 @@
 import type { Message, Thread, User } from '../domain.ts';
+import { Schema } from 'effect';
 
 export type InboxErrorKind =
     | 'auth'
@@ -19,12 +20,20 @@ const MESSAGES = {
     capacity: 'Conversation retention capacity has been reached.',
 } satisfies Record<InboxErrorKind, string>;
 
-export class InboxError extends Error {
-    readonly kind: InboxErrorKind;
-
+export class InboxError extends Schema.TaggedError<InboxError>()('InboxError', {
+    kind: Schema.Literals([
+        'auth',
+        'provider_unavailable',
+        'protocol',
+        'storage',
+        'no_progress',
+        'capacity',
+    ]),
+    message: Schema.String,
+}) {
     constructor(kind: InboxErrorKind) {
-        super(MESSAGES[kind]);
-        this.kind = kind;
+        super({ kind, message: MESSAGES[kind] });
+        this.name = 'Error';
     }
 }
 

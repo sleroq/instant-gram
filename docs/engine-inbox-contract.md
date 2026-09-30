@@ -6,6 +6,19 @@
 [verification record](r1-verification.md). There is one worker authority and no
 legacy UI adapter.
 
+The implementation is native to the exactly pinned Effect 4 beta
+(`effect@4.0.0-beta.107`) at the application-workflow boundary. This is an
+unstable prerelease API; dependency updates require an explicit migration.
+`InboxProviderService`, `InboxRepositoryService`, and `InboxEngineService` are
+composable layers in one worker `ManagedRuntime`. Engine semaphores, shared
+flights, identity, hydration, and commands are Effects. Bootstrap and
+subscription fibers are owned by the engine layer scope. Repository Promises
+are wrapped once at the IndexedDB boundary, while Port callbacks/Promises and
+the Promise engine facade are browser-host or test compatibility boundaries,
+not a second orchestration model. Plain domain reducers and UI state do not
+depend on Effect. IndexedDB commits plus account/worker epochs remain the
+durable restart contract.
+
 ## Storage and projection
 
 `lib/engine/resources.ts` defines the shared normalized facts, resource states,

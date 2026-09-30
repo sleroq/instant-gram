@@ -768,14 +768,14 @@ engagement use cases. Small functional factories receive repositories, provider,
 scheduler, and call pure reducers. Do not introduce a class hierarchy, event bus,
 generic service framework, or one service abstraction per entity.
 
-Plain typed TypeScript is the default. Phase 0 or 1 may run one bounded, worker-only
-Effect comparison if it demonstrably removes async plumbing already required by this
-engine. Evaluate structured concurrency, cancellation, and typed errors against
-dependency bytes, worker cold-start cost, and team cost. If selected, assemble one
-runtime at the worker boundary; Effect must not become a frontend dependency or share
-state ownership with Solid. Fibers and finalizers do not make MV3 durable: IndexedDB,
-outbox, identity, retry-safety, and alarm rules remain authoritative. Effect adoption
-is not assumed.
+Plain typed TypeScript remains the default for pure domain code and the frontend. The
+worker selected the exactly pinned Effect 4 beta (`effect@4.0.0-beta.107`) for
+service composition, typed failures, and structured concurrency. Its prerelease
+API is unstable and dependency updates require an explicit migration. It is
+assembled as one runtime at the worker boundary. Effect does not become a
+frontend dependency or share state ownership with Solid. Fibers and finalizers do not
+make MV3 durable: IndexedDB, outbox, identity, retry-safety, and alarm rules remain
+authoritative.
 
 ## Solid 2 application design
 

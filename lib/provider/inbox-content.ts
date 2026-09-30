@@ -1,6 +1,6 @@
 import type browser from 'webextension-polyfill';
 import type { Page, Thread, ThreadMessages } from '../domain.ts';
-import { InboxError } from '../engine/inbox.ts';
+import { InboxError } from '../engine/resources.ts';
 import { currentInstagramAccountId, harvestTokens } from '../ig-auth.ts';
 import {
     PROVIDER_PORT,

@@ -1,5 +1,8 @@
+import { Context, Effect, Exit, Layer, Result, Schema } from 'effect';
 import type { Page, Thread, ThreadMessages } from '../domain.ts';
-import { InboxError, type InboxProvider } from '../engine/inbox.ts';
+import type { JsonValue } from '../json.ts';
+import type { InboxProvider } from '../engine/inbox.ts';
+import { InboxError } from '../engine/resources.ts';
 import {
     PROVIDER_PORT,
     type ProviderRequest,
@@ -15,34 +18,298 @@ export type ProviderPort = {
         tab?: { id?: number };
     };
     onMessage: {
-        addListener(listener: (message: ProviderResponse) => void): void;
+        addListener(listener: (message: ProviderResponseInput) => void): void;
     };
     onDisconnect: { addListener(listener: () => void): void };
     postMessage(message: ProviderRequest): void;
     disconnect(): void;
 };
+
+export type ProviderResponseInput = JsonValue;
+
+export type InboxProviderError = InboxError;
+export interface InboxProviderEffects {
+    readonly accept: (port: ProviderPort) => void;
+    readonly account: Effect.Effect<string, InboxProviderError>;
+    readonly inbox: (
+        expectedAccountId: string,
+        cursor?: string,
+    ) => Effect.Effect<Page<Thread>, InboxProviderError>;
+    readonly history: (
+        expectedAccountId: string,
+        threadKey: string,
+        cursor?: string,
+    ) => Effect.Effect<ThreadMessages, InboxProviderError>;
+}
+
+export class InboxProviderService extends Context.Service<
+    InboxProviderService,
+    InboxProviderEffects
+>()('icr/InboxProvider') {}
+
 type Pending = {
-    method: 'account' | 'inbox' | 'history';
-    resolve(value: string | Page<Thread> | ThreadMessages): void;
-    reject(error: Error): void;
-    timer: ReturnType<typeof setTimeout>;
+    method: ProviderRequest['method'];
+    succeed(value: string | Page<Thread> | ThreadMessages): void;
+    fail(error: InboxProviderError): void;
 };
 type Connection = { port: ProviderPort; pending: Map<number, Pending> };
 
-export function createInboxProvider(options: {
+const ResponseHeader = Schema.Struct({
+    kind: Schema.Literal('response'),
+    id: Schema.Int,
+    method: Schema.Literals(['account', 'inbox', 'history']),
+    result: Schema.Unknown,
+});
+const ErrorResult = Schema.Struct({
+    ok: Schema.Literal(false),
+    error: Schema.Struct({
+        kind: Schema.Literals([
+            'auth',
+            'provider_unavailable',
+            'protocol',
+            'storage',
+            'no_progress',
+            'capacity',
+        ]),
+        message: Schema.String,
+    }),
+});
+const AccountResult = Schema.Struct({
+    ok: Schema.Literal(true),
+    value: Schema.NonEmptyString,
+});
+const UserValue = Schema.Struct({
+    id: Schema.String,
+    username: Schema.String,
+    fullName: Schema.String,
+    picUrl: Schema.NullOr(Schema.String),
+});
+const MessageReactionValue = Schema.Struct({
+    senderId: Schema.String,
+    reaction: Schema.String,
+    timestampMs: Schema.optional(Schema.Finite),
+});
+const MessageImageValue = Schema.Struct({
+    url: Schema.String,
+    previewUrl: Schema.optional(Schema.String),
+    width: Schema.optional(Schema.Finite),
+    height: Schema.optional(Schema.Finite),
+});
+const MessageFallbackValue = Schema.Struct({
+    label: Schema.String,
+    preview: Schema.optional(Schema.String),
+    targetUrl: Schema.optional(Schema.String),
+    thumbUrl: Schema.optional(Schema.String),
+});
+const ReplyPreviewValue = Schema.Union([
+    Schema.Struct({ kind: Schema.Literal('text'), text: Schema.String }),
+    Schema.Struct({
+        kind: Schema.Literal('media'),
+        title: Schema.String,
+        thumbUrl: Schema.optional(Schema.String),
+        subtitle: Schema.optional(Schema.String),
+    }),
+    Schema.Struct({
+        kind: Schema.Literal('unavailable'),
+        label: Schema.String,
+    }),
+]);
+const messageMetadataFields = {
+    id: Schema.String,
+    isSyntheticId: Schema.optional(Schema.Literal(true)),
+    ts: Schema.Finite,
+    reactions: Schema.optional(
+        Schema.mutable(Schema.Array(MessageReactionValue)),
+    ),
+    isPinned: Schema.optional(Schema.Boolean),
+};
+const sentMessageFields = {
+    senderId: Schema.String,
+    repliedTo: Schema.optional(Schema.String),
+    replyPreview: Schema.optional(ReplyPreviewValue),
+};
+const MessageValue = Schema.Union([
+    Schema.Struct({
+        ...messageMetadataFields,
+        ...sentMessageFields,
+        kind: Schema.Literal('text'),
+        text: Schema.String,
+    }),
+    Schema.Struct({
+        ...messageMetadataFields,
+        kind: Schema.Literal('reaction_log'),
+        fragment: Schema.String,
+    }),
+    Schema.Struct({
+        ...messageMetadataFields,
+        kind: Schema.Literal('activity'),
+        text: Schema.String,
+    }),
+    Schema.Struct({
+        ...messageMetadataFields,
+        ...sentMessageFields,
+        kind: Schema.Literal('reel_share'),
+        mediaType: Schema.Literals(['reel', 'post']),
+        shortcode: Schema.String,
+        mediaId: Schema.optional(Schema.String),
+        targetUrl: Schema.String,
+        thumbUrl: Schema.String,
+        previewWidth: Schema.optional(Schema.Finite),
+        previewHeight: Schema.optional(Schema.Finite),
+        author: Schema.String,
+        caption: Schema.optional(Schema.String),
+    }),
+    Schema.Struct({
+        ...messageMetadataFields,
+        ...sentMessageFields,
+        kind: Schema.Literal('inline_share'),
+        targetUrl: Schema.optional(Schema.String),
+        thumbUrl: Schema.String,
+        title: Schema.String,
+        subtitle: Schema.optional(Schema.String),
+    }),
+    Schema.Struct({
+        ...messageMetadataFields,
+        ...sentMessageFields,
+        kind: Schema.Literal('image'),
+        images: Schema.mutable(Schema.Array(MessageImageValue)),
+    }),
+    Schema.Struct({
+        ...messageMetadataFields,
+        ...sentMessageFields,
+        kind: Schema.Literal('unsupported'),
+        contentType: Schema.String,
+        fallback: MessageFallbackValue,
+    }),
+]);
+const ThreadValue = Schema.Struct({
+    key: Schema.String,
+    threadFbid: Schema.optional(Schema.String),
+    threadIgId: Schema.optional(Schema.String),
+    title: Schema.String,
+    isGroup: Schema.Boolean,
+    isMuted: Schema.Boolean,
+    folder: Schema.Literals(['PRIMARY', 'GENERAL', 'REQUESTS']),
+    lastActivityMs: Schema.Finite,
+    isUnread: Schema.Boolean,
+    serverIsPin: Schema.Boolean,
+    serverPinnedMessageIds: Schema.optional(
+        Schema.mutable(Schema.Array(Schema.String)),
+    ),
+    users: Schema.mutable(Schema.Array(UserValue)),
+    lastMessage: Schema.optional(MessageValue),
+    cursor: Schema.optional(Schema.String),
+});
+const InboxResult = Schema.Struct({
+    ok: Schema.Literal(true),
+    value: Schema.Struct({
+        items: Schema.mutable(Schema.Array(ThreadValue)),
+        hasNextPage: Schema.Boolean,
+        cursor: Schema.optional(Schema.String),
+    }),
+});
+const HistoryResult = Schema.Struct({
+    ok: Schema.Literal(true),
+    value: Schema.Struct({
+        items: Schema.mutable(Schema.Array(MessageValue)),
+        hasNextPage: Schema.Boolean,
+        cursor: Schema.optional(Schema.String),
+        viewerId: Schema.NonEmptyString,
+        thread: Schema.optional(ThreadValue),
+    }),
+});
+type ResponseHeader = typeof ResponseHeader.Type;
+type ProviderResultInput = ResponseHeader['result'];
+
+function responseHeader(
+    value: ProviderResponseInput,
+): ResponseHeader | undefined {
+    const exit = Schema.decodeUnknownExit(ResponseHeader)(value);
+    return Exit.isSuccess(exit) ? exit.value : undefined;
+}
+
+function decode<S extends Schema.ConstraintDecoder<unknown>>(
+    schema: S,
+    value: ProviderResultInput,
+): S['Type'] | undefined {
+    const exit = Schema.decodeUnknownExit(schema)(value);
+    return Exit.isSuccess(exit) ? exit.value : undefined;
+}
+
+function providerResponse(
+    header: ResponseHeader,
+): ProviderResponse | undefined {
+    const failure = decode(ErrorResult, header.result);
+    if (failure) {
+        if (header.method === 'account')
+            return {
+                kind: 'response',
+                id: header.id,
+                method: 'account',
+                result: failure,
+            };
+        if (header.method === 'inbox')
+            return {
+                kind: 'response',
+                id: header.id,
+                method: 'inbox',
+                result: failure,
+            };
+        return {
+            kind: 'response',
+            id: header.id,
+            method: 'history',
+            result: failure,
+        };
+    }
+    if (header.method === 'account') {
+        const result = decode(AccountResult, header.result);
+        return (
+            result && {
+                kind: 'response',
+                id: header.id,
+                method: 'account',
+                result,
+            }
+        );
+    }
+    if (header.method === 'inbox') {
+        const result = decode(InboxResult, header.result);
+        if (!result) return;
+        return {
+            kind: 'response',
+            id: header.id,
+            method: 'inbox',
+            result,
+        };
+    }
+    const result = decode(HistoryResult, header.result);
+    if (!result) return;
+    return {
+        kind: 'response',
+        id: header.id,
+        method: 'history',
+        result,
+    };
+}
+
+export function makeInboxProvider(options: {
     ensureAnchor(): Promise<number>;
     extensionId: string;
-}): InboxProvider & { accept(port: ProviderPort): void } {
+}): InboxProviderEffects {
     const connections = new Map<number, Connection>();
     const waiters = new Map<number, Set<() => void>>();
     let nextId = 0;
+    function unavailable() {
+        return new InboxError('provider_unavailable');
+    }
+
     function retire(connection: Connection) {
-        for (const pending of connection.pending.values()) {
-            clearTimeout(pending.timer);
-            pending.reject(new InboxError('provider_unavailable'));
-        }
+        for (const pending of connection.pending.values())
+            pending.fail(unavailable());
         connection.pending.clear();
     }
+
     function accept(port: ProviderPort) {
         const tabId = port.sender?.tab?.id;
         const url = port.sender?.url ? new URL(port.sender.url) : undefined;
@@ -66,14 +333,19 @@ export function createInboxProvider(options: {
         connections.set(tabId, connection);
         for (const ready of waiters.get(tabId) ?? []) ready();
         waiters.delete(tabId);
-        port.onMessage.addListener((response: ProviderResponse) => {
-            if (response.kind !== 'response') return;
-            const pending = connection.pending.get(response.id);
-            if (!pending || pending.method !== response.method) return;
-            connection.pending.delete(response.id);
-            clearTimeout(pending.timer);
-            if (response.result.ok) pending.resolve(response.result.value);
-            else pending.reject(new InboxError(response.result.error.kind));
+        port.onMessage.addListener((value) => {
+            const header = responseHeader(value);
+            if (!header) return;
+            const pending = connection.pending.get(header.id);
+            if (!pending || pending.method !== header.method) return;
+            connection.pending.delete(header.id);
+            const response = providerResponse(header);
+            if (!response) {
+                pending.fail(new InboxError('protocol'));
+                return;
+            }
+            if (response.result.ok) pending.succeed(response.result.value);
+            else pending.fail(new InboxError(response.result.error.kind));
         });
         port.onDisconnect.addListener(() => {
             if (connections.get(tabId) === connection)
@@ -81,90 +353,127 @@ export function createInboxProvider(options: {
             retire(connection);
         });
     }
-    async function connection(): Promise<Connection> {
-        const tabId = await options.ensureAnchor();
+
+    const connection = Effect.fn('InboxProvider.connection')(function* () {
+        const tabId = yield* Effect.tryPromise({
+            try: options.ensureAnchor,
+            catch: unavailable,
+        });
         const existing = connections.get(tabId);
         if (existing) return existing;
-        await new Promise<void>((resolve, reject) => {
-            const set = waiters.get(tabId) ?? new Set();
-            let timer: ReturnType<typeof setTimeout>;
+        yield* Effect.callback<void, InboxProviderError>((resume) => {
+            const set = waiters.get(tabId) ?? new Set<() => void>();
             function ready() {
-                clearTimeout(timer);
-                set.delete(ready);
-                resolve();
+                resume(Effect.void);
             }
             set.add(ready);
             waiters.set(tabId, set);
-            timer = setTimeout(() => {
+            return Effect.sync(() => {
                 set.delete(ready);
-                if (!set.size) waiters.delete(tabId);
-                reject(new InboxError('provider_unavailable'));
-            }, 10_000);
-        });
-        const connected = connections.get(tabId);
-        if (!connected) throw new InboxError('provider_unavailable');
-        return connected;
-    }
-    function request(
-        request: Extract<ProviderRequest, { method: 'account' }>,
-    ): Promise<string>;
-    function request(
-        request: Extract<ProviderRequest, { method: 'inbox' }>,
-    ): Promise<Page<Thread>>;
-    function request(
-        request: Extract<ProviderRequest, { method: 'history' }>,
-    ): Promise<ThreadMessages>;
-    async function request(
-        request: ProviderRequest,
-    ): Promise<string | Page<Thread> | ThreadMessages> {
-        const connected = await connection();
-        return new Promise((resolve, reject) => {
-            const timer = setTimeout(() => {
-                connected.pending.delete(request.id);
-                reject(new InboxError('provider_unavailable'));
-            }, 15_000);
-            connected.pending.set(request.id, {
-                method: request.method,
-                resolve,
-                reject,
-                timer,
+                if (set.size === 0) waiters.delete(tabId);
             });
-            try {
-                connected.port.postMessage(request);
-            } catch {
-                const pending = connected.pending.get(request.id);
-                if (!pending) return;
-                connected.pending.delete(request.id);
-                clearTimeout(pending.timer);
-                pending.reject(new InboxError('provider_unavailable'));
-            }
+        }).pipe(
+            Effect.timeoutOrElse({
+                duration: '10 seconds',
+                orElse: () => Effect.fail(unavailable()),
+            }),
+        );
+        const connected = connections.get(tabId);
+        return yield* connected
+            ? Effect.succeed(connected)
+            : Effect.fail(unavailable());
+    });
+
+    function request<A>(makeRequest: (id: number) => ProviderRequest) {
+        return Effect.suspend(() => {
+            const request = makeRequest(++nextId);
+            return connection().pipe(
+                Effect.flatMap((connected) =>
+                    Effect.callback<A, InboxProviderError>((resume) => {
+                        connected.pending.set(request.id, {
+                            method: request.method,
+                            succeed(value) {
+                                // SAFETY: the response method is matched before this value is delivered.
+                                resume(Effect.succeed(value as A));
+                            },
+                            fail: (error) => resume(Effect.fail(error)),
+                        });
+                        try {
+                            connected.port.postMessage(request);
+                        } catch {
+                            connected.pending.delete(request.id);
+                            resume(Effect.fail(unavailable()));
+                        }
+                        return Effect.sync(() =>
+                            connected.pending.delete(request.id),
+                        );
+                    }).pipe(
+                        Effect.timeoutOrElse({
+                            duration: '15 seconds',
+                            orElse: () => Effect.fail(unavailable()),
+                        }),
+                    ),
+                ),
+            );
         });
     }
-    async function account() {
-        return request({ kind: 'request', id: ++nextId, method: 'account' });
-    }
-    async function inbox(expectedAccountId: string, cursor?: string) {
-        return request({
+
+    return {
+        accept,
+        account: request<string>((id) => ({
             kind: 'request',
-            id: ++nextId,
-            method: 'inbox',
-            expectedAccountId,
-            cursor,
-        });
+            id,
+            method: 'account',
+        })),
+        inbox: (expectedAccountId, cursor) =>
+            request<Page<Thread>>((id) => ({
+                kind: 'request',
+                id,
+                method: 'inbox',
+                expectedAccountId,
+                cursor,
+            })),
+        history: (expectedAccountId, threadKey, cursor) =>
+            request<ThreadMessages>((id) => ({
+                kind: 'request',
+                id,
+                method: 'history',
+                expectedAccountId,
+                threadKey,
+                cursor,
+            })),
+    };
+}
+
+export function inboxProviderLive(options: {
+    ensureAnchor(): Promise<number>;
+    extensionId: string;
+}) {
+    return Layer.sync(InboxProviderService, () => makeInboxProvider(options));
+}
+
+/** Compatibility boundary for the Promise-based engine and its existing tests. */
+export function inboxProviderPromiseFacade(
+    provider: InboxProviderEffects,
+    runPromise: <A>(effect: Effect.Effect<A>) => Promise<A> = Effect.runPromise,
+): InboxProvider & { accept(port: ProviderPort): void } {
+    async function run<A>(effect: Effect.Effect<A, InboxProviderError>) {
+        const result = await runPromise(Effect.result(effect));
+        if (Result.isFailure(result)) throw result.failure;
+        return result.success;
     }
-    async function history(
-        expectedAccountId: string,
-        threadKey: string,
-        cursor?: string,
-    ) {
-        return request({
-            kind: 'request',
-            id: ++nextId,
-            method: 'history',
-            expectedAccountId,
-            threadKey,
-            cursor,
-        });
-    }
-    return { accept, account, inbox, history };
+    return {
+        accept: provider.accept,
+        account: () => run(provider.account),
+        inbox: (account, cursor) => run(provider.inbox(account, cursor)),
+        history: (account, thread, cursor) =>
+            run(provider.history(account, thread, cursor)),
+    };
+}
+
+export function createInboxProvider(options: {
+    ensureAnchor(): Promise<number>;
+    extensionId: string;
+}): InboxProvider & { accept(port: ProviderPort): void } {
+    return inboxProviderPromiseFacade(makeInboxProvider(options));
 }

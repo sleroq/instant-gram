@@ -29,6 +29,17 @@ npm ci
 npm run dev
 ```
 
+Development uses a dedicated persistent Chromium profile at
+`.dev/chromium-profile` (ignored by Git). WXT opens the extension's Messages page
+after the addon has loaded, without depending on a background-worker event.
+Log into Instagram once in the browser
+opened by `npm run dev`; subsequent runs reuse its cookies and session until
+Instagram expires it or you log out. Keep an Instagram tab open for the extension
+provider. Close the previous dev browser before restarting; do not run two dev
+instances against the same profile. Delete `.dev/chromium-profile` with the dev
+browser closed to reset it. This directory contains private session data—do not
+share it.
+
 Before submitting a change:
 
 ```sh
