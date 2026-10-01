@@ -120,6 +120,7 @@ a:focus-visible {
     flex: 1;
     overflow-y: auto;
     border-top: 1px solid #292d35;
+    overflow-anchor: none;
 }
 .solid-inbox__viewport ul {
     position: relative;
@@ -146,7 +147,7 @@ a:focus-visible {
     text-align: left;
 }
 .solid-inbox__thread:hover,
-.solid-inbox__thread[aria-selected='true'] {
+.solid-inbox__thread[aria-current='page'] {
     background: #252a33;
 }
 .solid-inbox__avatar,
@@ -238,6 +239,7 @@ a:focus-visible {
     flex: 1;
     overflow-y: auto;
     padding: 20px max(20px, calc((100% - 760px) / 2));
+    overflow-anchor: none;
 }
 .solid-history__older {
     display: block;

@@ -4,7 +4,15 @@
         "servers": {
             "chrome-devtools": {
                 "type": "local",
-                "command": ["./.opencode/helium-devtools-mcp"],
+                "command": [
+                    "npx",
+                    "-y",
+                    "chrome-devtools-mcp@latest",
+                    "--browser-url=http://127.0.0.1:9223",
+                    "--categoryExtensions",
+                    "--no-usage-statistics",
+                    "--no-performance-crux"
+                ],
                 "environment": {
                     "NPM_CONFIG_REGISTRY": "https://registry.npmjs.org"
                 }

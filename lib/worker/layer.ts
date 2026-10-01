@@ -1,7 +1,29 @@
-import { Layer, ManagedRuntime } from 'effect';
+import { Effect, Layer, ManagedRuntime } from 'effect';
 import { InboxRepositoryService } from '../engine/db.ts';
-import { inboxEngineLive } from '../engine/inbox.ts';
+import {
+    inboxEngineLive,
+    type InboxEngine,
+    type InboxEngineEffects,
+} from '../engine/inbox.ts';
 import { InboxProviderService } from '../provider/inbox.ts';
+
+/** Host commands must enter through the owning ManagedRuntime. */
+export function bindInboxEngine(
+    engine: InboxEngineEffects,
+    runPromise: <A>(effect: Effect.Effect<A>) => Promise<A>,
+): InboxEngine {
+    return {
+        ...engine,
+        refresh: () => runPromise(engine.refresh),
+        loadMoreInbox: () => runPromise(engine.loadMoreInbox),
+        refreshHistory: (id, listener, anchorId) =>
+            runPromise(engine.refreshHistory(id, listener, anchorId)),
+        loadOlderHistory: (id, listener) =>
+            runPromise(engine.loadOlderHistory(id, listener)),
+        loadNewerHistory: (id, listener) =>
+            runPromise(engine.loadNewerHistory(id, listener)),
+    };
+}
 
 export function makeWorkerLayer(
     provider: Layer.Layer<InboxProviderService>,

@@ -1,5 +1,16 @@
 import type { Message, Page, Thread, ThreadMessages } from '../domain.ts';
-import { Clock, Context, Effect, FiberSet, Layer, Semaphore } from 'effect';
+import {
+    Clock,
+    Context,
+    Deferred,
+    Effect,
+    Exit,
+    Fiber,
+    FiberSet,
+    Layer,
+    Scope,
+    Semaphore,
+} from 'effect';
 import type { InboxRepositoryEffects } from './db.ts';
 import { InboxRepositoryService } from './db.ts';
 import type { InboxProviderEffects } from '../provider/inbox.ts';
@@ -18,6 +29,8 @@ import {
     type RepositoryRead,
     type ResourceProjection,
     type ThreadFact,
+    type HistoryWindowRequest,
+    type HistoryWindowRead,
 } from './resources.ts';
 
 export { InboxError, emptyEntities, emptyResource };
@@ -48,11 +61,24 @@ export type InboxEngine = {
     subscribe(
         listener: (value: InboxProjection) => void,
         threadId?: string,
+        anchorId?: string,
+        replaceListener?: (value: InboxProjection) => void,
     ): () => void;
     refresh(): Promise<void>;
     loadMoreInbox(): Promise<void>;
-    refreshHistory(threadId: string): Promise<void>;
-    loadOlderHistory(threadId: string): Promise<void>;
+    refreshHistory(
+        threadId: string,
+        listener?: (value: InboxProjection) => void,
+        anchorId?: string,
+    ): Promise<void>;
+    loadOlderHistory(
+        threadId: string,
+        listener?: (value: InboxProjection) => void,
+    ): Promise<void>;
+    loadNewerHistory(
+        threadId: string,
+        listener?: (value: InboxProjection) => void,
+    ): Promise<void>;
     snapshot(): InboxProjection;
 };
 
@@ -60,8 +86,19 @@ export interface InboxEngineEffects {
     readonly subscribe: InboxEngine['subscribe'];
     readonly refresh: Effect.Effect<void>;
     readonly loadMoreInbox: Effect.Effect<void>;
-    readonly refreshHistory: (threadId: string) => Effect.Effect<void>;
-    readonly loadOlderHistory: (threadId: string) => Effect.Effect<void>;
+    readonly refreshHistory: (
+        threadId: string,
+        listener?: (value: InboxProjection) => void,
+        anchorId?: string,
+    ) => Effect.Effect<void>;
+    readonly loadOlderHistory: (
+        threadId: string,
+        listener?: (value: InboxProjection) => void,
+    ) => Effect.Effect<void>;
+    readonly loadNewerHistory: (
+        threadId: string,
+        listener?: (value: InboxProjection) => void,
+    ) => Effect.Effect<void>;
     readonly snapshot: () => InboxProjection;
 }
 
@@ -72,8 +109,8 @@ export class InboxEngineService extends Context.Service<
 
 const MAX_INBOX_SEGMENTS = 20;
 const MAX_HISTORY_ROOTS = 20;
-const MAX_HISTORY_SEGMENTS = 20;
-const MAX_HISTORY_MESSAGES = 400;
+const MAX_HISTORY_WINDOWS = 20;
+const HISTORY_RETURN_KEYS = ['inbox:primary', 'inbox:primary:page:*'];
 const MAX_NETWORK_READS = 4;
 
 function errorOf(cause: unknown, fallback: InboxErrorKind): EngineError {
@@ -192,6 +229,31 @@ function mergeFacts(
     return acceptedNow;
 }
 
+function changedFacts(
+    previous: EntityFacts,
+    incoming: EntityFacts,
+    accepted: Set<string>,
+): EntityFacts {
+    const changed = emptyEntities();
+    for (const key of accepted) {
+        const separator = key.indexOf(':');
+        const id = key.slice(separator + 1);
+        const kind = key.slice(0, separator);
+        const field =
+            kind === 'thread'
+                ? 'threadsById'
+                : kind === 'user'
+                  ? 'usersById'
+                  : 'messagesById';
+        if (
+            JSON.stringify(previous[field][id]) !==
+            JSON.stringify(incoming[field][id])
+        )
+            Object.assign(changed[field], { [id]: incoming[field][id] });
+    }
+    return changed;
+}
+
 function addUnique(
     existing: string[],
     incoming: string[],
@@ -259,17 +321,58 @@ type Listener = {
     notify: (value: InboxProjection) => void;
     threadId?: string;
     authorized: boolean;
+    anchorId?: string;
+    window?: HistoryProjection;
+    rejectedThreadId?: string;
+    waiter?: Fiber.Fiber<void, InboxError>;
 };
 
 export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
     repository: InboxRepositoryEffects,
     provider: InboxProviderEffects,
-    fork: <A, E>(effect: Effect.Effect<A, E>) => void = Effect.runFork,
 ) {
+    const runProducer = yield* FiberSet.makeRuntime<never>();
+    function fork<A, E>(effect: Effect.Effect<A, E>) {
+        return runProducer(effect.pipe(Effect.tapDefect(Effect.logError)));
+    }
+    let closed = false;
     const listeners = new Map<(value: InboxProjection) => void, Listener>();
-    const flights = new Map<string, Effect.Effect<void>>();
+    type Flight = {
+        fiber: Fiber.Fiber<void, InboxError>;
+        accountId: string;
+        epoch: number;
+        threadId?: string;
+        generation?: number;
+        readOrder?: number;
+        waiters?: Set<Listener>;
+    };
+    const flights = new Map<string, Flight>();
+
+    // Register before releasing the gate: even synchronous producers cannot
+    // complete and remove their flight before it is installed.
+    function start<A, E>(work: Effect.Effect<A, E>, remove: () => void) {
+        const gate = Deferred.makeUnsafe<void>();
+        const fiber = fork(
+            Effect.andThen(Deferred.await(gate), work).pipe(
+                Effect.ensuring(Effect.sync(remove)),
+            ),
+        );
+        return {
+            fiber,
+            activate: () => Deferred.doneUnsafe(gate, Effect.void),
+        };
+    }
+
+    function detachFlights(matches: (flight: Flight) => boolean) {
+        const obsolete: Fiber.Fiber<void, InboxError>[] = [];
+        for (const [key, flight] of flights) {
+            if (!matches(flight)) continue;
+            flights.delete(key);
+            obsolete.push(flight.fiber);
+        }
+        if (obsolete.length) fork(Fiber.interruptAll(obsolete));
+    }
     const inboxSegments = new Map<string, PersistedResource>();
-    const historySegments = new Map<string, PersistedResource>();
     const acceptedReadOrder = new Map<string, number>();
     const detailInterest = new Map<string, number>();
     const detailGeneration = new Map<string, number>();
@@ -290,17 +393,38 @@ export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
         },
         histories: {},
     };
-    let identityFlight: Effect.Effect<string, InboxError> | undefined;
-    let bootstrapFlight: Effect.Effect<void, InboxError> | undefined;
-    let bootstrapInboxFlight: Effect.Effect<void, InboxError> | undefined;
+    let identityFlight: Fiber.Fiber<string, InboxError> | undefined;
+    let identityToken = 0;
+    let bootstrapFlight: Fiber.Fiber<void, InboxError> | undefined;
+    let bootstrapInboxFlight: Fiber.Fiber<void, InboxError> | undefined;
     let hydratedEpoch = -1;
     let verified = false;
     let readOrder = 0;
     const commitPermit = yield* Semaphore.make(1);
     const networkPermit = yield* Semaphore.make(MAX_NETWORK_READS);
 
+    yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+            closed = true;
+            identityToken++;
+            listeners.clear();
+            detailInterest.clear();
+            detailGeneration.clear();
+            flights.clear();
+            identityFlight = undefined;
+            bootstrapFlight = undefined;
+            bootstrapInboxFlight = undefined;
+        }),
+    );
+
     function inLane<A, E>(work: Effect.Effect<A, E>): Effect.Effect<A, E> {
         return commitPermit.withPermits(1)(work);
+    }
+
+    function commitInLane<A, E>(
+        work: Effect.Effect<A, E>,
+    ): Effect.Effect<A, E> {
+        return inLane(Effect.uninterruptible(work));
     }
 
     function network<T, E>(
@@ -309,7 +433,7 @@ export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
     ): Effect.Effect<T | undefined, E> {
         return networkPermit.withPermits(1)(
             Effect.suspend(() =>
-                canStart() ? work : Effect.succeed(undefined),
+                !closed && canStart() ? work : Effect.succeed(undefined),
             ),
         );
     }
@@ -327,28 +451,6 @@ export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
         ) {
             visited.add(current.cursor);
             const next = inboxSegments.get(resourceKeyForInbox(current.cursor));
-            if (!next) break;
-            result.push(next);
-            current = next;
-        }
-        return result;
-    }
-
-    function historyChain(threadId: string): PersistedResource[] {
-        const head = historySegments.get(resourceKeyForHistory(threadId));
-        if (!head) return [];
-        const result = [head];
-        const visited = new Set<string>();
-        let current = head;
-        while (
-            current.hasNextPage &&
-            current.cursor &&
-            !visited.has(current.cursor)
-        ) {
-            visited.add(current.cursor);
-            const next = historySegments.get(
-                resourceKeyForHistory(threadId, current.cursor),
-            );
             if (!next) break;
             result.push(next);
             current = next;
@@ -374,53 +476,15 @@ export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
         };
     }
 
-    function historyProjection(
-        threadId: string,
-    ): HistoryProjection | undefined {
-        const chain = historyChain(threadId);
-        const head = chain[0];
-        if (!head) return state.histories[threadId];
-        const previous = state.histories[threadId];
-        const tail = chain.at(-1)!;
-        const allIds = addUnique(
-            [],
-            chain
-                .slice()
-                .reverse()
-                .flatMap((resource) => resource.orderedIds),
-        );
-        const ids = allIds.slice(-MAX_HISTORY_MESSAGES);
-        const result: HistoryProjection = {
-            ...head,
-            threadId,
-            orderedIds: ids,
-            cursor: tail.cursor,
-            hasNextPage: tail.hasNextPage,
-            viewerId: previous?.viewerId ?? head.viewerId,
-            availability: 'present',
-            synchronization: 'idle',
-        };
-        if (
-            allIds.length > MAX_HISTORY_MESSAGES ||
-            (ids.length >= MAX_HISTORY_MESSAGES && tail.hasNextPage)
-        )
-            result.retentionLimited = true;
-        return result;
+    function historyProjection(threadId: string) {
+        return state.histories[threadId];
     }
 
-    function allHistories(): Record<string, HistoryProjection> {
-        const ids = new Set<string>();
-        for (const resource of historySegments.values())
-            if (resource.threadId) ids.add(resource.threadId);
-        const histories: Record<string, HistoryProjection> = {};
-        for (const id of ids) {
-            const value = historyProjection(id);
-            if (value) histories[id] = value;
-        }
-        return histories;
-    }
-
-    function projectFor(threadId?: string): InboxProjection {
+    function projectFor(
+        threadId?: string,
+        window?: HistoryProjection,
+        anchorId?: string,
+    ): InboxProjection {
         const selected = threadId
             ? [
                   threadId,
@@ -429,9 +493,24 @@ export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
                       .slice(0, 2),
               ]
             : recentHistories.slice(0, 2);
+
         const histories = Object.fromEntries(
             selected
-                .map((id) => [id, state.histories[id] ?? historyProjection(id)])
+                .map((id) => [
+                    id,
+                    id === threadId
+                        ? (window ??
+                          ((
+                              anchorId
+                                  ? state.histories[id]?.orderedIds.includes(
+                                        anchorId,
+                                    )
+                                  : !state.histories[id]?.cachedNewer
+                          )
+                              ? state.histories[id]
+                              : undefined))
+                        : state.histories[id],
+                ])
                 .filter((entry): entry is [string, HistoryProjection] =>
                     Boolean(entry[1]),
                 ),
@@ -474,20 +553,72 @@ export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
         };
     }
 
+    function listenerProjection(subscription: Listener): InboxProjection {
+        const projection = subscription.authorized
+            ? projectFor(
+                  subscription.threadId,
+                  subscription.window,
+                  subscription.anchorId,
+              )
+            : checkingProjection();
+        if (subscription.rejectedThreadId) {
+            const id = subscription.rejectedThreadId;
+            projection.histories[id] = {
+                ...emptyResource(),
+                threadId: id,
+                synchronization: 'error',
+                error: capacityError(),
+                failedOperation: 'refresh',
+            };
+        }
+        return projection;
+    }
+
     function notify() {
-        for (const {
-            notify: listener,
-            threadId,
-            authorized,
-        } of listeners.values())
-            listener(
-                authorized || !state.accountId
-                    ? projectFor(threadId)
-                    : checkingProjection(),
+        if (closed) return;
+        for (const subscription of listeners.values())
+            subscription.notify(listenerProjection(subscription));
+    }
+
+    function admit(
+        subscription: Listener,
+        threadId: string,
+        previous?: Listener,
+    ): boolean {
+        const windowCount = [...detailInterest.values()].reduce(
+            (total, count) => total + count,
+            0,
+        );
+        const creditedThread = previous?.threadId;
+        const rootCredit =
+            creditedThread &&
+            creditedThread !== threadId &&
+            detailInterest.get(creditedThread) === 1
+                ? 1
+                : 0;
+        if (
+            windowCount - (creditedThread ? 1 : 0) >= MAX_HISTORY_WINDOWS ||
+            (!detailInterest.has(threadId) &&
+                detailInterest.size - rootCredit >= MAX_HISTORY_ROOTS)
+        ) {
+            subscription.rejectedThreadId = threadId;
+            return false;
+        }
+        const count = detailInterest.get(threadId) ?? 0;
+        if (count === 0)
+            detailGeneration.set(
+                threadId,
+                (detailGeneration.get(threadId) ?? 0) + 1,
             );
+        detailInterest.set(threadId, count + 1);
+        subscription.threadId = threadId;
+        subscription.rejectedThreadId = undefined;
+        touchRecent(threadId);
+        return true;
     }
 
     function update(next: InboxProjection) {
+        if (closed) return;
         state = next;
         notify();
     }
@@ -500,6 +631,10 @@ export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
         threadId: string,
         patch: Partial<HistoryProjection>,
     ) {
+        for (const subscription of targetsFor(threadId)) {
+            if (subscription.window)
+                subscription.window = { ...subscription.window, ...patch };
+        }
         const current = state.histories[threadId] ??
             historyProjection(threadId) ?? {
                 threadId,
@@ -519,9 +654,25 @@ export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
         });
     }
 
-    function resetAccount(accountId: string | null, error?: EngineError) {
+    function resetAccount(
+        accountId: string | null,
+        error?: EngineError,
+        preserveIdentity?: Fiber.Fiber<string, InboxError>,
+    ) {
+        if (closed) return;
+        identityToken++;
+        const previousIdentity = identityFlight;
+        identityFlight = undefined;
+        if (previousIdentity && previousIdentity !== preserveIdentity)
+            fork(Fiber.interrupt(previousIdentity));
+        const previousBootstrap = bootstrapFlight;
+        bootstrapFlight = undefined;
+        bootstrapInboxFlight = undefined;
+        detachFlights(() => true);
+        if (previousBootstrap) fork(Fiber.interrupt(previousBootstrap));
         inboxSegments.clear();
-        historySegments.clear();
+        for (const subscription of listeners.values())
+            subscription.window = undefined;
         acceptedReadOrder.clear();
         recentHistories.length = 0;
         verified = accountId !== null;
@@ -579,11 +730,7 @@ export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
     }
 
     function installRead(
-        result: {
-            resources: PersistedResource[];
-            entities: EntityFacts;
-            revision: number;
-        },
+        result: RepositoryRead,
         replace = false,
         affected: { inbox: boolean; histories: Set<string> } = {
             inbox: false,
@@ -592,24 +739,24 @@ export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
     ) {
         if (replace) {
             inboxSegments.clear();
-            historySegments.clear();
         }
         for (const resource of result.resources) {
             if (resource.key.startsWith('inbox:primary'))
                 inboxSegments.set(resource.key, resource);
-            else if (
-                resource.threadId &&
-                resource.key.startsWith(`history:${resource.threadId}`)
-            ) {
-                historySegments.set(resource.key, resource);
-            }
         }
+
         const inbox = preserveRuntime(
             inboxProjection(),
             state.inbox,
             affected.inbox,
         );
-        const histories = allHistories();
+        const histories = { ...state.histories };
+        for (const id of result.deletedHistoryIds ?? []) {
+            delete histories[id];
+            delete state.histories[id];
+            for (const subscription of targetsFor(id))
+                subscription.window = undefined;
+        }
         for (const [threadId, previous] of Object.entries(state.histories)) {
             if (affected.histories.has(threadId)) continue;
             if (histories[threadId]) {
@@ -629,28 +776,79 @@ export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
         state = {
             ...state,
             commitRevision: result.revision,
-            entities: replace
-                ? copyFacts(result.entities)
-                : {
-                      threadsById: {
-                          ...state.entities.threadsById,
-                          ...result.entities.threadsById,
-                      },
-                      usersById: {
-                          ...state.entities.usersById,
-                          ...result.entities.usersById,
-                      },
-                      messagesById: {
-                          ...state.entities.messagesById,
-                          ...result.entities.messagesById,
-                      },
-                  },
+            entities: {
+                threadsById: {
+                    ...state.entities.threadsById,
+                    ...result.entities.threadsById,
+                },
+                usersById: {
+                    ...state.entities.usersById,
+                    ...result.entities.usersById,
+                },
+                messagesById: {
+                    ...state.entities.messagesById,
+                    ...result.entities.messagesById,
+                },
+            },
             inbox,
             histories,
         };
     }
 
     function pruneRuntimeReferences() {
+        const retained = new Set([
+            ...detailInterest.keys(),
+            ...recentHistories
+                .filter((id) => !detailInterest.has(id))
+                .slice(0, 2),
+        ]);
+        state.histories = Object.fromEntries(
+            Object.entries(state.histories).filter(([id]) => retained.has(id)),
+        );
+        for (const threadId of detailInterest.keys()) {
+            const representative = targetsFor(threadId).find(
+                (target) => target.window,
+            )?.window;
+            if (representative) state.histories[threadId] = representative;
+        }
+
+        // Canonical messages are the union of at most 20 admitted 400-row
+        // windows, two warm 400-row histories, and bounded inbox dependencies.
+        // Rejected subscriptions contribute neither a window nor a reference.
+        const facts = emptyEntities();
+        const views = [
+            ...Object.values(state.histories),
+            ...[...listeners.values()].flatMap((subscription) =>
+                subscription.window ? [subscription.window] : [],
+            ),
+        ];
+        const threadIds = new Set([
+            ...state.inbox.orderedIds,
+            ...views.map((view) => view.threadId),
+        ]);
+        const messageIds = new Set(views.flatMap((view) => view.orderedIds));
+        for (const id of threadIds) {
+            const thread = state.entities.threadsById[id];
+            if (!thread) continue;
+            facts.threadsById[id] = thread;
+            for (const userId of thread.userIds) {
+                const user = state.entities.usersById[userId];
+                if (user) facts.usersById[userId] = user;
+            }
+            if (thread.lastMessageId) messageIds.add(thread.lastMessageId);
+        }
+        for (const id of messageIds) {
+            const message = state.entities.messagesById[id];
+            if (message) facts.messagesById[id] = message;
+        }
+        state.entities = facts;
+
+        // An older producer may still reference facts outside all mounted windows.
+        const minLiveOrder = Math.min(
+            ...[...flights.values()].flatMap((flight) =>
+                flight.readOrder === undefined ? [] : [flight.readOrder],
+            ),
+        );
         for (const key of acceptedReadOrder.keys()) {
             const separator = key.indexOf(':');
             const kind = key.slice(0, separator);
@@ -660,7 +858,8 @@ export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
                 (kind === 'user' && !state.entities.usersById[id]) ||
                 (kind === 'message' && !state.entities.messagesById[id])
             )
-                acceptedReadOrder.delete(key);
+                if ((acceptedReadOrder.get(key) ?? 0) < minLiveOrder)
+                    acceptedReadOrder.delete(key);
         }
         for (let index = recentHistories.length - 1; index >= 0; index--) {
             if (!state.histories[recentHistories[index]])
@@ -672,11 +871,180 @@ export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
         }
     }
 
+    function installWindow(
+        threadId: string,
+        result: HistoryWindowRead,
+        targets: Listener[],
+    ) {
+        state.entities = {
+            threadsById: {
+                ...state.entities.threadsById,
+                ...result.entities.threadsById,
+            },
+            usersById: {
+                ...state.entities.usersById,
+                ...result.entities.usersById,
+            },
+            messagesById: {
+                ...state.entities.messagesById,
+                ...result.entities.messagesById,
+            },
+        };
+        state.commitRevision = Math.max(state.commitRevision, result.revision);
+        if (result.history) {
+            state.histories[threadId] = preserveRuntime(
+                result.history,
+                state.histories[threadId],
+                false,
+            );
+            if (result.history.newerCoverageAvailable)
+                state.histories[threadId].freshness = 'stale';
+            for (const target of targets) {
+                if (listeners.get(target.notify) !== target) continue;
+                target.window = preserveRuntime(
+                    result.history,
+                    target.window,
+                    false,
+                );
+                if (result.history.newerCoverageAvailable)
+                    target.window.freshness = 'stale';
+                target.anchorId = target.window.orderedIds[0];
+            }
+        }
+    }
+
+    function targetsFor(
+        threadId: string,
+        listener?: (value: InboxProjection) => void,
+    ) {
+        return [...listeners.values()].filter(
+            (subscription) =>
+                subscription.threadId === threadId &&
+                (!listener || subscription.notify === listener),
+        );
+    }
+
+    function hydrateHistory(
+        accountId: string,
+        threadId: string,
+        targets = targetsFor(threadId),
+        request?: HistoryWindowRequest,
+    ): Effect.Effect<void, InboxError> {
+        return Effect.gen(function* () {
+            const epoch = state.accountEpoch;
+            const generation = detailGeneration.get(threadId);
+            if (
+                closed ||
+                accountId !== state.accountId ||
+                !detailInterest.has(threadId)
+            )
+                return;
+            if (!request && targets.length > 1) {
+                for (const target of targets)
+                    yield* hydrateHistory(accountId, threadId, [target]);
+                return;
+            }
+
+            const selectedRequest: HistoryWindowRequest | undefined =
+                request ??
+                (targets[0]?.window?.orderedIds[0]
+                    ? {
+                          anchorId: targets[0].window.orderedIds[0],
+                          direction: 'at',
+                          coverageGeneration:
+                              targets[0].window.coverageGeneration,
+                      }
+                    : targets[0]?.anchorId
+                      ? { anchorId: targets[0].anchorId }
+                      : undefined);
+            const key = `hydrate:${accountId}:${epoch}:${threadId}:${generation}:${selectedRequest?.coverageGeneration ?? 'current'}:${selectedRequest?.direction ?? 'at'}:${selectedRequest?.anchorId ?? 'newest'}`;
+            let flight = flights.get(key);
+            if (!flight) {
+                const waiters = new Set<Listener>();
+                const work = inLane(
+                    Effect.gen(function* () {
+                        const result = yield* repository.readHistoryWindow(
+                            accountId,
+                            threadId,
+                            selectedRequest,
+                        );
+                        if (
+                            closed ||
+                            accountId !== state.accountId ||
+                            epoch !== state.accountEpoch ||
+                            generation !== detailGeneration.get(threadId) ||
+                            !detailInterest.has(threadId)
+                        )
+                            return;
+                        yield* Effect.uninterruptible(
+                            Effect.gen(function* () {
+                                installWindow(threadId, result, [...waiters]);
+                                const accessedAt =
+                                    yield* Clock.currentTimeMillis;
+                                yield* repository.touchHistory(
+                                    accountId,
+                                    threadId,
+                                    accessedAt,
+                                );
+                                touchRecent(threadId);
+                                pruneRuntimeReferences();
+                                update(state);
+                            }),
+                        );
+                    }),
+                );
+                const started = start(work, () => {
+                    if (flights.get(key) === created) flights.delete(key);
+                });
+                const created: Flight = {
+                    fiber: started.fiber,
+                    accountId,
+                    epoch,
+                    threadId,
+                    generation,
+                    waiters,
+                };
+                flight = created;
+                flights.set(key, flight);
+                for (const target of targets) waiters.add(target);
+                started.activate();
+            } else for (const target of targets) flight.waiters?.add(target);
+            yield* Fiber.join(flight.fiber);
+        });
+    }
+
+    function rereadWindows(accountId: string, threadId: string) {
+        return Effect.gen(function* () {
+            const targets = targetsFor(threadId);
+            for (const target of targets) {
+                const anchorId =
+                    target.window?.orderedIds[0] ?? target.anchorId;
+                const result = yield* repository.readHistoryWindow(
+                    accountId,
+                    threadId,
+                    {
+                        anchorId,
+                        direction: 'at',
+                        coverageGeneration: target.window?.coverageGeneration,
+                    },
+                );
+                installWindow(threadId, result, [target]);
+            }
+            if (!targets.length)
+                installWindow(
+                    threadId,
+                    yield* repository.readHistoryWindow(accountId, threadId),
+                    [],
+                );
+        });
+    }
+
     function hydrate(accountId: string, keys: string[], epoch: number) {
         return inLane(
             Effect.gen(function* () {
                 const result = yield* repository.readResources(accountId, keys);
                 if (
+                    closed ||
                     epoch !== state.accountEpoch ||
                     accountId !== state.accountId
                 )
@@ -693,8 +1061,6 @@ export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
     ): Effect.Effect<void, InboxError> {
         return Effect.gen(function* () {
             const keys = ['inbox:primary', 'inbox:primary:page:*'];
-            for (const id of detailInterest.keys())
-                keys.push(`history:${id}`, `history:${id}:page:*`);
             const hydrated = yield* Effect.result(
                 hydrate(accountId, [...new Set(keys)], epoch),
             );
@@ -709,100 +1075,122 @@ export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
                     );
                 }
             }
-            hydratedEpoch = epoch;
-            if (epoch !== state.accountEpoch || accountId !== state.accountId)
+            if (
+                closed ||
+                epoch !== state.accountEpoch ||
+                accountId !== state.accountId
+            )
                 return;
-            const inboxFlight = runInbox(undefined, accountId, epoch);
-            const sharedInbox = yield* Effect.cached(inboxFlight);
-            bootstrapInboxFlight = sharedInbox;
+            hydratedEpoch = epoch;
+
+            const inboxFlight = start(
+                runInbox(undefined, accountId, epoch),
+                () => undefined,
+            );
+            bootstrapInboxFlight = inboxFlight.fiber;
+            inboxFlight.activate();
             fork(
                 Effect.andThen(
-                    sharedInbox,
+                    Fiber.join(inboxFlight.fiber),
                     Effect.sync(() => {
+                        if (
+                            closed ||
+                            epoch !== state.accountEpoch ||
+                            accountId !== state.accountId
+                        )
+                            return;
                         for (const id of detailInterest.keys()) {
-                            if (knownThread(id))
-                                fork(runHistory(id, false, false));
+                            fork(
+                                Effect.andThen(
+                                    hydrateHistory(accountId, id),
+                                    Effect.suspend(() =>
+                                        knownThread(id)
+                                            ? runHistory(id, false, false)
+                                            : Effect.void,
+                                    ),
+                                ),
+                            );
                         }
                     }),
                 ),
             );
-            for (const id of detailInterest.keys()) {
-                if (knownThread(id)) fork(runHistory(id, false, false));
-            }
         });
     }
 
     const ensureIdentity = Effect.fn('InboxEngine.ensureIdentity')(function* (
         force = false,
     ): Effect.fn.Return<string, InboxError> {
-        if (identityFlight) return yield* identityFlight;
+        if (closed) return yield* Effect.interrupt;
+        if (identityFlight) return yield* Fiber.join(identityFlight);
         if (!force && verified && state.accountId) return state.accountId;
-        const identityEpoch = state.accountEpoch;
-        const flight = Effect.gen(function* () {
+        let token = ++identityToken;
+        const work = Effect.gen(function* () {
             const accountId = yield* provider.account;
-            if (
-                identityEpoch !== state.accountEpoch &&
-                state.accountId !== null
-            )
-                return state.accountId;
-            if (state.accountId !== accountId) resetAccount(accountId);
+            if (closed || token !== identityToken)
+                return yield* Effect.fail(
+                    new InboxError('provider_unavailable'),
+                );
+            if (state.accountId !== accountId) {
+                resetAccount(accountId, undefined, checked.fiber);
+                token = identityToken;
+                identityFlight = checked.fiber;
+            }
             verified = true;
             if (hydratedEpoch !== state.accountEpoch && !bootstrapFlight) {
                 const epoch = state.accountEpoch;
-                const current = bootstrap(accountId, epoch).pipe(
-                    Effect.ensuring(
-                        Effect.sync(() => {
-                            if (bootstrapFlight === current)
-                                bootstrapFlight = undefined;
-                        }),
-                    ),
-                );
-                bootstrapFlight = current;
+                const current = start(bootstrap(accountId, epoch), () => {
+                    if (bootstrapFlight === current.fiber)
+                        bootstrapFlight = undefined;
+                });
+                bootstrapFlight = current.fiber;
+                current.activate();
             }
-            if (bootstrapFlight) yield* bootstrapFlight;
+            if (bootstrapFlight) yield* Fiber.join(bootstrapFlight);
+            if (
+                closed ||
+                token !== identityToken ||
+                accountId !== state.accountId
+            )
+                return yield* Effect.fail(
+                    new InboxError('provider_unavailable'),
+                );
             return accountId;
-        });
-        let checked!: Effect.Effect<string, InboxError>;
-        checked = yield* flight.pipe(
+        }).pipe(
             Effect.tapError((cause) =>
                 Effect.sync(() => {
-                    if (identityEpoch === state.accountEpoch) {
-                        verified = false;
-                        const error = errorOf(cause, 'provider_unavailable');
-                        if (error.kind === 'auth') resetAccount(null, error);
-                        else
-                            setInboxRuntime({
-                                freshness: 'stale',
-                                ...failed('refresh', error),
-                            });
-                    }
+                    if (closed || token !== identityToken) return;
+                    verified = false;
+                    const error = errorOf(cause, 'provider_unavailable');
+                    if (error.kind === 'auth')
+                        resetAccount(null, error, checked.fiber);
+                    else
+                        setInboxRuntime({
+                            freshness: 'stale',
+                            ...failed('refresh', error),
+                        });
                 }),
             ),
-            Effect.ensuring(
-                Effect.sync(() => {
-                    if (identityFlight === checked) identityFlight = undefined;
-                }),
-            ),
-            Effect.cached,
         );
-        identityFlight = checked;
-        return yield* checked;
+        const checked = start(work, () => {
+            if (identityFlight === checked.fiber) {
+                identityFlight = undefined;
+                notify();
+            }
+        });
+        identityFlight = checked.fiber;
+        notify();
+        checked.activate();
+        return yield* Fiber.join(checked.fiber);
     });
 
     function knownThread(threadId: string): boolean {
         return Boolean(
-            state.entities.threadsById[threadId] ||
-                state.histories[threadId] ||
-                historySegments.has(resourceKeyForHistory(threadId)),
+            state.entities.threadsById[threadId] || state.histories[threadId],
         );
     }
 
     function activeInboxKeys(): Set<string> {
         return new Set(inboxChain().map((resource) => resource.key));
-    }
-
-    function activeHistoryKeys(threadId: string): Set<string> {
-        return new Set(historyChain(threadId).map((resource) => resource.key));
     }
 
     function inboxDeletes(forKey: string): string[] | undefined {
@@ -823,55 +1211,6 @@ export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
                 .find((key) => !active.has(key))!,
         );
         return candidate ? [candidate.key] : undefined;
-    }
-
-    function historyDeletes(
-        threadId: string,
-        forKey: string,
-    ): string[] | undefined {
-        const keys = [...historySegments.keys()].filter((key) =>
-            key.startsWith(`history:${threadId}:page:`),
-        );
-        const addsSegment = !historySegments.has(forKey);
-        if (keys.length + (addsSegment ? 1 : 0) < MAX_HISTORY_SEGMENTS)
-            return undefined;
-        const active = activeHistoryKeys(threadId);
-        const candidateKey = keys
-            .sort(
-                (a, b) =>
-                    historySegments.get(a)!.fetchedAt -
-                    historySegments.get(b)!.fetchedAt,
-            )
-            .find((key) => !active.has(key));
-        return candidateKey ? [candidateKey] : undefined;
-    }
-
-    function evictInactiveHistoryRoot(): string[] | undefined {
-        const roots = [
-            ...new Set(
-                [...historySegments.values()]
-                    .filter(
-                        (resource) =>
-                            resource.threadId !== undefined &&
-                            resource.key ===
-                                resourceKeyForHistory(resource.threadId),
-                    )
-                    .flatMap((resource) =>
-                        resource.threadId ? [resource.threadId] : [],
-                    ),
-            ),
-        ];
-        if (roots.length < MAX_HISTORY_ROOTS) return undefined;
-        const root = [
-            ...recentHistories.slice().reverse(),
-            ...roots.filter((id) => !recentHistories.includes(id)),
-        ].find(
-            (id) => roots.includes(id) && (detailInterest.get(id) ?? 0) === 0,
-        );
-        if (!root) return undefined;
-        return [...historySegments.values()]
-            .filter((resource) => resource.threadId === root)
-            .map((resource) => resource.key);
     }
 
     function noProgress(
@@ -909,7 +1248,7 @@ export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
         const account = accountId ?? (yield* ensureIdentity());
         const key = `inbox:${state.accountEpoch}:${account}:${cursor ?? 'head'}`;
         const current = flights.get(key);
-        if (current) return yield* current;
+        if (current) return yield* Fiber.join(current.fiber);
         if (epoch !== state.accountEpoch || account !== state.accountId) return;
         if (cursor && state.inbox.retentionLimited) return;
         const order = ++readOrder;
@@ -930,8 +1269,9 @@ export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
             ),
             {
                 onSuccess: (page) =>
-                    inLane(
+                    commitInLane(
                         Effect.gen(function* () {
+                            if (closed) return;
                             if (!page) {
                                 if (
                                     epoch === state.accountEpoch &&
@@ -944,6 +1284,7 @@ export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
                                 return;
                             }
                             if (
+                                closed ||
                                 epoch !== state.accountEpoch ||
                                 account !== state.accountId
                             )
@@ -1007,11 +1348,29 @@ export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
                                 undefined,
                                 cursor,
                             );
+                            if (
+                                closed ||
+                                epoch !== state.accountEpoch ||
+                                account !== state.accountId
+                            )
+                                return;
                             const commitResult = yield* Effect.result(
                                 repository.commitResources(account, {
                                     resources: [record],
-                                    entities: merged,
+                                    entities: changedFacts(
+                                        state.entities,
+                                        merged,
+                                        acceptedNow,
+                                    ),
                                     deleteKeys,
+                                    returnKeys: HISTORY_RETURN_KEYS,
+                                    retention: {
+                                        protectedThreadIds: [
+                                            ...detailInterest.keys(),
+                                        ],
+                                        maxHistories: 20,
+                                        maxMessages: 20000,
+                                    },
                                 }),
                             );
                             if (commitResult._tag === 'Success') {
@@ -1027,9 +1386,23 @@ export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
                                     inbox: true,
                                     histories: new Set(),
                                 });
-                                pruneRuntimeReferences();
+                                state.entities = {
+                                    threadsById: {
+                                        ...merged.threadsById,
+                                        ...state.entities.threadsById,
+                                    },
+                                    usersById: {
+                                        ...merged.usersById,
+                                        ...state.entities.usersById,
+                                    },
+                                    messagesById: {
+                                        ...merged.messagesById,
+                                        ...state.entities.messagesById,
+                                    },
+                                };
                                 for (const key of acceptedNow)
                                     acceptedReadOrder.set(key, order);
+                                pruneRuntimeReferences();
                                 const rebuilt = inboxProjection();
                                 const inbox = {
                                     ...rebuilt,
@@ -1053,6 +1426,12 @@ export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
                                     inbox,
                                 });
                             } else {
+                                if (
+                                    closed ||
+                                    epoch !== state.accountEpoch ||
+                                    account !== state.accountId
+                                )
+                                    return;
                                 const cause = commitResult.failure;
                                 setInboxRuntime({
                                     freshness: 'stale',
@@ -1083,34 +1462,38 @@ export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
                     }),
             },
         );
-        const shared = yield* Effect.cached(work);
-        flights.set(key, shared);
-        yield* Effect.ensuring(
-            shared,
-            Effect.sync(() => {
-                if (flights.get(key) === shared) flights.delete(key);
-            }),
-        );
+        const producer = start(work, () => {
+            if (flights.get(key) === flight) flights.delete(key);
+        });
+        const flight: Flight = {
+            fiber: producer.fiber,
+            accountId: account,
+            epoch,
+            readOrder: order,
+        };
+        flights.set(key, flight);
+        producer.activate();
+        yield* Fiber.join(flight.fiber);
     });
 
     const runHistory = Effect.fn('InboxEngine.runHistory')(function* (
         threadId: string,
         older: boolean,
         force: boolean,
+        context?: HistoryProjection,
     ): Effect.fn.Return<void, InboxError> {
         const account = yield* ensureIdentity();
         const interest = detailInterest.get(threadId) ?? 0;
         const generation = detailGeneration.get(threadId) ?? 0;
         if (!knownThread(threadId) || interest === 0) return;
         const current =
-            state.histories[threadId] ?? historyProjection(threadId);
-        if (older && (!current?.hasNextPage || current.retentionLimited))
-            return;
+            context ?? state.histories[threadId] ?? historyProjection(threadId);
+        if (older && !current?.hasNextPage) return;
         if (!older && !force && current?.availability === 'present') return;
         const cursor = older ? current?.cursor : undefined;
         const key = `history:${state.accountEpoch}:${threadId}:${generation}:${cursor ?? 'head'}`;
         const existing = flights.get(key);
-        if (existing) return yield* existing;
+        if (existing) return yield* Fiber.join(existing.fiber);
         const epoch = state.accountEpoch;
         const order = ++readOrder;
         setHistoryRuntime(threadId, {
@@ -1133,8 +1516,9 @@ export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
             ),
             {
                 onSuccess: (result) =>
-                    inLane(
+                    commitInLane(
                         Effect.gen(function* () {
+                            if (closed) return;
                             if (!result) {
                                 if (
                                     epoch === state.accountEpoch &&
@@ -1148,6 +1532,7 @@ export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
                                 return;
                             }
                             if (
+                                closed ||
                                 epoch !== state.accountEpoch ||
                                 account !== state.accountId
                             )
@@ -1174,101 +1559,10 @@ export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
                             };
                             if (result.cursor)
                                 normalized.cursor = result.cursor;
-                            const chain = historyChain(threadId);
-                            const activeIds = chain.flatMap(
-                                (resource) => resource.orderedIds,
-                            );
-                            if (
-                                noProgress(
-                                    cursor,
-                                    result.cursor,
-                                    normalized.orderedIds,
-                                    activeIds,
-                                    chain,
-                                    result.hasNextPage,
-                                )
-                            ) {
-                                setHistoryRuntime(
-                                    threadId,
-                                    failed(
-                                        'continuation',
-                                        errorOf(
-                                            new InboxError('no_progress'),
-                                            'no_progress',
-                                        ),
-                                    ),
-                                );
-                                return;
-                            }
                             const resourceKey = resourceKeyForHistory(
                                 threadId,
                                 cursor,
                             );
-                            const deletes =
-                                historyDeletes(threadId, resourceKey) ?? [];
-                            if (
-                                !historySegments.has(resourceKey) &&
-                                deletes.length === 0 &&
-                                [...historySegments.keys()].filter((key) =>
-                                    key.startsWith(`history:${threadId}:page:`),
-                                ).length >= MAX_HISTORY_SEGMENTS
-                            ) {
-                                setHistoryRuntime(threadId, {
-                                    ...failed('continuation', capacityError()),
-                                    retentionLimited: true,
-                                });
-                                return;
-                            }
-                            const retainedIds = older
-                                ? uniqueIds(
-                                      historyChain(threadId).flatMap(
-                                          (resource) => resource.orderedIds,
-                                      ),
-                                  )
-                                : [];
-                            const available = Math.max(
-                                0,
-                                MAX_HISTORY_MESSAGES - retainedIds.length,
-                            );
-                            const newIds = normalized.orderedIds.filter(
-                                (id) => !retainedIds.includes(id),
-                            );
-                            normalized.orderedIds = newIds.slice(0, available);
-                            if (newIds.length > available)
-                                normalized.retentionLimited = true;
-                            const isNewRoot = !historySegments.has(
-                                resourceKeyForHistory(threadId),
-                            );
-                            const rootDeletes = isNewRoot
-                                ? evictInactiveHistoryRoot()
-                                : undefined;
-                            const rootCount = new Set(
-                                [...historySegments.values()]
-                                    .filter(
-                                        (resource) =>
-                                            resource.threadId !== undefined &&
-                                            resource.key ===
-                                                resourceKeyForHistory(
-                                                    resource.threadId,
-                                                ),
-                                    )
-                                    .map((resource) => resource.threadId),
-                            ).size;
-                            if (
-                                isNewRoot &&
-                                rootDeletes === undefined &&
-                                rootCount >= MAX_HISTORY_ROOTS
-                            ) {
-                                setHistoryRuntime(
-                                    threadId,
-                                    failed('refresh', capacityError()),
-                                );
-                                return;
-                            }
-                            const allDeletes = uniqueIds([
-                                ...deletes,
-                                ...(rootDeletes ?? []),
-                            ]);
                             const incoming = copyFacts(state.entities);
                             const detailThread =
                                 !older && result.thread?.key === threadId
@@ -1305,9 +1599,28 @@ export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
                             );
                             const commitUpdate = {
                                 resources: [record],
-                                entities: incoming,
-                                deleteKeys: allDeletes,
+                                entities: changedFacts(
+                                    state.entities,
+                                    incoming,
+                                    acceptedNow,
+                                ),
+                                returnKeys: HISTORY_RETURN_KEYS,
+                                retention: {
+                                    protectedThreadIds: [
+                                        ...detailInterest.keys(),
+                                    ],
+                                    maxHistories: 20,
+                                    maxMessages: 20000,
+                                },
                             };
+                            if (
+                                closed ||
+                                epoch !== state.accountEpoch ||
+                                account !== state.accountId ||
+                                detailGeneration.get(threadId) !== generation ||
+                                !detailInterest.has(threadId)
+                            )
+                                return;
                             const commitResult = yield* Effect.result(
                                 repository.commitResources(
                                     account,
@@ -1321,17 +1634,50 @@ export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
                                     account !== state.accountId
                                 )
                                     return;
-                                for (const deleteKey of allDeletes) {
-                                    historySegments.delete(deleteKey);
-                                }
                                 installRead(committed, true, {
                                     inbox: false,
                                     histories: new Set([threadId]),
                                 });
-                                pruneRuntimeReferences();
+                                state.entities = incoming;
                                 for (const key of acceptedNow)
                                     acceptedReadOrder.set(key, order);
-                                const next = historyProjection(threadId);
+                                yield* rereadWindows(account, threadId);
+                                for (const subscription of targetsFor(
+                                    threadId,
+                                )) {
+                                    if (subscription.window) {
+                                        subscription.window = {
+                                            ...subscription.window,
+                                            synchronization: 'idle',
+                                            error: undefined,
+                                            failedOperation: undefined,
+                                        };
+                                        if (
+                                            !older &&
+                                            current?.failedOperation ===
+                                                'continuation' &&
+                                            subscription.window.cursor ===
+                                                current.cursor
+                                        )
+                                            subscription.window =
+                                                preserveRuntime(
+                                                    subscription.window,
+                                                    current,
+                                                    false,
+                                                );
+                                    }
+                                }
+                                pruneRuntimeReferences();
+                                const projected = historyProjection(threadId);
+                                const next: HistoryProjection | undefined =
+                                    projected
+                                        ? {
+                                              ...projected,
+                                              synchronization: 'idle' as const,
+                                              error: undefined,
+                                              failedOperation: undefined,
+                                          }
+                                        : undefined;
                                 if (next) {
                                     if (
                                         !older &&
@@ -1351,12 +1697,23 @@ export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
                                             ...state.histories,
                                             [threadId]: {
                                                 ...next,
-                                                freshness: 'fresh',
+                                                freshness:
+                                                    next.newerCoverageAvailable
+                                                        ? 'stale'
+                                                        : 'fresh',
                                             },
                                         },
                                     });
                                 }
                             } else {
+                                if (
+                                    closed ||
+                                    epoch !== state.accountEpoch ||
+                                    account !== state.accountId ||
+                                    detailGeneration.get(threadId) !==
+                                        generation
+                                )
+                                    return;
                                 const cause = commitResult.failure;
                                 setHistoryRuntime(threadId, {
                                     freshness: 'stale',
@@ -1371,6 +1728,8 @@ export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
                 onFailure: (cause) =>
                     Effect.sync(() => {
                         if (
+                            !closed &&
+                            account === state.accountId &&
                             epoch === state.accountEpoch &&
                             (detailInterest.get(threadId) ?? 0) > 0 &&
                             detailGeneration.get(threadId) === generation
@@ -1390,80 +1749,71 @@ export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
                     }),
             },
         );
-        const shared = yield* Effect.cached(work);
-        flights.set(key, shared);
-        yield* Effect.ensuring(
-            shared,
-            Effect.sync(() => {
-                if (flights.get(key) === shared) flights.delete(key);
-            }),
-        );
+        const producer = start(work, () => {
+            if (flights.get(key) === flight) flights.delete(key);
+        });
+        const flight: Flight = {
+            fiber: producer.fiber,
+            accountId: account,
+            epoch,
+            threadId,
+            generation,
+            readOrder: order,
+        };
+        flights.set(key, flight);
+        producer.activate();
+        yield* Fiber.join(flight.fiber);
     });
 
     function subscribe(
         listener: (value: InboxProjection) => void,
         threadId?: string,
+        anchorId?: string,
+        replaceListener?: (value: InboxProjection) => void,
     ) {
-        if (
-            threadId &&
-            !detailInterest.has(threadId) &&
-            detailInterest.size >= MAX_HISTORY_ROOTS
-        ) {
-            const projection = projectFor(threadId);
-            projection.histories[threadId] = {
-                threadId,
-                orderedIds: [],
-                fetchedAt: 0,
-                hasNextPage: false,
-                availability: 'absent',
-                freshness: 'stale',
-                synchronization: 'error',
-                error: capacityError(),
-                failedOperation: 'refresh',
-            };
-            listener(projection);
-            return () => undefined;
-        }
-        const hadListeners = listeners.size > 0;
+        if (closed) return () => undefined;
+        const previous = replaceListener
+            ? listeners.get(replaceListener)
+            : undefined;
         const subscription: Listener = {
             notify: listener,
-            threadId,
-            authorized: hadListeners && verified && !identityFlight,
+            authorized: previous?.authorized ?? false,
+            anchorId,
         };
         listeners.set(listener, subscription);
-        if (threadId) {
-            const count = detailInterest.get(threadId) ?? 0;
-            if (count === 0)
-                detailGeneration.set(
-                    threadId,
-                    (detailGeneration.get(threadId) ?? 0) + 1,
-                );
-            detailInterest.set(threadId, count + 1);
-            touchRecent(threadId);
-        }
-        if (subscription.authorized || !state.accountId) {
-            listener(projectFor(threadId));
-        } else {
-            listener(checkingProjection());
-        }
-        fork(
-            Effect.matchEffect(ensureIdentity(!hadListeners), {
+        if (threadId) admit(subscription, threadId, previous);
+        listener(listenerProjection(subscription));
+
+        subscription.waiter = fork(
+            Effect.matchEffect(ensureIdentity(!previous), {
                 onSuccess: (accountId) =>
                     Effect.gen(function* () {
-                        if (listeners.get(listener) !== subscription) return;
+                        if (
+                            closed ||
+                            listeners.get(listener) !== subscription ||
+                            accountId !== state.accountId
+                        )
+                            return;
                         subscription.authorized = true;
-                        listener(projectFor(threadId));
-                        if (threadId && !bootstrapFlight) {
-                            yield* hydrate(
+                        listener(listenerProjection(subscription));
+                        if (subscription.threadId && !bootstrapFlight) {
+                            yield* hydrateHistory(
                                 accountId,
-                                [
-                                    `history:${threadId}`,
-                                    `history:${threadId}:page:*`,
-                                ],
-                                state.accountEpoch,
+                                subscription.threadId,
+                                [subscription],
                             );
-                            if (knownThread(threadId))
-                                yield* runHistory(threadId, false, false);
+                            if (
+                                !closed &&
+                                listeners.get(listener) === subscription &&
+                                accountId === state.accountId &&
+                                subscription.threadId &&
+                                knownThread(subscription.threadId)
+                            )
+                                yield* runHistory(
+                                    subscription.threadId,
+                                    false,
+                                    false,
+                                );
                         } else if (!threadId) {
                             notify();
                         }
@@ -1471,11 +1821,19 @@ export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
                 onFailure: () => Effect.void,
             }),
         );
+
         return () => {
             const current = listeners.get(listener);
-            if (!current) return;
+            if (current !== subscription) return;
             listeners.delete(listener);
+            for (const flight of flights.values())
+                flight.waiters?.delete(current);
+            detachFlights((flight) =>
+                Boolean(flight.waiters && !flight.waiters.size),
+            );
+            if (current.waiter) fork(Fiber.interrupt(current.waiter));
             if (current.threadId) {
+                touchRecent(current.threadId);
                 const count = (detailInterest.get(current.threadId) ?? 1) - 1;
                 if (count > 0) detailInterest.set(current.threadId, count);
                 else {
@@ -1483,6 +1841,9 @@ export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
                     detailGeneration.set(
                         current.threadId,
                         (detailGeneration.get(current.threadId) ?? 0) + 1,
+                    );
+                    detachFlights(
+                        (flight) => flight.threadId === current.threadId,
                     );
                     if (
                         state.histories[current.threadId]?.synchronization ===
@@ -1493,6 +1854,8 @@ export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
                         });
                 }
             }
+            pruneRuntimeReferences();
+            notify();
         };
     }
 
@@ -1504,7 +1867,7 @@ export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
             const account = identity.success;
             if (previousEpoch !== state.accountEpoch) {
                 if (bootstrapInboxFlight)
-                    yield* Effect.ignore(bootstrapInboxFlight);
+                    yield* Effect.ignore(Fiber.join(bootstrapInboxFlight));
                 return;
             }
             yield* Effect.ignore(runInbox(undefined, account));
@@ -1526,20 +1889,143 @@ export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
 
     const refreshHistory = Effect.fn('InboxEngine.refreshHistory')(function* (
         threadId: string,
+        listener?: (value: InboxProjection) => void,
+        anchorId?: string,
     ): Effect.fn.Return<void, never> {
+        const target = listener ? listeners.get(listener) : undefined;
+        if (
+            listener &&
+            (!target ||
+                (target.threadId !== threadId &&
+                    target.rejectedThreadId !== threadId))
+        )
+            return;
         const previousEpoch = state.accountEpoch;
         const identity = yield* Effect.result(ensureIdentity(true));
         if (identity._tag === 'Failure') return;
+
+        for (const subscription of listeners.values()) {
+            if (listener && subscription.notify !== listener) continue;
+            if (subscription.rejectedThreadId === threadId) {
+                subscription.authorized = true;
+                admit(subscription, threadId);
+            }
+        }
+        notify();
+
+        if (!detailInterest.has(threadId)) return;
+        const targets = targetsFor(threadId, listener);
+        for (const target of targets)
+            target.anchorId =
+                anchorId ?? target.window?.orderedIds[0] ?? target.anchorId;
+        yield* Effect.ignore(
+            hydrateHistory(
+                identity.success,
+                threadId,
+                targets,
+                anchorId ? { anchorId } : undefined,
+            ),
+        );
         if (previousEpoch !== state.accountEpoch) return;
         if (!knownThread(threadId)) yield* Effect.ignore(runInbox(undefined));
         yield* Effect.ignore(runHistory(threadId, false, true));
     });
 
-    const loadOlderHistory = Effect.fn('InboxEngine.loadOlderHistory')(
-        function* (threadId: string): Effect.fn.Return<void, never> {
-            return yield* Effect.ignore(runHistory(threadId, true, false));
-        },
-    );
+    function shiftHistory(
+        threadId: string,
+        listener: ((value: InboxProjection) => void) | undefined,
+        direction: 'older' | 'newer',
+    ) {
+        return Effect.gen(function* () {
+            const identity = yield* Effect.result(ensureIdentity());
+            if (identity._tag === 'Failure') return;
+
+            const accountId = identity.success;
+            const targets = targetsFor(threadId, listener);
+            const networkGroups = new Map<
+                string | undefined,
+                { window: HistoryProjection; targets: Listener[] }
+            >();
+            for (const target of targets) {
+                if (!target.window)
+                    yield* Effect.ignore(
+                        hydrateHistory(accountId, threadId, [target]),
+                    );
+                const window = target.window;
+                if (!window) continue;
+                const cached =
+                    direction === 'older'
+                        ? window.cachedOlder
+                        : window.cachedNewer;
+                const anchorId =
+                    direction === 'older'
+                        ? window.orderedIds[0]
+                        : window.orderedIds.at(-1);
+                if (cached && anchorId)
+                    yield* Effect.ignore(
+                        hydrateHistory(accountId, threadId, [target], {
+                            anchorId,
+                            direction,
+                            coverageGeneration: window.coverageGeneration,
+                        }),
+                    );
+                else if (direction === 'newer' && window.newerCoverageAvailable)
+                    yield* Effect.ignore(
+                        hydrateHistory(accountId, threadId, [target], {
+                            direction: 'newer',
+                        }),
+                    );
+                else if (direction === 'older' && window.hasNextPage) {
+                    const group = networkGroups.get(window.cursor);
+                    if (group) group.targets.push(target);
+                    else
+                        networkGroups.set(window.cursor, {
+                            window,
+                            targets: [target],
+                        });
+                }
+            }
+            for (const group of networkGroups.values()) {
+                const anchors = new Map(
+                    group.targets.map((target) => [
+                        target,
+                        {
+                            anchorId: target.window?.orderedIds[0],
+                            coverageGeneration:
+                                target.window?.coverageGeneration,
+                        },
+                    ]),
+                );
+                yield* Effect.ignore(
+                    runHistory(threadId, true, false, group.window),
+                );
+                for (const target of group.targets) {
+                    if (listeners.get(target.notify) !== target) continue;
+                    const request = anchors.get(target);
+                    if (request?.anchorId)
+                        yield* Effect.ignore(
+                            hydrateHistory(accountId, threadId, [target], {
+                                ...request,
+                                direction: 'older',
+                            }),
+                        );
+                }
+            }
+        });
+    }
+
+    function loadOlderHistory(
+        threadId: string,
+        listener?: (value: InboxProjection) => void,
+    ) {
+        return shiftHistory(threadId, listener, 'older');
+    }
+    function loadNewerHistory(
+        threadId: string,
+        listener?: (value: InboxProjection) => void,
+    ) {
+        return shiftHistory(threadId, listener, 'newer');
+    }
 
     return {
         subscribe,
@@ -1547,6 +2033,7 @@ export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
         loadMoreInbox,
         refreshHistory,
         loadOlderHistory,
+        loadNewerHistory,
         snapshot: () => state,
     };
 });
@@ -1556,11 +2043,9 @@ export const inboxEngineLive = Layer.effect(
     Effect.gen(function* () {
         const repository = yield* InboxRepositoryService;
         const provider = yield* InboxProviderService;
-        const context = yield* Effect.context<never>();
-        const fibers = yield* FiberSet.make();
-        return yield* makeInboxEngine(repository, provider, (effect) => {
-            Effect.runForkWith(context)(FiberSet.run(fibers)(effect));
-        });
+        return InboxEngineService.of(
+            yield* makeInboxEngine(repository, provider),
+        );
     }),
 );
 
@@ -1568,8 +2053,27 @@ export const inboxEngineLive = Layer.effect(
 export function createInboxEngine(
     repository: InboxRepository,
     provider: InboxProvider,
-): InboxEngine {
+): InboxEngine & { dispose(): Promise<void> } {
+    const scope = Scope.makeUnsafe();
+
     const repositoryEffects: InboxRepositoryEffects = {
+        readHistoryWindow: (accountId, threadId, request) =>
+            Effect.tryPromise({
+                try: () =>
+                    repository.readHistoryWindow(accountId, threadId, request),
+                catch: () => new InboxError('storage'),
+            }),
+        touchHistory: (accountId, threadId, accessedAt) =>
+            Effect.tryPromise({
+                try: () =>
+                    repository.touchHistory(accountId, threadId, accessedAt),
+                catch: () => new InboxError('storage'),
+            }),
+        readHistoryInventory: (accountId, limit) =>
+            Effect.tryPromise({
+                try: () => repository.readHistoryInventory(accountId, limit),
+                catch: () => new InboxError('storage'),
+            }),
         readResources: (accountId, keys) =>
             Effect.tryPromise({
                 try: () => repository.readResources(accountId, keys),
@@ -1619,16 +2123,23 @@ export function createInboxEngine(
             }),
     };
     const engine = Effect.runSync(
-        makeInboxEngine(repositoryEffects, providerEffects),
+        Scope.provide(scope)(
+            makeInboxEngine(repositoryEffects, providerEffects),
+        ),
     );
     return {
         ...engine,
+        dispose: () => Effect.runPromise(Scope.close(scope, Exit.void)),
         refresh: () =>
             Effect.runPromise(Effect.andThen(engine.refresh, Effect.yieldNow)),
         loadMoreInbox: () => Effect.runPromise(engine.loadMoreInbox),
-        refreshHistory: (threadId) =>
-            Effect.runPromise(engine.refreshHistory(threadId)),
-        loadOlderHistory: (threadId) =>
-            Effect.runPromise(engine.loadOlderHistory(threadId)),
+        refreshHistory: (threadId, listener, anchorId) =>
+            Effect.runPromise(
+                engine.refreshHistory(threadId, listener, anchorId),
+            ),
+        loadOlderHistory: (threadId, listener) =>
+            Effect.runPromise(engine.loadOlderHistory(threadId, listener)),
+        loadNewerHistory: (threadId, listener) =>
+            Effect.runPromise(engine.loadNewerHistory(threadId, listener)),
     };
 }

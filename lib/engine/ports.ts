@@ -1,5 +1,5 @@
 import browser from 'webextension-polyfill';
-import type { InboxEngine } from './inbox.ts';
+import type { InboxEngine, InboxProjection } from './inbox.ts';
 import {
     INBOX_CLIENT_PORT,
     isClientCommand,
@@ -34,6 +34,7 @@ export function registerInboxClientPorts(
     }
     let sequence = 0;
     let unsubscribe: (() => void) | undefined;
+    let selectedListener: ((projection: InboxProjection) => void) | undefined;
     let closed = false;
     function handle(operation: Promise<void>) {
         void operation.catch(() => undefined);
@@ -53,27 +54,44 @@ export function registerInboxClientPorts(
             // Acquire the replacement interest first so a route change cannot
             // transiently cancel a shared detail flight needed by both routes.
             const previous = unsubscribe;
-            unsubscribe = engine.subscribe((projection) => {
+            const previousListener = selectedListener;
+            selectedListener = (projection) => {
                 if (closed) return;
                 port.postMessage({
                     kind: 'snapshot',
                     sequence: ++sequence,
                     projection,
                 } satisfies SnapshotMessage);
-            }, command.threadId);
+            };
+            unsubscribe = engine.subscribe(
+                selectedListener,
+                command.threadId,
+                command.anchorId,
+                previousListener,
+            );
             previous?.();
         } else if (command.kind === 'refresh') handle(engine.refresh());
         else if (command.kind === 'load-more-inbox')
             handle(engine.loadMoreInbox());
         else if (command.kind === 'refresh-history')
-            handle(engine.refreshHistory(command.threadId));
-        else handle(engine.loadOlderHistory(command.threadId));
+            handle(
+                engine.refreshHistory(
+                    command.threadId,
+                    selectedListener,
+                    command.anchorId,
+                ),
+            );
+        else if (command.kind === 'load-older-history')
+            handle(engine.loadOlderHistory(command.threadId, selectedListener));
+        else
+            handle(engine.loadNewerHistory(command.threadId, selectedListener));
     }
     port.onMessage.addListener(receive);
     port.onDisconnect.addListener(() => {
         closed = true;
         unsubscribe?.();
         unsubscribe = undefined;
+        selectedListener = undefined;
     });
 }
 

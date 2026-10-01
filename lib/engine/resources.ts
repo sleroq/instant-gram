@@ -61,9 +61,35 @@ export type ResourceProjection = {
     failedOperation?: 'refresh' | 'continuation';
 };
 
+export const HISTORY_WINDOW_LIMIT = 400;
+
 export type HistoryProjection = ResourceProjection & {
     threadId: string;
     viewerId?: string;
+    cachedOlder?: boolean;
+    cachedNewer?: boolean;
+    coverageGeneration?: number;
+    newerCoverageAvailable?: boolean;
+};
+
+export type HistoryWindowRequest = {
+    coverageGeneration?: number;
+    anchorId?: string;
+    direction?: 'at' | 'older' | 'newer';
+};
+
+export type HistoryWindowRead = {
+    history?: HistoryProjection;
+    entities: EntityFacts;
+    revision: number;
+};
+
+export type HistoryInventory = {
+    threadId: string;
+    lastAccessedAt: number;
+    segmentCount: number;
+    retainedMessageCount: number;
+    activeMessageCount: number;
 };
 
 export type InboxProjection = {
@@ -82,6 +108,9 @@ export type PersistedResource = ResourceProjection & {
     viewerId?: string;
     /** The cursor used to request this segment. A head has no request cursor. */
     requestCursor?: string;
+    /** Physical page storage and active-chain visitation metadata. */
+    chunkCount?: number;
+    activeGeneration?: number;
     refs: { threadIds: string[]; userIds: string[]; messageIds: string[] };
 };
 
@@ -89,16 +118,37 @@ export type RepositoryRead = {
     resources: PersistedResource[];
     entities: EntityFacts;
     revision: number;
+    deletedHistoryIds?: string[];
 };
 
 export type ResourceCommit = {
     resources: PersistedResource[];
     entities: EntityFacts;
     deleteKeys?: string[];
+    returnKeys?: string[];
+    retention?: {
+        protectedThreadIds: string[];
+        maxHistories: number;
+        maxMessages: number;
+    };
 };
 
 export interface InboxRepository {
     readResources(accountId: string, keys: string[]): Promise<RepositoryRead>;
+    readHistoryWindow(
+        accountId: string,
+        threadId: string,
+        request?: HistoryWindowRequest,
+    ): Promise<HistoryWindowRead>;
+    touchHistory(
+        accountId: string,
+        threadId: string,
+        accessedAt: number,
+    ): Promise<void>;
+    readHistoryInventory(
+        accountId: string,
+        limit?: number,
+    ): Promise<HistoryInventory[]>;
     commitResources(
         accountId: string,
         update: ResourceCommit,

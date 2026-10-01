@@ -37,7 +37,7 @@ test.before(async () => {
     const manifest = JSON.parse(
         await readFile(`${output}/manifest.json`, 'utf8'),
     );
-    assert.deepEqual(manifest.permissions, ['tabs']);
+    assert.deepEqual(manifest.permissions, ['tabs', 'scripting']);
     assert.deepEqual(manifest.host_permissions, [
         'https://www.instagram.com/*',
     ]);

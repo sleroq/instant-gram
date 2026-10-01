@@ -15,11 +15,13 @@ import {
 
 export type InboxClient = {
     readonly state: Store<InboxProjection>;
-    select(threadId?: string): void;
+    select(threadId?: string, anchorId?: string): void;
+    rememberHistoryAnchor(threadId: string, anchorId?: string): void;
     refresh(): void;
     loadMoreInbox(): void;
-    refreshHistory(threadId: string): void;
+    refreshHistory(threadId: string, anchorId?: string): void;
     loadOlderHistory(threadId: string): void;
+    loadNewerHistory(threadId: string): void;
 };
 
 export function emptyProjection(): InboxProjection {
@@ -46,6 +48,18 @@ export function createInboxClient(): InboxClient {
     let currentPort: browser.Runtime.Port | undefined;
     let removeCurrent: (() => void) | undefined;
     let selectedThreadId: string | undefined;
+    let selectedAnchorId: string | undefined;
+
+    function selectionCommand(): ClientCommand {
+        if (!selectedThreadId) return { kind: 'subscribe' };
+        return selectedAnchorId
+            ? {
+                  kind: 'subscribe',
+                  threadId: selectedThreadId,
+                  anchorId: selectedAnchorId,
+              }
+            : { kind: 'subscribe', threadId: selectedThreadId };
+    }
 
     function connect() {
         const previousPort = currentPort;
@@ -106,13 +120,8 @@ export function createInboxClient(): InboxClient {
         function send(command: ClientCommand) {
             port.postMessage(command);
         }
-        function subscribe(threadId?: string) {
-            selectedThreadId = threadId;
-            if (threadId) send({ kind: 'subscribe', threadId });
-            else send({ kind: 'subscribe' });
-        }
-        // The worker returns a complete retained projection for each interest change.
-        subscribe(selectedThreadId);
+        // Restore this window's logical position after worker reconnect as well.
+        send(selectionCommand());
     }
 
     onSettled(connect);
@@ -125,22 +134,26 @@ export function createInboxClient(): InboxClient {
 
     return {
         state,
-        select: (threadId) => {
+        select: (threadId, anchorId) => {
             selectedThreadId = threadId;
-            const port = currentPort;
-            if (!port) return;
-            port.postMessage(
-                threadId
-                    ? { kind: 'subscribe', threadId }
-                    : { kind: 'subscribe' },
-            );
+            selectedAnchorId = threadId ? anchorId : undefined;
+            currentPort?.postMessage(selectionCommand());
+        },
+        rememberHistoryAnchor: (threadId, anchorId) => {
+            if (selectedThreadId === threadId) selectedAnchorId = anchorId;
         },
         refresh: () => currentPort?.postMessage({ kind: 'refresh' }),
         loadMoreInbox: () =>
             currentPort?.postMessage({ kind: 'load-more-inbox' }),
-        refreshHistory: (threadId) =>
-            currentPort?.postMessage({ kind: 'refresh-history', threadId }),
+        refreshHistory: (threadId, anchorId) =>
+            currentPort?.postMessage(
+                anchorId
+                    ? { kind: 'refresh-history', threadId, anchorId }
+                    : { kind: 'refresh-history', threadId },
+            ),
         loadOlderHistory: (threadId) =>
             currentPort?.postMessage({ kind: 'load-older-history', threadId }),
+        loadNewerHistory: (threadId) =>
+            currentPort?.postMessage({ kind: 'load-newer-history', threadId }),
     };
 }

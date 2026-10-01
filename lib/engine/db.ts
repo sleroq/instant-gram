@@ -1,4 +1,5 @@
 import { Context, Effect, Layer, Result } from 'effect';
+import { migrateHistoryStorage, storageRepository } from './history-storage.ts';
 import type { Message, User } from '../domain.ts';
 import {
     isBoolean,
@@ -10,7 +11,9 @@ import {
 } from '../json.ts';
 import {
     InboxError,
-    emptyEntities,
+    type HistoryInventory,
+    type HistoryWindowRequest,
+    type HistoryWindowRead,
     type EntityFacts,
     type InboxRepository,
     type PersistedResource,
@@ -20,16 +23,7 @@ import {
 } from './resources.ts';
 
 const DB_NAME = 'icr-successor';
-const STORE_NAMES = [
-    'users',
-    'threads',
-    'messages',
-    'resources',
-    'meta',
-] as const;
 const FACT_STORE_NAMES = ['users', 'threads', 'messages'] as const;
-
-type Stored<T> = { accountId: string; id: string; value: T };
 
 type LegacyResource = {
     orderedIds: string[];
@@ -71,6 +65,20 @@ function validResource(
     if (value.threadId !== undefined && typeof value.threadId !== 'string')
         return false;
     if (value.viewerId !== undefined && typeof value.viewerId !== 'string')
+        return false;
+    if (
+        value.chunkCount !== undefined &&
+        (!isFiniteNumber(value.chunkCount) ||
+            !Number.isSafeInteger(value.chunkCount) ||
+            value.chunkCount < 0)
+    )
+        return false;
+    if (
+        value.activeGeneration !== undefined &&
+        (!isFiniteNumber(value.activeGeneration) ||
+            !Number.isSafeInteger(value.activeGeneration) ||
+            value.activeGeneration < 0)
+    )
         return false;
     if (
         value.requestCursor !== undefined &&
@@ -266,6 +274,18 @@ function validEntities(value: EntityFacts): boolean {
     return true;
 }
 
+function validStoredFact(
+    kind: 'threads' | 'users' | 'messages',
+    id: string,
+    value: JsonValue | undefined,
+): boolean {
+    return kind === 'threads'
+        ? validThread(value, id)
+        : kind === 'users'
+          ? validUser(value, id)
+          : validMessage(value, id);
+}
+
 function validAccountId(accountId: string): boolean {
     return accountId.length > 0;
 }
@@ -295,35 +315,6 @@ function requestResult<T>(request: IDBRequest<T>): Promise<T> {
         request.onsuccess = () => resolve(request.result);
         request.onerror = () => reject(new InboxError('storage'));
     });
-}
-
-function transactionDone(transaction: IDBTransaction): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
-        transaction.oncomplete = () => resolve();
-        transaction.onerror = () => reject(new InboxError('storage'));
-        transaction.onabort = () => reject(new InboxError('storage'));
-    });
-}
-
-async function finishTransaction<T>(
-    transaction: IDBTransaction,
-    work: Promise<T>,
-): Promise<T> {
-    const completion = transactionDone(transaction);
-    try {
-        const value = await work;
-        await completion;
-        return value;
-    } catch (error) {
-        try {
-            transaction.abort();
-        } catch {
-            // The transaction may already have aborted on its own request error.
-        }
-        await completion.catch(() => undefined);
-        if (error instanceof InboxError) throw error;
-        throw new InboxError('storage');
-    }
 }
 
 function abortUpgrade(transaction: IDBTransaction): void {
@@ -497,7 +488,7 @@ async function migrateV1(
 
 function openDatabase(factory: IDBFactory): Promise<IDBDatabase> {
     return new Promise<IDBDatabase>((resolve, reject) => {
-        const request = factory.open(DB_NAME, 2);
+        const request = factory.open(DB_NAME, 4);
         request.onupgradeneeded = (event) => {
             const database = request.result;
             const transaction = request.transaction;
@@ -522,14 +513,63 @@ function openDatabase(factory: IDBFactory): Promise<IDBDatabase> {
                 } else {
                     resourcesStore = transaction.objectStore('resources');
                 }
-                if (event.oldVersion < 2) {
-                    void migrateV1(
-                        transaction,
-                        transaction.objectStore('users'),
-                        transaction.objectStore('threads'),
-                        transaction.objectStore('messages'),
-                        resourcesStore,
+                if (event.oldVersion < 4) {
+                    database.createObjectStore('historyPrevious', {
+                        keyPath: ['accountId', 'threadId'],
+                    });
+                    const previous = database.createObjectStore('historyPreviousOrder', {
+                        keyPath: ['accountId', 'threadId', 'messageId'],
+                    });
+                    previous.createIndex('rank', ['accountId', 'threadId', 'generation', 'rank']);
+                    previous.createIndex('thread', ['accountId', 'threadId']);
+                }
+                if (event.oldVersion < 3) {
+                    database.createObjectStore('refs', {
+                        keyPath: ['accountId', 'kind', 'id'],
+                    });
+                    const inventory = database.createObjectStore(
+                        'historyInventory',
+                        { keyPath: ['accountId', 'threadId'] },
                     );
+                    inventory.createIndex('accountId', 'accountId');
+                    inventory.createIndex('access', [
+                        'accountId',
+                        'lastAccessedAt',
+                        'threadId',
+                    ]);
+                    const order = database.createObjectStore('historyOrder', {
+                        keyPath: ['accountId', 'threadId', 'messageId'],
+                    });
+                    order.createIndex('rank', [
+                        'accountId',
+                        'threadId',
+                        'generation',
+                        'rank',
+                    ]);
+                    order.createIndex('thread', ['accountId', 'threadId']);
+                    const chunks = database.createObjectStore('historyChunks', {
+                        keyPath: ['accountId', 'resourceKey', 'part'],
+                    });
+                    chunks.createIndex('resource', [
+                        'accountId',
+                        'resourceKey',
+                    ]);
+                    void (async () => {
+                        if (event.oldVersion > 0 && event.oldVersion < 2) {
+                            await migrateV1(
+                                transaction,
+                                transaction.objectStore('users'),
+                                transaction.objectStore('threads'),
+                                transaction.objectStore('messages'),
+                                resourcesStore,
+                            );
+                        }
+                        await migrateHistoryStorage(
+                            transaction,
+                            validResource,
+                            validStoredFact,
+                        );
+                    })().catch(() => abortUpgrade(transaction));
                 }
             } catch {
                 abortUpgrade(transaction);
@@ -538,96 +578,6 @@ function openDatabase(factory: IDBFactory): Promise<IDBDatabase> {
         request.onsuccess = () => resolve(request.result);
         request.onerror = () => reject(new InboxError('storage'));
     });
-}
-
-function rowValue<T>(value: JsonValue | undefined): Stored<T> {
-    if (!storedRow(value)) throw new InboxError('storage');
-    // SAFETY: this private adapter is called only for rows from the named store whose value is T.
-    return value as Stored<T>;
-}
-
-function resourceMatches(resource: PersistedResource, keys: string[]): boolean {
-    return keys.some((key) =>
-        key.endsWith('*')
-            ? resource.key.startsWith(key.slice(0, -1))
-            : resource.key === key,
-    );
-}
-
-function addResourceRefs(
-    resource: PersistedResource,
-    threadIds: Set<string>,
-    userIds: Set<string>,
-    messageIds: Set<string>,
-): void {
-    for (const id of resource.refs.threadIds) threadIds.add(id);
-    for (const id of resource.refs.userIds) userIds.add(id);
-    for (const id of resource.refs.messageIds) messageIds.add(id);
-}
-
-function entityRows<T>(rows: JsonValue[], accountId: string): Stored<T>[] {
-    const result: Stored<T>[] = [];
-    for (const value of rows) {
-        const row = rowValue<T>(value);
-        if (row.accountId !== accountId) throw new InboxError('storage');
-        result.push(row);
-    }
-    return result;
-}
-
-async function rowsByIds<T>(
-    store: IDBObjectStore,
-    accountId: string,
-    ids: Set<string>,
-): Promise<Stored<T>[]> {
-    const values = await Promise.all(
-        [...ids].map((id) => requestResult(store.get([accountId, id]))),
-    );
-    const result: Stored<T>[] = [];
-    for (const value of values) {
-        if (value === undefined) throw new InboxError('storage');
-        const row = rowValue<T>(value);
-        if (row.accountId !== accountId) throw new InboxError('storage');
-        result.push(row);
-    }
-    return result;
-}
-
-function requireFactIds<T>(ids: Set<string>, facts: Map<string, T>): void {
-    for (const id of ids) if (!facts.has(id)) throw new InboxError('storage');
-}
-
-function requiredFact<T>(facts: Map<string, T>, id: string): T {
-    const value = facts.get(id);
-    if (value === undefined) throw new InboxError('storage');
-    return value;
-}
-
-function buildEntities(
-    threadRows: Stored<ThreadFact>[],
-    userRows: Stored<User>[],
-    messageRows: Stored<Message>[],
-    threadIds: Set<string>,
-    userIds: Set<string>,
-    messageIds: Set<string>,
-): EntityFacts {
-    const entities = emptyEntities();
-    for (const row of threadRows) {
-        if (!validThread(row.value, row.id)) throw new InboxError('storage');
-        if (!threadIds.has(row.id)) continue;
-        entities.threadsById[row.id] = row.value;
-        for (const id of row.value.userIds) userIds.add(id);
-        if (row.value.lastMessageId) messageIds.add(row.value.lastMessageId);
-    }
-    for (const row of userRows) {
-        if (!validUser(row.value, row.id)) throw new InboxError('storage');
-        if (userIds.has(row.id)) entities.usersById[row.id] = row.value;
-    }
-    for (const row of messageRows) {
-        if (!validMessage(row.value, row.id)) throw new InboxError('storage');
-        if (messageIds.has(row.id)) entities.messagesById[row.id] = row.value;
-    }
-    return entities;
 }
 
 export function createInboxRepository(
@@ -662,263 +612,59 @@ export function createInboxRepository(
         return opened;
     }
 
-    async function readResources(
-        accountId: string,
-        keys: string[],
-    ): Promise<RepositoryRead> {
-        if (!validAccountId(accountId) || keys.some((key) => key.length === 0))
-            throw new InboxError('storage');
-        const database = await open();
-        const transaction = database.transaction([...STORE_NAMES], 'readonly');
-        const work = (async () => {
-            const resourceRows = await requestResult(
-                transaction
-                    .objectStore('resources')
-                    .index('accountId')
-                    .getAll(accountId),
-            );
-            const revisionValue = await requestResult(
-                transaction.objectStore('meta').get('revision'),
-            );
-            const selected: PersistedResource[] = [];
-            const threadIds = new Set<string>();
-            const userIds = new Set<string>();
-            const messageIds = new Set<string>();
-            for (const value of resourceRows) {
-                const row = rowValue<PersistedResource>(value);
-                if (
-                    row.accountId !== accountId ||
-                    !validResource(row.value) ||
-                    row.value.key !== row.id
-                )
-                    throw new InboxError('storage');
-                if (resourceMatches(row.value, keys)) {
-                    selected.push(row.value);
-                    addResourceRefs(row.value, threadIds, userIds, messageIds);
-                }
-            }
-            const threadRows = await rowsByIds<ThreadFact>(
-                transaction.objectStore('threads'),
-                accountId,
-                threadIds,
-            );
-            for (const row of threadRows) {
-                if (!validThread(row.value, row.id))
-                    throw new InboxError('storage');
-                for (const id of row.value.userIds) userIds.add(id);
-                if (row.value.lastMessageId)
-                    messageIds.add(row.value.lastMessageId);
-            }
-            const userRows = await rowsByIds<User>(
-                transaction.objectStore('users'),
-                accountId,
-                userIds,
-            );
-            const messageRows = await rowsByIds<Message>(
-                transaction.objectStore('messages'),
-                accountId,
-                messageIds,
-            );
-            const entities = buildEntities(
-                threadRows,
-                userRows,
-                messageRows,
-                threadIds,
-                userIds,
-                messageIds,
-            );
-            return {
-                resources: selected,
-                entities,
-                revision: validRevision(revisionValue),
-            };
-        })();
-        return finishTransaction(transaction, work);
-    }
-
-    async function commitResources(
-        accountId: string,
-        update: Parameters<InboxRepository['commitResources']>[1],
-    ): Promise<RepositoryRead> {
-        if (
-            !validAccountId(accountId) ||
-            !validEntities(update.entities) ||
-            update.resources.some((resource) => !validResource(resource)) ||
-            (update.deleteKeys ?? []).some(
-                (key) => key.length === 0 || key.endsWith('*'),
-            )
-        )
-            throw new InboxError('storage');
-        const resourceKeys = new Set<string>();
-        for (const resource of update.resources) {
-            if (!validKey(resource.key) || resourceKeys.has(resource.key))
-                throw new InboxError('storage');
-            resourceKeys.add(resource.key);
-        }
-        const database = await open();
-        const transaction = database.transaction([...STORE_NAMES], 'readwrite');
-        const work = (async () => {
-            const resourceStore = transaction.objectStore('resources');
-            const oldResourceRows = entityRows<PersistedResource>(
-                await requestResult(
-                    resourceStore.index('accountId').getAll(accountId),
-                ),
-                accountId,
-            );
-            const oldThreadRows = entityRows<ThreadFact>(
-                await requestResult(
-                    transaction
-                        .objectStore('threads')
-                        .index('accountId')
-                        .getAll(accountId),
-                ),
-                accountId,
-            );
-            const oldUserRows = entityRows<User>(
-                await requestResult(
-                    transaction
-                        .objectStore('users')
-                        .index('accountId')
-                        .getAll(accountId),
-                ),
-                accountId,
-            );
-            const oldMessageRows = entityRows<Message>(
-                await requestResult(
-                    transaction
-                        .objectStore('messages')
-                        .index('accountId')
-                        .getAll(accountId),
-                ),
-                accountId,
-            );
-            const resources = new Map<string, PersistedResource>();
-            for (const row of oldResourceRows) {
-                if (!validResource(row.value) || row.value.key !== row.id)
-                    throw new InboxError('storage');
-                resources.set(row.id, row.value);
-            }
-            for (const key of update.deleteKeys ?? []) resources.delete(key);
-            for (const resource of update.resources)
-                resources.set(resource.key, resource);
-
-            const threads = new Map<string, ThreadFact>();
-            const users = new Map<string, User>();
-            const messages = new Map<string, Message>();
-            for (const row of oldThreadRows) {
-                if (!validThread(row.value, row.id))
-                    throw new InboxError('storage');
-                threads.set(row.id, row.value);
-            }
-            for (const row of oldUserRows) {
-                if (!validUser(row.value, row.id))
-                    throw new InboxError('storage');
-                users.set(row.id, row.value);
-            }
-            for (const row of oldMessageRows) {
-                if (!validMessage(row.value, row.id))
-                    throw new InboxError('storage');
-                messages.set(row.id, row.value);
-            }
-            for (const [id, value] of Object.entries(
-                update.entities.threadsById,
-            ))
-                threads.set(id, value);
-            for (const [id, value] of Object.entries(update.entities.usersById))
-                users.set(id, value);
-            for (const [id, value] of Object.entries(
-                update.entities.messagesById,
-            ))
-                messages.set(id, value);
-
-            const threadIds = new Set<string>();
-            const userIds = new Set<string>();
-            const messageIds = new Set<string>();
-            for (const resource of resources.values())
-                addResourceRefs(resource, threadIds, userIds, messageIds);
-            for (const id of threadIds) {
-                const thread = threads.get(id);
-                if (!thread) throw new InboxError('storage');
-                for (const userId of thread.userIds) userIds.add(userId);
-                if (thread.lastMessageId) messageIds.add(thread.lastMessageId);
-            }
-            requireFactIds(userIds, users);
-            requireFactIds(messageIds, messages);
-
-            const retainedResources = [...resources.values()];
-            const retainedEntities = emptyEntities();
-            for (const id of threadIds)
-                retainedEntities.threadsById[id] = requiredFact(threads, id);
-            for (const id of userIds)
-                retainedEntities.usersById[id] = requiredFact(users, id);
-            for (const id of messageIds)
-                retainedEntities.messagesById[id] = requiredFact(messages, id);
-
-            for (const row of oldResourceRows)
-                if (!resources.has(row.id))
-                    resourceStore.delete([accountId, row.id]);
-            for (const resource of update.resources)
-                resourceStore.put({
-                    accountId,
-                    id: resource.key,
-                    value: resource,
-                });
-            pruneFacts(
-                transaction.objectStore('threads'),
-                oldThreadRows,
-                accountId,
-                threadIds,
-            );
-            pruneFacts(
-                transaction.objectStore('users'),
-                oldUserRows,
-                accountId,
-                userIds,
-            );
-            pruneFacts(
-                transaction.objectStore('messages'),
-                oldMessageRows,
-                accountId,
-                messageIds,
-            );
-            putFacts(
-                transaction,
-                accountId,
-                update.entities,
-                threadIds,
-                userIds,
-                messageIds,
-            );
-            const revision =
-                validRevision(
-                    await requestResult(
-                        transaction.objectStore('meta').get('revision'),
-                    ),
-                ) + 1;
-            transaction.objectStore('meta').put(revision, 'revision');
-            return {
-                resources: retainedResources,
-                entities: retainedEntities,
-                revision,
-            };
-        })();
-        return finishTransaction(transaction, work);
-    }
-
-    return {
-        readResources,
-        commitResources,
-        async close() {
+    return storageRepository(
+        open,
+        async () => {
             const database =
                 openedDatabase ?? (opened ? await opened : undefined);
             database?.close();
             openedDatabase = undefined;
             opened = undefined;
         },
-    };
+        (accountId, update) => {
+            if (
+                !validAccountId(accountId) ||
+                !validEntities(update.entities) ||
+                update.resources.some((resource) => {
+                    if (!validResource(resource)) return true;
+                    if (resource.threadId === undefined) return false;
+                    const messageIds = new Set(resource.refs.messageIds);
+                    return resource.orderedIds.some(
+                        (id) => !messageIds.has(id),
+                    );
+                }) ||
+                (update.deleteKeys ?? []).some(
+                    (key) => !key || key.endsWith('*'),
+                )
+            )
+                throw new InboxError('storage');
+            const keys = new Set<string>();
+            for (const resource of update.resources) {
+                if (!validKey(resource.key) || keys.has(resource.key))
+                    throw new InboxError('storage');
+                keys.add(resource.key);
+            }
+        },
+        validStoredFact,
+        validResource,
+    );
 }
 
 export interface InboxRepositoryEffects {
+    readonly readHistoryWindow: (
+        accountId: string,
+        threadId: string,
+        request?: HistoryWindowRequest,
+    ) => Effect.Effect<HistoryWindowRead, InboxError>;
+    readonly touchHistory: (
+        accountId: string,
+        threadId: string,
+        accessedAt: number,
+    ) => Effect.Effect<void, InboxError>;
+    readonly readHistoryInventory: (
+        accountId: string,
+        limit?: number,
+    ) => Effect.Effect<HistoryInventory[], InboxError>;
     readonly readResources: (
         accountId: string,
         keys: string[],
@@ -944,6 +690,23 @@ export function makeInboxRepository(
 ): InboxRepositoryEffects {
     const repository = createInboxRepository(factory);
     return {
+        readHistoryWindow: (accountId, threadId, request) =>
+            Effect.tryPromise({
+                try: () =>
+                    repository.readHistoryWindow(accountId, threadId, request),
+                catch: storageError,
+            }),
+        touchHistory: (accountId, threadId, accessedAt) =>
+            Effect.tryPromise({
+                try: () =>
+                    repository.touchHistory(accountId, threadId, accessedAt),
+                catch: storageError,
+            }),
+        readHistoryInventory: (accountId, limit) =>
+            Effect.tryPromise({
+                try: () => repository.readHistoryInventory(accountId, limit),
+                catch: storageError,
+            }),
         readResources: (accountId, keys) =>
             Effect.tryPromise({
                 try: () => repository.readResources(accountId, keys),
@@ -988,51 +751,16 @@ export function inboxRepositoryPromiseFacade(
         return result.success;
     }
     return {
+        readHistoryWindow: (accountId, threadId, request) =>
+            run(repository.readHistoryWindow(accountId, threadId, request)),
+        touchHistory: (accountId, threadId, accessedAt) =>
+            run(repository.touchHistory(accountId, threadId, accessedAt)),
+        readHistoryInventory: (accountId, limit) =>
+            run(repository.readHistoryInventory(accountId, limit)),
         readResources: (accountId, keys) =>
             run(repository.readResources(accountId, keys)),
         commitResources: (accountId, update) =>
             run(repository.commitResources(accountId, update)),
         close: () => run(repository.close),
     };
-}
-
-function validRevision(value: JsonValue | undefined): number {
-    if (value === undefined) return 0;
-    if (!isFiniteNumber(value) || value < 0) throw new InboxError('storage');
-    return value;
-}
-
-function pruneFacts<T>(
-    store: IDBObjectStore,
-    rows: Stored<T>[],
-    accountId: string,
-    retained: Set<string>,
-): void {
-    for (const row of rows)
-        if (!retained.has(row.id)) store.delete([accountId, row.id]);
-}
-
-function putFacts(
-    transaction: IDBTransaction,
-    accountId: string,
-    entities: EntityFacts,
-    threadIds: Set<string>,
-    userIds: Set<string>,
-    messageIds: Set<string>,
-): void {
-    for (const id of threadIds) {
-        const value = entities.threadsById[id];
-        if (value)
-            transaction.objectStore('threads').put({ accountId, id, value });
-    }
-    for (const id of userIds) {
-        const value = entities.usersById[id];
-        if (value)
-            transaction.objectStore('users').put({ accountId, id, value });
-    }
-    for (const id of messageIds) {
-        const value = entities.messagesById[id];
-        if (value)
-            transaction.objectStore('messages').put({ accountId, id, value });
-    }
 }

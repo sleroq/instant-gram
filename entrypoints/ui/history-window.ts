@@ -15,7 +15,10 @@ export function initialHistoryWindow(count: number): HistoryWindow {
 export function windowContaining(count: number, index: number): HistoryWindow {
     const start = Math.max(
         0,
-        Math.min(index, Math.max(0, count - HISTORY_MOUNT_LIMIT)),
+        Math.min(
+            index - HISTORY_SLICE,
+            Math.max(0, count - HISTORY_MOUNT_LIMIT),
+        ),
     );
     return { start, end: Math.min(count, start + HISTORY_MOUNT_LIMIT) };
 }

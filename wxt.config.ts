@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
-import { createServer } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import solid from '@solidjs/vite-plugin';
@@ -30,20 +29,8 @@ export default defineConfig({
     hooks: {
         async 'server:created'(wxt, server) {
             if (wxt.config.browser === 'firefox') return;
-            const listener = createServer();
-            await new Promise<void>((resolve, reject) => {
-                listener.once('error', reject);
-                listener.listen(0, '127.0.0.1', resolve);
-            });
-            const address = listener.address();
-            if (!address || typeof address === 'string')
-                throw new Error(
-                    'Could not allocate the dev browser debugging port',
-                );
-            const port = address.port;
-            await new Promise<void>((resolve, reject) =>
-                listener.close((error) => (error ? reject(error) : resolve())),
-            );
+            // Shared with opencode.json so MCP attaches to the dev browser.
+            const port = 9223;
             const config = wxt.config.runnerConfig.config;
             if (config.disabled) return;
             config.chromiumArgs = [
@@ -85,7 +72,7 @@ export default defineConfig({
     }),
     manifest: ({ command }) => ({
         ...(command === 'serve' ? { key: devKey } : {}),
-        permissions: ['tabs'],
+        permissions: ['tabs', 'scripting'],
         host_permissions: ['https://www.instagram.com/*'],
         action: { default_title: 'Instagram DM Client' },
     }),

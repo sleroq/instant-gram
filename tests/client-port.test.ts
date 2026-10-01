@@ -51,11 +51,24 @@ test('real client Port forwards detail interest, keeps sequence across routes, a
         histories: {},
     };
     const interests: Array<string | undefined> = [];
+    const anchors: Array<string | undefined> = [];
+    const projectionListeners: Array<(value: InboxProjection) => void> = [];
+    const replacements: Array<((value: InboxProjection) => void) | undefined> =
+        [];
+    const historyCommands: Array<{
+        kind: string;
+        threadId: string;
+        listener?: (value: InboxProjection) => void;
+        anchorId?: string;
+    }> = [];
     let released = 0;
     let active = 0;
     const engine: InboxEngine = {
-        subscribe(listener, threadId) {
+        subscribe(listener, threadId, anchorId, replaceListener) {
             interests.push(threadId);
+            anchors.push(anchorId);
+            projectionListeners.push(listener);
+            replacements.push(replaceListener);
             listener({
                 ...projection,
                 inbox: {
@@ -71,8 +84,20 @@ test('real client Port forwards detail interest, keeps sequence across routes, a
         },
         refresh: async () => undefined,
         loadMoreInbox: async () => undefined,
-        refreshHistory: async () => undefined,
-        loadOlderHistory: async () => undefined,
+        refreshHistory: async (threadId, listener, anchorId) => {
+            historyCommands.push({
+                kind: 'refresh',
+                threadId,
+                listener,
+                anchorId,
+            });
+        },
+        loadOlderHistory: async (threadId, listener) => {
+            historyCommands.push({ kind: 'older', threadId, listener });
+        },
+        loadNewerHistory: async (threadId, listener) => {
+            historyCommands.push({ kind: 'newer', threadId, listener });
+        },
         snapshot: () => projection,
     };
     const onMessage =
@@ -103,8 +128,39 @@ test('real client Port forwards detail interest, keeps sequence across routes, a
     // Simulate delayed ManagedRuntime layer initialization.
     activate(engine);
     for (const listener of onMessage.listeners)
-        listener({ kind: 'subscribe', threadId: 'second' }, port);
+        listener(
+            {
+                kind: 'subscribe',
+                threadId: 'second',
+                anchorId: 'second-message',
+            },
+            port,
+        );
+    for (const listener of onMessage.listeners) {
+        listener({ kind: 'load-older-history', threadId: 'second' }, port);
+        listener({ kind: 'load-newer-history', threadId: 'second' }, port);
+        listener(
+            {
+                kind: 'refresh-history',
+                threadId: 'second',
+                anchorId: 'visible',
+            },
+            port,
+        );
+    }
     assert.deepEqual(interests, ['first', 'second']);
+    assert.deepEqual(anchors, [undefined, 'second-message']);
+    assert.deepEqual(replacements, [undefined, projectionListeners[0]]);
+    assert.deepEqual(
+        historyCommands.map((command) => command.kind),
+        ['older', 'newer', 'refresh'],
+    );
+    assert(
+        historyCommands.every(
+            (command) => command.listener === projectionListeners[1],
+        ),
+    );
+    assert.equal(historyCommands[2].anchorId, 'visible');
     assert.deepEqual(
         sent.map((value) => value.sequence),
         [1, 2],
@@ -146,6 +202,7 @@ test('startup buffering supports prototype-backed ports and rejects invalid send
         loadMoreInbox: async () => undefined,
         refreshHistory: async () => undefined,
         loadOlderHistory: async () => undefined,
+        loadNewerHistory: async () => undefined,
         snapshot(): never {
             throw new Error('snapshot is not used by subscription setup');
         },

@@ -89,11 +89,37 @@ export function registerInboxProvider(
     runtime: Pick<browser.Runtime.Static, 'connect'>,
     reads: Pick<ReadDependencies, 'inbox' | 'history'>,
 ) {
+    let disposed = false;
+    let releasePort: (() => void) | undefined;
     function connect() {
-        const port = runtime.connect({ name: PROVIDER_PORT });
+        if (disposed) return;
+        let port: browser.Runtime.Port;
+        try {
+            port = runtime.connect({ name: PROVIDER_PORT });
+        } catch {
+            // Extension reload invalidated this content context.
+            dispose();
+            return;
+        }
+        let closed = false;
+        const release = () => {
+            if (closed) return;
+            closed = true;
+            port.onMessage.removeListener(receive);
+            port.onDisconnect.removeListener(disconnected);
+            try {
+                port.disconnect();
+            } catch {
+                // An invalidated extension context no longer owns a usable Port.
+            }
+        };
+        const disconnected = () => {
+            release();
+            connect();
+        };
         // SAFETY: the extension-owned provider Port receives its worker's closed ProviderRequest values.
         const receive = ((request: ProviderRequest) => {
-            if (request.kind !== 'request') return;
+            if (disposed || closed || request.kind !== 'request') return;
             void executeInboxProviderRequest(request, {
                 account: currentInstagramAccountId,
                 prepare: async () => {
@@ -102,6 +128,7 @@ export function registerInboxProvider(
                 inbox: reads.inbox,
                 history: reads.history,
             }).then((response) => {
+                if (disposed || closed) return;
                 try {
                     port.postMessage(response);
                 } catch {
@@ -109,8 +136,16 @@ export function registerInboxProvider(
                 }
             });
         }) as Parameters<typeof port.onMessage.addListener>[0];
+        releasePort = release;
         port.onMessage.addListener(receive);
-        port.onDisconnect.addListener(connect);
+        port.onDisconnect.addListener(disconnected);
+    }
+    function dispose() {
+        if (disposed) return;
+        disposed = true;
+        releasePort?.();
+        releasePort = undefined;
     }
     connect();
+    return dispose;
 }

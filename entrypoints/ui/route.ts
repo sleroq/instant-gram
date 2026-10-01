@@ -6,7 +6,11 @@ function readRoute(): Route {
     const hash = window.location.hash;
     if (!hash || hash === '#/' || hash === '#') return {};
     const match = hash.match(/^#\/thread\/(.+)$/);
-    return match ? { threadId: decodeURIComponent(match[1]) } : {};
+    try {
+        return match ? { threadId: decodeURIComponent(match[1]) } : {};
+    } catch {
+        return {};
+    }
 }
 
 export function threadHash(threadId: string): string {
@@ -39,10 +43,12 @@ export function createRouteController(onInbox?: () => void) {
         route,
         open(threadId: string) {
             if (route().threadId === threadId) return;
+            setRoute({ threadId });
             window.location.hash = threadHash(threadId);
         },
         inbox() {
             if (!route().threadId) return;
+            setRoute({});
             window.location.hash = '#/';
         },
     };

@@ -13,6 +13,7 @@ function fakePort(tabId: number) {
     const messages: Listener<ProviderResponse>[] = [];
     const disconnects: Array<() => void> = [];
     const sent: ProviderRequest[] = [];
+
     const value = {
         name: PROVIDER_PORT,
         sender: {
@@ -25,10 +26,18 @@ function fakePort(tabId: number) {
             addListener(listener: Listener<ProviderResponse>) {
                 messages.push(listener);
             },
+            removeListener(listener: Listener<ProviderResponse>) {
+                const index = messages.indexOf(listener);
+                if (index >= 0) messages.splice(index, 1);
+            },
         },
         onDisconnect: {
             addListener(listener: () => void) {
                 disconnects.push(listener);
+            },
+            removeListener(listener: () => void) {
+                const index = disconnects.indexOf(listener);
+                if (index >= 0) disconnects.splice(index, 1);
             },
         },
         postMessage(message: ProviderRequest) {
@@ -38,6 +47,7 @@ function fakePort(tabId: number) {
             for (const listener of disconnects) listener();
         },
     };
+
     return {
         value,
         sent,
@@ -47,12 +57,13 @@ function fakePort(tabId: number) {
     };
 }
 
-test('provider waits for the selected tab and ignores unrelated tab disconnects', async () => {
+test('provider waits for the selected tab and ignores unrelated tab disconnects', async (t) => {
     let selected = 1;
     const provider = createInboxProvider({
         ensureAnchor: async () => selected,
         extensionId: 'extension',
     });
+    t.after(() => provider.dispose());
     const account = provider.account();
     const unrelated = fakePort(2);
     provider.accept(unrelated.value);
@@ -87,11 +98,12 @@ test('provider waits for the selected tab and ignores unrelated tab disconnects'
     assert.deepEqual(await inbox, { items: [], hasNextPage: false });
 });
 
-test('replacement retires pending requests and stale responses cannot affect the replacement', async () => {
+test('replacement retires pending requests and stale responses cannot affect the replacement', async (t) => {
     const provider = createInboxProvider({
         ensureAnchor: async () => 1,
         extensionId: 'extension',
     });
+    t.after(() => provider.dispose());
     const oldPort = fakePort(1);
     provider.accept(oldPort.value);
     const oldRequest = provider.account();
@@ -120,11 +132,12 @@ test('replacement retires pending requests and stale responses cannot affect the
     assert.equal(await nextRequest, 'new');
 });
 
-test('synchronous post failure rejects immediately as provider unavailable', async () => {
+test('synchronous post failure rejects immediately as provider unavailable', async (t) => {
     const provider = createInboxProvider({
         ensureAnchor: async () => 1,
         extensionId: 'extension',
     });
+    t.after(() => provider.dispose());
     const port = fakePort(1);
     port.value.postMessage = () => {
         throw new Error('closed');

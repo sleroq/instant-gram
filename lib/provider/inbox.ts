@@ -1,4 +1,4 @@
-import { Context, Effect, Exit, Layer, Result, Schema } from 'effect';
+import { Context, Deferred, Effect, Exit, Layer, Result, Schema } from 'effect';
 import type { Page, Thread, ThreadMessages } from '../domain.ts';
 import type { JsonValue } from '../json.ts';
 import type { InboxProvider } from '../engine/inbox.ts';
@@ -19,8 +19,14 @@ export type ProviderPort = {
     };
     onMessage: {
         addListener(listener: (message: ProviderResponseInput) => void): void;
+        removeListener(
+            listener: (message: ProviderResponseInput) => void,
+        ): void;
     };
-    onDisconnect: { addListener(listener: () => void): void };
+    onDisconnect: {
+        addListener(listener: () => void): void;
+        removeListener(listener: () => void): void;
+    };
     postMessage(message: ProviderRequest): void;
     disconnect(): void;
 };
@@ -52,7 +58,11 @@ type Pending = {
     succeed(value: string | Page<Thread> | ThreadMessages): void;
     fail(error: InboxProviderError): void;
 };
-type Connection = { port: ProviderPort; pending: Map<number, Pending> };
+type Connection = {
+    port: ProviderPort;
+    pending: Map<number, Pending>;
+    removeListeners(): void;
+};
 
 const ResponseHeader = Schema.Struct({
     kind: Schema.Literal('response'),
@@ -294,9 +304,52 @@ function providerResponse(
 }
 
 export function makeInboxProvider(options: {
-    ensureAnchor(): Promise<number>;
+    ensureAnchor(
+        hasReadyConnection: (tabId: number) => boolean,
+    ): Promise<number>;
     extensionId: string;
-}): InboxProviderEffects {
+}): InboxProviderEffects & { dispose(): void } {
+    let closed = false;
+    const closure = Deferred.makeUnsafe<never, InboxProviderError>();
+    type AnchorFlight = { promise: Promise<number>; waiters: number };
+    let anchorFlight: AnchorFlight | undefined;
+    const ensureAnchor = Effect.acquireUseRelease(
+        Effect.sync(() => {
+            if (!anchorFlight) {
+                const flight: AnchorFlight = {
+                    promise: Promise.resolve().then(() =>
+                        options.ensureAnchor((tabId) => connections.has(tabId)),
+                    ),
+                    waiters: 0,
+                };
+                flight.promise = flight.promise.then(
+                    (tabId) => {
+                        if (anchorFlight === flight) anchorFlight = undefined;
+                        return tabId;
+                    },
+                    (cause: unknown) => {
+                        if (anchorFlight === flight) anchorFlight = undefined;
+                        throw cause;
+                    },
+                );
+                anchorFlight = flight;
+            }
+            anchorFlight.waiters++;
+            return anchorFlight;
+        }),
+        (flight) =>
+            Effect.tryPromise({
+                try: () => flight.promise,
+                catch: unavailable,
+            }),
+        (flight) =>
+            Effect.sync(() => {
+                // Browser acquisition cannot be aborted; only its active owners expire.
+                flight.waiters--;
+                if (flight.waiters === 0 && anchorFlight === flight)
+                    anchorFlight = undefined;
+            }),
+    );
     const connections = new Map<number, Connection>();
     const waiters = new Map<number, Set<() => void>>();
     let nextId = 0;
@@ -305,12 +358,17 @@ export function makeInboxProvider(options: {
     }
 
     function retire(connection: Connection) {
+        connection.removeListeners();
         for (const pending of connection.pending.values())
             pending.fail(unavailable());
         connection.pending.clear();
     }
 
     function accept(port: ProviderPort) {
+        if (closed) {
+            port.disconnect();
+            return;
+        }
         const tabId = port.sender?.tab?.id;
         const url = port.sender?.url ? new URL(port.sender.url) : undefined;
         if (
@@ -324,16 +382,22 @@ export function makeInboxProvider(options: {
             port.disconnect();
             return;
         }
-        const connection: Connection = { port, pending: new Map() };
+        const selectedTabId = tabId;
+        const connection: Connection = {
+            port,
+            pending: new Map(),
+            removeListeners: () => {
+                port.onMessage.removeListener(onMessage);
+                port.onDisconnect.removeListener(onDisconnect);
+            },
+        };
         const previous = connections.get(tabId);
         if (previous) {
             retire(previous);
             previous.port.disconnect();
         }
-        connections.set(tabId, connection);
-        for (const ready of waiters.get(tabId) ?? []) ready();
-        waiters.delete(tabId);
-        port.onMessage.addListener((value) => {
+        function onMessage(value: ProviderResponseInput) {
+            if (closed || connections.get(selectedTabId) !== connection) return;
             const header = responseHeader(value);
             if (!header) return;
             const pending = connection.pending.get(header.id);
@@ -346,19 +410,22 @@ export function makeInboxProvider(options: {
             }
             if (response.result.ok) pending.succeed(response.result.value);
             else pending.fail(new InboxError(response.result.error.kind));
-        });
-        port.onDisconnect.addListener(() => {
-            if (connections.get(tabId) === connection)
-                connections.delete(tabId);
+        }
+        function onDisconnect() {
+            if (connections.get(selectedTabId) === connection)
+                connections.delete(selectedTabId);
             retire(connection);
-        });
+        }
+        connections.set(tabId, connection);
+        port.onMessage.addListener(onMessage);
+        port.onDisconnect.addListener(onDisconnect);
+        for (const ready of waiters.get(tabId) ?? []) ready();
+        waiters.delete(tabId);
     }
 
     const connection = Effect.fn('InboxProvider.connection')(function* () {
-        const tabId = yield* Effect.tryPromise({
-            try: options.ensureAnchor,
-            catch: unavailable,
-        });
+        if (closed) return yield* Effect.fail(unavailable());
+        const tabId = yield* ensureAnchor;
         const existing = connections.get(tabId);
         if (existing) return existing;
         yield* Effect.callback<void, InboxProviderError>((resume) => {
@@ -372,53 +439,70 @@ export function makeInboxProvider(options: {
                 set.delete(ready);
                 if (set.size === 0) waiters.delete(tabId);
             });
-        }).pipe(
-            Effect.timeoutOrElse({
-                duration: '10 seconds',
-                orElse: () => Effect.fail(unavailable()),
-            }),
-        );
+        });
         const connected = connections.get(tabId);
         return yield* connected
             ? Effect.succeed(connected)
             : Effect.fail(unavailable());
     });
 
-    function request<A>(makeRequest: (id: number) => ProviderRequest) {
-        return Effect.suspend(() => {
-            const request = makeRequest(++nextId);
-            return connection().pipe(
-                Effect.flatMap((connected) =>
-                    Effect.callback<A, InboxProviderError>((resume) => {
-                        connected.pending.set(request.id, {
-                            method: request.method,
-                            succeed(value) {
-                                // SAFETY: the response method is matched before this value is delivered.
-                                resume(Effect.succeed(value as A));
-                            },
-                            fail: (error) => resume(Effect.fail(error)),
-                        });
-                        try {
-                            connected.port.postMessage(request);
-                        } catch {
-                            connected.pending.delete(request.id);
-                            resume(Effect.fail(unavailable()));
-                        }
-                        return Effect.sync(() =>
-                            connected.pending.delete(request.id),
-                        );
-                    }).pipe(
-                        Effect.timeoutOrElse({
-                            duration: '15 seconds',
-                            orElse: () => Effect.fail(unavailable()),
-                        }),
-                    ),
-                ),
-            );
-        });
-    }
+    const request = Effect.fn('InboxProvider.request')(function* <A>(
+        makeRequest: (id: number) => ProviderRequest,
+    ): Effect.fn.Return<A, InboxProviderError> {
+        if (closed) return yield* Effect.fail(unavailable());
+        const request = makeRequest(++nextId);
+        const connected = yield* Effect.raceFirst(
+            connection(),
+            Deferred.await(closure),
+        ).pipe(
+            Effect.timeoutOrElse({
+                duration: '10 seconds',
+                orElse: () => Effect.fail(unavailable()),
+            }),
+        );
+
+        return yield* Effect.callback<A, InboxProviderError>((resume) => {
+            if (closed || ![...connections.values()].includes(connected)) {
+                resume(Effect.fail(unavailable()));
+                return;
+            }
+            connected.pending.set(request.id, {
+                method: request.method,
+                succeed(value) {
+                    // SAFETY: the response method is matched before this value is delivered.
+                    resume(Effect.succeed(value as A));
+                },
+                fail: (error) => resume(Effect.fail(error)),
+            });
+
+            try {
+                connected.port.postMessage(request);
+            } catch {
+                connected.pending.delete(request.id);
+                resume(Effect.fail(unavailable()));
+            }
+            return Effect.sync(() => connected.pending.delete(request.id));
+        }).pipe(
+            Effect.timeoutOrElse({
+                duration: '15 seconds',
+                orElse: () => Effect.fail(unavailable()),
+            }),
+        );
+    });
 
     return {
+        dispose() {
+            if (closed) return;
+            closed = true;
+            anchorFlight = undefined;
+            Deferred.doneUnsafe(closure, Effect.fail(unavailable()));
+            waiters.clear();
+            for (const connection of connections.values()) {
+                retire(connection);
+                connection.port.disconnect();
+            }
+            connections.clear();
+        },
         accept,
         account: request<string>((id) => ({
             kind: 'request',
@@ -446,10 +530,21 @@ export function makeInboxProvider(options: {
 }
 
 export function inboxProviderLive(options: {
-    ensureAnchor(): Promise<number>;
+    ensureAnchor(
+        hasReadyConnection: (tabId: number) => boolean,
+    ): Promise<number>;
     extensionId: string;
 }) {
-    return Layer.sync(InboxProviderService, () => makeInboxProvider(options));
+    return Layer.effect(
+        InboxProviderService,
+        Effect.map(
+            Effect.acquireRelease(
+                Effect.sync(() => makeInboxProvider(options)),
+                (provider) => Effect.sync(() => provider.dispose()),
+            ),
+            InboxProviderService.of,
+        ),
+    );
 }
 
 /** Compatibility boundary for the Promise-based engine and its existing tests. */
@@ -472,8 +567,17 @@ export function inboxProviderPromiseFacade(
 }
 
 export function createInboxProvider(options: {
-    ensureAnchor(): Promise<number>;
+    ensureAnchor(
+        hasReadyConnection: (tabId: number) => boolean,
+    ): Promise<number>;
     extensionId: string;
-}): InboxProvider & { accept(port: ProviderPort): void } {
-    return inboxProviderPromiseFacade(makeInboxProvider(options));
+}): InboxProvider & {
+    accept(port: ProviderPort): void;
+    dispose(): void;
+} {
+    const provider = makeInboxProvider(options);
+    return {
+        ...inboxProviderPromiseFacade(provider),
+        dispose: provider.dispose,
+    };
 }

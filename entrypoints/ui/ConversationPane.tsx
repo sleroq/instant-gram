@@ -28,14 +28,16 @@ export function ConversationPane(props: {
     facts: EntityFacts;
     history: HistoryProjection | undefined;
     onBack(): void;
-    onRefresh(): void;
+    onRefresh(anchorId?: string): void;
     onLoadOlder(): void;
+    onLoadNewer(): void;
     compact: boolean;
     savedAnchor?: HistoryAnchor;
     saveAnchor(anchor: HistoryAnchor | undefined): void;
 }) {
     const [range, setRange] = createSignal<HistoryWindow>({ start: 0, end: 0 });
     const [olderIntent, setOlderIntent] = createSignal('');
+    const [newerIntent, setNewerIntent] = createSignal('');
     const allIds = createMemo(() => props.history?.orderedIds || []);
     const visibleIds = createMemo(() => {
         const current = range();
@@ -44,8 +46,10 @@ export function ConversationPane(props: {
     const viewport = createHistoryViewportController(() => {
         if (anchor) controller.correct(anchor);
         const element = controller.element();
-        if (element && element.scrollHeight <= element.clientHeight + 1)
+        if (element && element.scrollHeight <= element.clientHeight + 1) {
             requestOlderIfNeeded();
+            requestNewerIfNeeded();
+        }
     });
     const controller = viewport;
     let anchor: HistoryAnchor | undefined;
@@ -79,36 +83,71 @@ export function ConversationPane(props: {
         }
     }
 
-    function requestOlderIfNeeded() {
-        const history = props.history;
+    function windowKey(history: HistoryProjection) {
+        return `${history.fetchedAt}:${history.orderedIds[0]}:${history.orderedIds.at(-1)}:${history.orderedIds.length}`;
+    }
+
+    function requestOlderIfNeeded(history = props.history) {
         const element = controller.element();
         if (
             !history ||
-            history.retentionLimited ||
-            history.synchronization !== 'idle' ||
-            !history.hasNextPage ||
+            (!history.cachedOlder &&
+                (history.retentionLimited ||
+                    history.synchronization !== 'idle' ||
+                    !history.hasNextPage)) ||
             range().start !== 0 ||
             (element && element.scrollTop > 1)
         )
             return;
-        const key = `${history.fetchedAt}:${history.orderedIds.length}`;
+        const key = windowKey(history);
         if (olderIntent() === key) return;
         setOlderIntent(key);
         props.onLoadOlder();
     }
 
+    function requestNewerIfNeeded(history = props.history) {
+        const element = controller.element();
+        if (
+            !history?.cachedNewer ||
+            !element ||
+            range().end < history.orderedIds.length ||
+            element.scrollTop + element.clientHeight < element.scrollHeight - 1
+        )
+            return;
+        const key = windowKey(history);
+        if (newerIntent() === key) return;
+        setNewerIntent(key);
+        props.onLoadNewer();
+    }
+
     function retryOlder() {
         const history = props.history;
-        if (!history || history.retentionLimited || !history.hasNextPage)
+        if (
+            !history ||
+            (!history.cachedOlder &&
+                (history.retentionLimited || !history.hasNextPage))
+        )
             return;
         setOlderIntent('');
         capture();
         props.onLoadOlder();
     }
 
+    function refreshHistory() {
+        capture();
+        props.onRefresh(anchor?.id);
+    }
+
     function retryHistoryError() {
         if (failedOperation(props.history) === 'continuation') retryOlder();
-        else props.onRefresh();
+        else refreshHistory();
+    }
+
+    function showLatest() {
+        anchor = undefined;
+        followBottom = true;
+        firstRender = true;
+        props.onLoadNewer();
     }
 
     function moveOlderLocal() {
@@ -120,42 +159,51 @@ export function ConversationPane(props: {
         return true;
     }
 
-    function handleScroll() {
-        capture();
+    function handleScroll(event: Event) {
         const element = controller.element();
-        if (!element) return;
+        if (!element || event.currentTarget !== element) return;
+        capture();
+        const atBottom =
+            element.scrollTop + element.clientHeight >=
+            element.scrollHeight - 1;
+        followBottom =
+            atBottom &&
+            range().end === allIds().length &&
+            !props.history?.cachedNewer;
         if (element.scrollTop <= 1) {
             if (!moveOlderLocal()) requestOlderIfNeeded();
-        } else if (
-            element.scrollTop + element.clientHeight >=
-            element.scrollHeight - 1
-        ) {
+        } else if (atBottom) {
             const next = moveNewer(range(), allIds().length);
             if (next.end !== range().end) {
-                anchor = undefined;
-                followBottom = true;
+                localMovePending = true;
                 setRange(next);
-            }
+            } else requestNewerIfNeeded();
         }
     }
 
     createEffect(
-        () =>
-            [
+        () => {
+            const ids = [...allIds()];
+            const history = props.history;
+            return [
                 props.threadId,
-                allIds().join('\u0000'),
+                ids,
+                props.savedAnchor,
                 range().start,
                 range().end,
-            ] as const,
-        ([threadId, idsKey], previous) => {
-            const ids = allIds();
-            const previousKey = previous?.[1];
+                history ? { ...history, orderedIds: ids } : undefined,
+            ] as const;
+        },
+        ([threadId, ids, savedAnchor, , , history], previous) => {
+            const idsChanged =
+                ids.length !== previousIds.length ||
+                ids.some((id, index) => id !== previousIds[index]);
             const threadChanged = threadId !== previous?.[0];
             if (threadChanged) {
-                const savedIndex = props.savedAnchor
-                    ? ids.indexOf(props.savedAnchor.id)
+                const savedIndex = savedAnchor
+                    ? ids.indexOf(savedAnchor.id)
                     : -1;
-                anchor = props.savedAnchor;
+                anchor = savedAnchor;
                 if (ids.length > 0 && savedIndex < 0) anchor = undefined;
                 setRange(
                     savedIndex >= 0
@@ -163,29 +211,15 @@ export function ConversationPane(props: {
                         : initialHistoryWindow(ids.length),
                 );
                 setOlderIntent('');
+                setNewerIntent('');
                 firstRender = true;
             } else if (anchor && ids.length > 0 && !ids.includes(anchor.id)) {
                 anchor = undefined;
                 setRange(initialHistoryWindow(ids.length));
                 firstRender = true;
-            } else if (idsKey !== previousKey) {
-                const old = previousIds;
-                const prepended =
-                    old.length > 0 &&
-                    ids.length > old.length &&
-                    old.every(
-                        (id, index) =>
-                            ids[ids.length - old.length + index] === id,
-                    );
-                const appended =
-                    old.length > 0 &&
-                    ids.length > old.length &&
-                    old.every((id, index) => ids[index] === id);
+            } else if (idsChanged) {
                 const target = anchor ? ids.indexOf(anchor.id) : -1;
-                if (prepended && target >= 0) {
-                    setRange(windowContaining(ids.length, target));
-                } else if (appended && followBottom) {
-                    followBottom = false;
+                if (followBottom && !history?.cachedNewer) {
                     anchor = undefined;
                     setRange(initialHistoryWindow(ids.length));
                 } else if (target >= 0) {
@@ -194,7 +228,7 @@ export function ConversationPane(props: {
                     setRange(initialHistoryWindow(ids.length));
                 }
             }
-            previousIds = [...ids];
+            previousIds = ids;
             queueMicrotask(() => {
                 const element = controller.element();
                 if (!element) return;
@@ -211,8 +245,9 @@ export function ConversationPane(props: {
                 if (localMovePending) {
                     localMovePending = false;
                     if (element.scrollHeight <= element.clientHeight + 1)
-                        requestOlderIfNeeded();
+                        requestOlderIfNeeded(history);
                 }
+                requestNewerIfNeeded(history);
             });
         },
     );
@@ -247,7 +282,7 @@ export function ConversationPane(props: {
                 </div>
                 <button
                     type="button"
-                    onClick={() => props.onRefresh()}
+                    onClick={refreshHistory}
                     disabled={props.history?.synchronization === 'refreshing'}
                 >
                     Refresh history
@@ -301,9 +336,11 @@ export function ConversationPane(props: {
                     <Show
                         when={
                             range().start === 0 &&
-                            props.history?.hasNextPage &&
-                            !props.history?.retentionLimited &&
-                            (!props.history?.error ||
+                            (props.history?.cachedOlder ||
+                                (props.history?.hasNextPage &&
+                                    !props.history?.retentionLimited)) &&
+                            (props.history?.cachedOlder ||
+                                !props.history?.error ||
                                 failedOperation(props.history) ===
                                     'continuation')
                         }
@@ -373,6 +410,21 @@ export function ConversationPane(props: {
                             );
                         }}
                     </For>
+                    <Show
+                        when={
+                            props.history?.newerCoverageAvailable &&
+                            !props.history?.cachedNewer &&
+                            range().end === allIds().length
+                        }
+                    >
+                        <button
+                            class="solid-history__older"
+                            type="button"
+                            onClick={showLatest}
+                        >
+                            Show latest messages
+                        </button>
+                    </Show>
                     <Show when={props.history?.retentionLimited}>
                         <p class="solid-history__retention">
                             Retained history limit reached

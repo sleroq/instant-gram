@@ -34,7 +34,10 @@ The MV3 worker uses one `ManagedRuntime` from the exactly pinned Effect 4 beta
 deliberately when the pin changes. Provider, repository, and
 engine are switchable services/layers; production assembles one shared provider
 instance and one engine layer. Engine workflows and concurrency are Effects,
-and detached subscription/bootstrap fibers are scoped to the engine layer.
+and subscription/bootstrap/shared producer fibers belong to the engine layer
+scope. Host Promise commands and callback roots enter through that same
+`ManagedRuntime`; disposal interrupts roots and scoped producers. Provider scope
+cleanup closes Ports and pending local requests, including startup readiness.
 Pure normalization/domain code and the Solid UI remain plain TypeScript. Promise
 and callback adapters exist only at browser-host and compatibility-test
 boundaries. IndexedDB transactions, commit revisions, and account epochs—not a
@@ -140,8 +143,13 @@ content with a loading takeover; loading UI is reserved for truly absent data.
 There is one live read flight per `(accountId, resourceKey, cursor)`. Multiple
 clients and prefetch intents join it. Explicit user work outranks visible
 missing resources, which outrank bounded nearby speculation. Interest removal
-releases eligible work; cancellation remains best effort, so stale-generation
-checks still guard every completion.
+invalidates and detaches eligible history flights on the last listener, then
+interrupts their scoped producers without taking the commit lane. Other waiters
+do not own shared producer cancellation. Cancellation remains best effort, so
+account/epoch/generation checks still guard every completion. Lane acquisition
+and network waits remain interruptible; once persistence starts, commit revision,
+entity acceptance, installation, and publication reconcile together before lane
+release or repository closure.
 
 Pagination preserves exact cursors, deduplicates stable IDs, and failure-gates a
 cursor until explicit retry. A successful response that repeats its cursor and

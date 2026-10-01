@@ -13,6 +13,15 @@ export default function App() {
     const [compact, setCompact] = createSignal(window.innerWidth < 700);
     let listAnchor: ListAnchor | undefined;
     const anchors: Record<string, HistoryAnchor | undefined> = {};
+    let identity:
+        | {
+              accountId: string | null;
+              accountEpoch: number;
+              workerEpoch: string;
+          }
+        | undefined;
+    let navigationGeneration = 0;
+    const [navigationKey, setNavigationKey] = createSignal(1);
     let lastAuthorizedAccountId: string | null = null;
 
     const onResize = () => setCompact(window.innerWidth < 700);
@@ -21,21 +30,42 @@ export default function App() {
 
     createEffect(
         () => route.route().threadId,
-        (threadId) => client.select(threadId),
+        (threadId) =>
+            client.select(
+                threadId,
+                threadId ? anchors[threadId]?.id : undefined,
+            ),
     );
     createEffect(
-        () => client.state.accountId,
-        (accountId) => {
+        () => ({
+            accountId: client.state.accountId,
+            accountEpoch: client.state.accountEpoch,
+            workerEpoch: client.state.workerEpoch,
+            identityError: client.state.inbox.error?.kind,
+        }),
+        (next) => {
+            if (!next.workerEpoch) return;
             if (
-                accountId &&
-                lastAuthorizedAccountId &&
-                accountId !== lastAuthorizedAccountId
+                identity &&
+                lastAuthorizedAccountId !== null &&
+                ((next.workerEpoch === identity.workerEpoch &&
+                    identity.accountEpoch > 0 &&
+                    next.accountEpoch !== identity.accountEpoch) ||
+                    (next.accountId !== null &&
+                        next.accountId !== lastAuthorizedAccountId) ||
+                    (next.accountId === null &&
+                        next.accountEpoch > 0 &&
+                        next.identityError === 'auth'))
             ) {
+                navigationGeneration++;
+                setNavigationKey(navigationGeneration + 1);
                 route.inbox();
                 listAnchor = undefined;
                 for (const id of Object.keys(anchors)) delete anchors[id];
             }
-            if (accountId) lastAuthorizedAccountId = accountId;
+            if (next.accountId !== null)
+                lastAuthorizedAccountId = next.accountId;
+            identity = next;
         },
     );
 
@@ -44,35 +74,49 @@ export default function App() {
     const selected = () => route.route().threadId;
 
     const list = () => (
-        <InboxList
-            facts={facts()}
-            resource={inbox()}
-            selectedId={selected()}
-            restore={listAnchor}
-            onPosition={(anchor) => {
-                listAnchor = anchor;
-            }}
-            onSelect={(id) => route.open(id)}
-            onRefresh={client.refresh}
-            onLoadMore={client.loadMoreInbox}
-        />
+        <Show when={navigationKey()} keyed>
+            {(key) => (
+                <InboxList
+                    facts={facts()}
+                    resource={inbox()}
+                    selectedId={selected()}
+                    restore={listAnchor}
+                    onPosition={(anchor) => {
+                        if (key === navigationGeneration + 1)
+                            listAnchor = anchor;
+                    }}
+                    onSelect={(id) => route.open(id)}
+                    onRefresh={client.refresh}
+                    onLoadMore={client.loadMoreInbox}
+                />
+            )}
+        </Show>
     );
 
-    const conversation = (threadId: string) => (
-        <ConversationPane
-            threadId={threadId}
-            facts={facts()}
-            history={client.state.histories[threadId]}
-            compact={compact()}
-            savedAnchor={anchors[threadId]}
-            saveAnchor={(anchor) => {
-                anchors[threadId] = anchor;
-            }}
-            onBack={route.inbox}
-            onRefresh={() => client.refreshHistory(threadId)}
-            onLoadOlder={() => client.loadOlderHistory(threadId)}
-        />
-    );
+    const conversation = (threadId: string) => {
+        const generation = navigationGeneration;
+        return (
+            <ConversationPane
+                threadId={threadId}
+                facts={facts()}
+                history={client.state.histories[threadId]}
+                compact={compact()}
+                savedAnchor={anchors[threadId]}
+                saveAnchor={(anchor) => {
+                    if (generation === navigationGeneration) {
+                        anchors[threadId] = anchor;
+                        client.rememberHistoryAnchor(threadId, anchor?.id);
+                    }
+                }}
+                onBack={route.inbox}
+                onRefresh={(anchorId) =>
+                    client.refreshHistory(threadId, anchorId)
+                }
+                onLoadOlder={() => client.loadOlderHistory(threadId)}
+                onLoadNewer={() => client.loadNewerHistory(threadId)}
+            />
+        );
+    };
 
     return (
         <main class="solid-app">

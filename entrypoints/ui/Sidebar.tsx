@@ -9,12 +9,13 @@ export function Sidebar(props: {
     conversation: JSX.Element;
 }) {
     const [width, setWidth] = createSignal(360);
+    const [windowWidth, setWindowWidth] = createSignal(window.innerWidth);
     let separator: HTMLButtonElement | undefined;
     let dragging = false;
     let pointerId = 0;
 
     const maximum = () =>
-        Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, window.innerWidth - 320));
+        Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, windowWidth() - 320 - 8));
     const clamp = (value: number) =>
         Math.max(MIN_WIDTH, Math.min(maximum(), value));
     const move = (event: PointerEvent) => {
@@ -51,7 +52,10 @@ export function Sidebar(props: {
             setWidth(maximum());
         }
     };
-    const resize = () => setWidth((value) => clamp(value));
+    const resize = () => {
+        setWindowWidth(window.innerWidth);
+        setWidth((value) => clamp(value));
+    };
     onSettled(() => window.addEventListener('resize', resize));
     onCleanup(() => window.removeEventListener('resize', resize));
     onCleanup(end);

@@ -84,14 +84,15 @@ export function InboxList(props: {
     const savePosition = (focusId?: string) => {
         if (!viewport) return;
         allowRestore = false;
-        const row = viewport.querySelector<HTMLElement>('[data-thread-id]');
+        const boundary =
+            viewport.getBoundingClientRect().top + viewport.clientTop;
+        const row = [
+            ...viewport.querySelectorAll<HTMLElement>('[data-thread-id]'),
+        ].find((item) => item.getBoundingClientRect().bottom > boundary);
         if (!row) return;
         props.onPosition?.({
             id: row?.dataset.threadId,
-            offset: row
-                ? row.getBoundingClientRect().top -
-                  viewport.getBoundingClientRect().top
-                : 0,
+            offset: row ? row.getBoundingClientRect().top - boundary : 0,
             focusId:
                 focusId ||
                 (document.activeElement instanceof HTMLElement
@@ -105,29 +106,30 @@ export function InboxList(props: {
     };
     onCleanup(savePosition);
     createEffect(
-        () => props.restore?.id,
-        (id) => {
-            if (!id) return;
-            if (!allowRestore) return;
-            allowRestore = false;
+        () => ({ restore: props.restore, ordered: orderedIds() }),
+        ({ restore, ordered }) => {
+            const id = restore?.id;
+            if (!id || !allowRestore) return;
+            const index = ordered.indexOf(id);
+            if (index < 0) return;
             queueMicrotask(() => {
                 const element = viewport;
-                if (!element) return;
-                const index = orderedIds().indexOf(id);
+                if (!element || !allowRestore) return;
+                allowRestore = false;
                 if (index >= 0) {
                     element.scrollTop = Math.max(
                         0,
-                        index * 72 - (props.restore?.offset || 0),
+                        index * 72 - (restore.offset || 0),
                     );
                     setScrollTop(element.scrollTop);
                 }
-                const focusId = props.restore?.focusId || id;
+                const focusId = restore.focusId || id;
                 queueMicrotask(() =>
                     element
                         .querySelector<HTMLButtonElement>(
                             `[data-thread-id="${CSS.escape(focusId)}"]`,
                         )
-                        ?.focus(),
+                        ?.focus({ preventScroll: true }),
                 );
             });
         },
@@ -199,10 +201,10 @@ export function InboxList(props: {
                                         type="button"
                                         class="solid-inbox__thread"
                                         data-thread-id={id}
-                                        aria-selected={
+                                        aria-current={
                                             props.selectedId === id
-                                                ? 'true'
-                                                : 'false'
+                                                ? 'page'
+                                                : undefined
                                         }
                                         onClick={() => {
                                             savePosition(id);

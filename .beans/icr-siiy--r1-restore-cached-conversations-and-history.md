@@ -9,7 +9,7 @@ tags:
     - solid-restoration
     - history
 created_at: 2026-09-13T12:04:07Z
-updated_at: 2026-09-13T12:08:11Z
+updated_at: 2026-09-30T22:14:25Z
 blocking:
     - icr-9ib2
 ---
@@ -29,7 +29,7 @@ Exit: retained conversation opens without waiting for Instagram, inbox refresh c
 - Fix v1 account-wide replacement before introducing page/history resources.
   References must retain current transitive thread dependencies, not old copies.
 - Keep full snapshots scoped to inbox, selected detail, and a small warm working
-  set; no delta framework, Effect runtime, Teact adapter, or UI-owned entity cache.
+  set; no delta framework, Teact adapter, or UI-owned entity cache.
 - Retention is distinct from contiguous coverage: refresh relinks only exact
   request/response cursor chains. Detached data remains retained until eviction.
 - Serialize snapshot/commit acceptance and protect shared facts from overlapping
@@ -48,13 +48,19 @@ Keep this milestone in progress until that policy is implemented and verified; a
 disabled continuation at the current cap is an honest transitional limit, not
 feature parity.
 
-## Implemented slice
+## Implemented slice (current)
 
-Resource-specific v2 persistence, normalized shared facts, exact read descriptors,
-inbox continuation, cached detail hydration, scoped flights, resource retry state,
-URL selection/compact Back, window-local resizing/dark shell, bounded history
-windows and anchors, and read-only message/share/reply/unavailable projections.
+Resource-specific v4 persistence, complete page retention, bounded indexed windows,
+one previous proven coverage, normalized facts, exact read descriptors, inbox
+continuation, identity-gated subscriptions, scoped flights/hydration, explicit
+retry/latest navigation, responsive routes/anchors and read-only projections.
 
 Discovered defects `icr-iebs`, `icr-vlv6`, and `icr-bst8` are fixed and verified.
 R0 live/installed-extension checks and navigation p95 measurements remain open;
 no send/read/pin/polling or media-player capability was introduced.
+
+Historical assessment before the fix pass — 2026-09-30: one pinned Effect ManagedRuntime with scoped producers is now the implemented worker workflow authority (supersedes the earlier no-Effect implementation decision). Current automated suite has 129 passing tests; lint/check/build/diff check pass; shared scan has 69 warnings. Live dev-extension startup, cached reads, two-window sharing, cancelled stale-result rejection, network failure/retry, and actual worker termination/restart have evidence in docs/r1-verification.md. This is not production-installed release or p95 evidence. R1 remains in progress: critical authorization icr-nel3 is now reproduced in a controlled fixture; navigation/sidebar/malformed-route icr-w08c is live-confirmed; retention icr-tbbg/icr-itlg remains open; icr-7sjz is reopened for abandoned subscription hydration blocking the commit lane and timed-out anchor retry poisoning; new icr-45nb tracks Solid dev diagnostic misuse. R2 remains blocked by R1.
+
+## Fix-pass outcome — 2026-09-30
+
+Fixed icr-nel3, icr-w08c, icr-tbbg, icr-7sjz and icr-45nb. Final suite: 173 passed; lint/check/build/diff check pass; shared scan exits 0 with 102 warnings. Installed production verifies toolbar/reload recovery, visual bounds, exact Back/focus, offline Retry, shared-read cancellation and actual worker restart. Provisional warm p95 8.4ms/12 samples and authorized retained-cold p95 80.4ms/5 samples. Durable >1,200/changed-head/restart/eviction is fixture-tested; live history has 160 messages. R1 stays open for remaining acceptance in docs/r1-verification.md; R2 remains blocked.

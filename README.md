@@ -40,6 +40,11 @@ instances against the same profile. Delete `.dev/chromium-profile` with the dev
 browser closed to reset it. This directory contains private session data—do not
 share it.
 
+The dev browser exposes remote debugging on `127.0.0.1:9223`.
+`opencode.json` attaches Chrome DevTools MCP to that same browser; start
+`npm run dev` before using browser tools and restart MCP after changing its
+configuration. Keep port `9223` free of other browser debugging sessions.
+
 Before submitting a change:
 
 ```sh

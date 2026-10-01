@@ -234,7 +234,7 @@ function requestAuthProbe() {
 }
 
 export function startAuthProbeListener() {
-    window.addEventListener(AUTH_PROBE_EVENT, (event) => {
+    const receive = (event: WindowEventMap[typeof AUTH_PROBE_EVENT]) => {
         const detail = event.detail;
         if (!detail) return;
 
@@ -247,7 +247,9 @@ export function startAuthProbeListener() {
         } catch {
             // Ignore malformed data crossing the page/content-script boundary.
         }
-    });
+    };
+    window.addEventListener(AUTH_PROBE_EVENT, receive);
+    return () => window.removeEventListener(AUTH_PROBE_EVENT, receive);
 }
 
 function waitForAuthProbe(
@@ -538,6 +540,10 @@ function emitProbe() {
 }
 
 export function startMainWorldAuthProbe() {
+    // SAFETY: This optional marker is owned exclusively by the MAIN-world probe.
+    const host = window as Window & { __instantGramAuthProbeStarted?: boolean };
+    if (host.__instantGramAuthProbeStarted) return;
+    host.__instantGramAuthProbeStarted = true;
     window.addEventListener(AUTH_PROBE_REQUEST_EVENT, emitProbe);
     emitProbe();
     window.setTimeout(emitProbe, 500);

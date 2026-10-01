@@ -12,7 +12,14 @@ unstable prerelease API; dependency updates require an explicit migration.
 `InboxProviderService`, `InboxRepositoryService`, and `InboxEngineService` are
 composable layers in one worker `ManagedRuntime`. Engine semaphores, shared
 flights, identity, hydration, and commands are Effects. Bootstrap and
-subscription fibers are owned by the engine layer scope. Repository Promises
+subscription and shared producer fibers are owned by the engine layer scope.
+Waiters join producer fibers without owning their cancellation; flight records
+are removed only by their producer. Host commands use the worker runtime's
+`runPromise`, and disposal interrupts its roots and engine-owned work. Provider
+scope cleanup fails local pending/readiness operations, removes listeners, and
+disconnects Ports; startup captures disconnect before runtime activation and
+cleans up if initialization fails or is interrupted.
+Repository Promises
 are wrapped once at the IndexedDB boundary, while Port callbacks/Promises and
 the Promise engine facade are browser-host or test compatibility boundaries,
 not a second orchestration model. Plain domain reducers and UI state do not
@@ -22,10 +29,12 @@ durable restart contract.
 ## Storage and projection
 
 `lib/engine/resources.ts` defines the shared normalized facts, resource states,
-errors, and repository contract. IndexedDB v2 migrates the v1 first-page inbox
-without changing its account identity or global commit revision. Resources own
-references to thread, user, and message facts; retaining a thread also retains
-its current participant and latest-message dependencies.
+errors, and repository contract. IndexedDB v4 preserves the v1/v2 inbox migration
+and adds indexed history inventory, incremental references, chronological order,
+physical page chunks, and one previous proven coverage per thread. Legacy
+truncated history coverage is invalidated without discarding the inbox or global
+revision. Resources own thread/user/message references and their current
+participant/latest-message dependencies.
 
 Head and opaque-cursor page segments are durable resources. A transaction writes
 the affected segments/facts, removes explicitly evicted resources, prunes only
@@ -35,8 +44,14 @@ failure preserves the previous accepted projection and reports a storage error.
 
 Refreshing a head does not delete unrelated history or later-page facts. Only
 exact request/response cursor linkage establishes active contiguous ordering;
-unlinked segments remain detached retained data until eviction. Synthetic
-message identities are scoped to their stable conversation, consistently across
+unlinked segments remain detached retained data until eviction. An unmatched
+head refresh preserves one previous contiguous generation, including old-head
+ownership and its own continuation frontier. Existing windows pin that generation;
+explicit anchors resolve against current or proven previous coverage, never
+arbitrary retained pages. Previous coverage is stale and exposes
+`newerCoverageAvailable`; “Show latest messages” is explicit, not an automatic
+jump. Previous coverage is retired when current coverage contains all its IDs.
+Synthetic message identities are scoped to their stable conversation, consistently across
 inbox previews and history, and are never treated as provider IDs.
 
 Complete snapshots carry `entities`, an aggregate `inbox` resource, and bounded
@@ -59,22 +74,36 @@ The production provider exposes only account, inbox/page, and history/older read
 Captured descriptors and response parsing live under `lib/instagram-api`.
 Malformed successful HTTP/GraphQL envelopes are errors, not empty inbox/history
 success. Anchor readiness remains owned by the reverse content-script Port.
+Complete existing Instagram tabs without a live provider Port receive the compiled
+MAIN/ISOLATED scripts using host-scoped `scripting` permission; no user tab reload
+is required. Never reinject a healthy provider: WXT invalidates its prior content
+context before the initializer runs, interrupting pending RPCs.
 
 Cached history is hydrated before fetching missing content; explicit refresh is
 separate from opening a retained conversation. Read flights are shared by
 account/resource/cursor, with bounded history concurrency and per-interest
-generations. Stale completions cannot replace a current projection. Hydration
-and commit acceptance are serialized; overlapping reads preserve facts accepted
-from a later-started request.
+generations. Last history interest synchronously invalidates its generation and
+detaches flights, then interrupts those producers outside the commit lane.
+Account reset also invalidates identity/bootstrap evidence, including when the
+account becomes unknown. Stale completions cannot replace a current projection.
+Hydration and commit acceptance are serialized; hydration reads, network, and
+lane waits remain interruptible. Started persistence, revision/entity installation,
+and publication reconcile uninterruptibly before lane release or repository close.
+Account guards also cover storage failures. Overlapping reads preserve facts
+accepted from a later-started request.
 
 Continuation errors retain usable data, identify the failed operation, and
 require explicit Retry. Cyclic cursors and successful non-progress continuations
 are failure-gated. Retention limits are distinct from server exhaustion and must
 also gate programmatic continuation, not merely disable a UI button. The current
-400-message/20-segment history ceiling is transitional implementation state, not
-the intended durable policy. `icr-itlg` replaces it by retaining complete loaded
-history for active and recent conversations and evicting whole inactive histories
-under account-level pressure. Projection and DOM bounds remain independent.
+durable policy retains every successfully loaded page, splitting oversized
+responses into physical chunks. Each admitted client window is at most 400 IDs;
+there are at most 20 admitted detail windows and two warm windows, independently
+of durable history size. Indexed hydration reads at most 400 IDs/facts plus their
+dependencies. Cached older/newer traversal precedes networking. Durable inventory
+controls whole-history inactive LRU eviction under soft account pressure, protecting
+interested histories and two recent inactive histories. Inbox previews survive
+through independent references. Projection and DOM bounds remain independent.
 
 ## Exclusions and evidence
 

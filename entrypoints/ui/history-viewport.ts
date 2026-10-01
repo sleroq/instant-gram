@@ -33,7 +33,7 @@ export function createHistoryViewportController(onResize: () => void) {
     }
 
     function capture(id?: string): HistoryAnchor | undefined {
-        if (!viewport) return undefined;
+        if (!viewport?.isConnected) return undefined;
         const boundary = viewport.getBoundingClientRect().top;
         const row = [
             ...viewport.querySelectorAll<HTMLElement>('[data-message-id]'),
@@ -50,7 +50,7 @@ export function createHistoryViewportController(onResize: () => void) {
     }
 
     function correct(anchor: HistoryAnchor) {
-        if (!viewport) return false;
+        if (!viewport?.isConnected) return false;
         const row = [
             ...viewport.querySelectorAll<HTMLElement>('[data-message-id]'),
         ].find((item) => item.dataset.messageId === anchor.id);
@@ -71,7 +71,7 @@ export function createHistoryViewportController(onResize: () => void) {
         attach,
         capture,
         correct,
-        element: () => viewport,
+        element: () => (viewport?.isConnected ? viewport : undefined),
         dispose,
     };
 }

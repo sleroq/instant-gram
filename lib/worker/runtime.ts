@@ -1,18 +1,10 @@
-import { Effect } from 'effect';
+import { Effect, Exit } from 'effect';
 import browser from 'webextension-polyfill';
 import { inboxRepositoryLive } from '../engine/db.ts';
-import {
-    InboxEngineService,
-    type InboxEngine,
-    type InboxEngineEffects,
-} from '../engine/inbox.ts';
+import { InboxEngineService, type InboxEngine } from '../engine/inbox.ts';
 import { ensureAnchorTab } from '../provider/anchor.ts';
-import {
-    InboxProviderService,
-    inboxProviderLive,
-    type ProviderPort,
-} from '../provider/inbox.ts';
-import { makeWorkerRuntime } from './layer.ts';
+import { InboxProviderService, inboxProviderLive } from '../provider/inbox.ts';
+import { bindInboxEngine, makeWorkerRuntime } from './layer.ts';
 
 const ProviderLive = inboxProviderLive({
     ensureAnchor: ensureAnchorTab,
@@ -25,8 +17,15 @@ export const workerRuntime = makeWorkerRuntime(ProviderLive, RepositoryLive);
 
 export function runWorker<A>(
     effect: Effect.Effect<A, never, InboxProviderService | InboxEngineService>,
+    onFailure?: () => void,
 ): void {
-    workerRuntime.runFork(effect);
+    const fiber = workerRuntime.runFork(
+        effect.pipe(Effect.tapDefect(Effect.logError)),
+    );
+    if (onFailure)
+        fiber.addObserver((exit) => {
+            if (Exit.isFailure(exit)) onFailure();
+        });
 }
 
 export function withEngine<A>(
@@ -34,28 +33,18 @@ export function withEngine<A>(
 ): Effect.Effect<A, never, InboxEngineService> {
     return Effect.gen(function* () {
         const engine = yield* InboxEngineService;
-        const context = yield* Effect.context<never>();
-        return use(promiseBoundary(engine, Effect.runPromiseWith(context)));
+        return use(
+            bindInboxEngine(engine, (command) =>
+                workerRuntime.runPromise(
+                    command.pipe(Effect.tapDefect(Effect.logError)),
+                ),
+            ),
+        );
     });
 }
 
-function promiseBoundary(
-    engine: InboxEngineEffects,
-    runPromise: <A>(effect: Effect.Effect<A>) => Promise<A>,
-): InboxEngine {
-    return {
-        ...engine,
-        refresh: () => runPromise(engine.refresh),
-        loadMoreInbox: () => runPromise(engine.loadMoreInbox),
-        refreshHistory: (id) => runPromise(engine.refreshHistory(id)),
-        loadOlderHistory: (id) => runPromise(engine.loadOlderHistory(id)),
-    };
-}
-
 export function acceptProvider(
-    port: ProviderPort,
+    activate: (provider: InboxProviderService['Service']) => void,
 ): Effect.Effect<void, never, InboxProviderService> {
-    return Effect.map(InboxProviderService, (provider) =>
-        provider.accept(port),
-    );
+    return Effect.map(InboxProviderService, (provider) => activate(provider));
 }

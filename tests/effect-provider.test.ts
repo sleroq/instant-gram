@@ -49,6 +49,9 @@ test('InboxRepositoryService is independently substitutable', async () => {
     const expected = { resources: [], entities: emptyEntities(), revision: 7 };
     const stub: InboxRepositoryEffects = {
         readResources: () => Effect.succeed(expected),
+        readHistoryWindow: () => Effect.die('unexpected history read'),
+        touchHistory: () => Effect.die('unexpected history access'),
+        readHistoryInventory: () => Effect.succeed([]),
         commitResources: () => Effect.succeed(expected),
         close: Effect.void,
     };
@@ -97,6 +100,9 @@ test('worker layer composes one substitutable engine from provider and repositor
                 entities: emptyEntities(),
                 revision: 0,
             }),
+        readHistoryWindow: () => Effect.die('unexpected history read'),
+        touchHistory: () => Effect.die('unexpected history access'),
+        readHistoryInventory: () => Effect.succeed([]),
         commitResources: (_account, update) =>
             Effect.succeed({
                 resources: update.resources,
@@ -116,11 +122,12 @@ test('worker layer composes one substitutable engine from provider and repositor
     await runtime.dispose();
 });
 
-test('readiness timeout follows the Effect clock', async () => {
+test('readiness timeout follows the Effect clock', async (t) => {
     const provider = makeInboxProvider({
         ensureAnchor: async () => 1,
         extensionId: 'extension',
     });
+    t.after(() => provider.dispose());
     const result = await Effect.runPromise(
         Effect.gen(function* () {
             const fiber = yield* Effect.forkChild(provider.account);
@@ -133,13 +140,14 @@ test('readiness timeout follows the Effect clock', async () => {
     assert.equal(result._tag, 'Failure');
 });
 
-test('request timeout removes pending state and ignores a late response', async () => {
+test('request timeout removes pending state and ignores a late response', async (t) => {
     const inbound = { receive(_message: ProviderResponseInput) {} };
     const sent: ProviderRequest[] = [];
     const provider = makeInboxProvider({
         ensureAnchor: async () => 1,
         extensionId: 'extension',
     });
+    t.after(() => provider.dispose());
     provider.accept({
         name: PROVIDER_PORT,
         sender: {
@@ -148,8 +156,16 @@ test('request timeout removes pending state and ignores a late response', async 
             url: 'https://www.instagram.com/direct/inbox/',
             tab: { id: 1 },
         },
-        onMessage: { addListener: (listener) => (inbound.receive = listener) },
-        onDisconnect: { addListener: () => undefined },
+        onMessage: {
+            addListener: (listener) => (inbound.receive = listener),
+            removeListener: () => {
+                inbound.receive = () => undefined;
+            },
+        },
+        onDisconnect: {
+            addListener: () => undefined,
+            removeListener: () => undefined,
+        },
         postMessage: (message) => sent.push(message),
         disconnect: () => undefined,
     });
@@ -184,13 +200,14 @@ test('request timeout removes pending state and ignores a late response', async 
     );
 });
 
-test('interruption removes a provider request and malformed envelopes are ignored', async () => {
+test('interruption removes a provider request and malformed envelopes are ignored', async (t) => {
     const inbound = { receive(_message: ProviderResponseInput) {} };
     const sent: ProviderRequest[] = [];
     const provider = makeInboxProvider({
         ensureAnchor: async () => 1,
         extensionId: 'extension',
     });
+    t.after(() => provider.dispose());
     provider.accept({
         name: PROVIDER_PORT,
         sender: {
@@ -199,8 +216,16 @@ test('interruption removes a provider request and malformed envelopes are ignore
             url: 'https://www.instagram.com/',
             tab: { id: 1 },
         },
-        onMessage: { addListener: (listener) => (inbound.receive = listener) },
-        onDisconnect: { addListener: () => undefined },
+        onMessage: {
+            addListener: (listener) => (inbound.receive = listener),
+            removeListener: () => {
+                inbound.receive = () => undefined;
+            },
+        },
+        onDisconnect: {
+            addListener: () => undefined,
+            removeListener: () => undefined,
+        },
         postMessage: (message) => sent.push(message),
         disconnect: () => undefined,
     });
@@ -239,13 +264,14 @@ test('interruption removes a provider request and malformed envelopes are ignore
     );
 });
 
-test('matching malformed provider results fail immediately as protocol errors', async () => {
+test('matching malformed provider results fail immediately as protocol errors', async (t) => {
     const inbound = { receive(_message: ProviderResponseInput) {} };
     const sent: ProviderRequest[] = [];
     const provider = makeInboxProvider({
         ensureAnchor: async () => 1,
         extensionId: 'extension',
     });
+    t.after(() => provider.dispose());
     provider.accept({
         name: PROVIDER_PORT,
         sender: {
@@ -254,8 +280,16 @@ test('matching malformed provider results fail immediately as protocol errors', 
             url: 'https://www.instagram.com/',
             tab: { id: 1 },
         },
-        onMessage: { addListener: (listener) => (inbound.receive = listener) },
-        onDisconnect: { addListener: () => undefined },
+        onMessage: {
+            addListener: (listener) => (inbound.receive = listener),
+            removeListener: () => {
+                inbound.receive = () => undefined;
+            },
+        },
+        onDisconnect: {
+            addListener: () => undefined,
+            removeListener: () => undefined,
+        },
         postMessage: (message) => sent.push(message),
         disconnect: () => undefined,
     });
@@ -352,4 +386,139 @@ test('matching malformed provider results fail immediately as protocol errors', 
         if (Result.isFailure(outcome))
             assert.equal(outcome.failure.kind, 'protocol');
     }
+});
+
+function anchorFixture() {
+    const acquisitions: Array<(tabId: number) => void> = [];
+    const provider = makeInboxProvider({
+        ensureAnchor: () =>
+            new Promise<number>((resolve) => acquisitions.push(resolve)),
+        extensionId: 'extension',
+    });
+    let requests = 0;
+    let disconnects = 0;
+    function accept(tabId: number) {
+        const inbound = { receive(_message: ProviderResponseInput) {} };
+        provider.accept({
+            name: PROVIDER_PORT,
+            sender: {
+                id: 'extension',
+                frameId: 0,
+                url: 'https://www.instagram.com/',
+                tab: { id: tabId },
+            },
+            onMessage: {
+                addListener: (listener) => {
+                    inbound.receive = listener;
+                },
+                removeListener: () => {
+                    inbound.receive = () => undefined;
+                },
+            },
+            onDisconnect: {
+                addListener: () => undefined,
+                removeListener: () => undefined,
+            },
+            postMessage: (message) => {
+                requests++;
+                inbound.receive({
+                    kind: 'response',
+                    id: message.id,
+                    method: 'account',
+                    result: { ok: true, value: 'current' },
+                });
+            },
+            disconnect: () => {
+                disconnects++;
+            },
+        });
+    }
+    return {
+        provider,
+        acquisitions,
+        accept,
+        requests: () => requests,
+        disconnects: () => disconnects,
+    };
+}
+
+test('expired anchor acquisition retries and late settlement cannot retire its replacement', async (t) => {
+    const fixture = anchorFixture();
+    t.after(() => fixture.provider.dispose());
+    await Effect.runPromise(
+        Effect.gen(function* () {
+            const first = yield* Effect.forkChild(fixture.provider.account);
+            while (fixture.acquisitions.length < 1) yield* Effect.yieldNow;
+            yield* TestClock.adjust('10 seconds');
+            const failure = yield* Effect.result(Fiber.join(first));
+            assert(Result.isFailure(failure));
+            assert.equal(failure.failure.kind, 'provider_unavailable');
+            const retry = yield* Effect.forkChild(fixture.provider.account);
+            while (fixture.acquisitions.length < 2) yield* Effect.yieldNow;
+            fixture.acquisitions[0]!(99);
+            // Let the retired Promise's settlement handlers run before another owner joins.
+            yield* Effect.promise(() => Promise.resolve());
+            const concurrent = yield* Effect.forkChild(
+                fixture.provider.account,
+            );
+            yield* Effect.yieldNow;
+            yield* Effect.yieldNow;
+            assert.equal(fixture.acquisitions.length, 2);
+            fixture.accept(1);
+            fixture.acquisitions[1]!(1);
+            assert.equal(yield* Fiber.join(retry), 'current');
+            assert.equal(yield* Fiber.join(concurrent), 'current');
+            assert.equal(fixture.requests(), 2);
+        }).pipe(Effect.provide(TestClock.layer())),
+    );
+});
+
+test('shared anchor acquisition survives one owner interruption', async (t) => {
+    const fixture = anchorFixture();
+    t.after(() => fixture.provider.dispose());
+    await Effect.runPromise(
+        Effect.gen(function* () {
+            const first = yield* Effect.forkChild(fixture.provider.account);
+            while (fixture.acquisitions.length < 1) yield* Effect.yieldNow;
+            const second = yield* Effect.forkChild(fixture.provider.account);
+            yield* Effect.yieldNow;
+            yield* Effect.yieldNow;
+            yield* Fiber.interrupt(first);
+            const third = yield* Effect.forkChild(fixture.provider.account);
+            yield* Effect.yieldNow;
+            yield* Effect.yieldNow;
+            assert.equal(fixture.acquisitions.length, 1);
+            fixture.accept(1);
+            fixture.acquisitions[0]!(1);
+            assert.equal(yield* Fiber.join(second), 'current');
+            assert.equal(yield* Fiber.join(third), 'current');
+            assert.equal(fixture.requests(), 2);
+        }).pipe(Effect.provide(TestClock.layer())),
+    );
+});
+
+test('disposal retires hanging acquisition and disconnects only once', async () => {
+    const fixture = anchorFixture();
+    await Effect.runPromise(
+        Effect.gen(function* () {
+            const root = yield* Effect.forkChild(fixture.provider.account);
+            while (fixture.acquisitions.length < 1) yield* Effect.yieldNow;
+            fixture.accept(1);
+            fixture.provider.dispose();
+            fixture.provider.dispose();
+            assert.equal(
+                (yield* Effect.result(Fiber.join(root)))._tag,
+                'Failure',
+            );
+            fixture.acquisitions[0]!(1);
+            yield* Effect.promise(() => Promise.resolve());
+            assert.equal(
+                (yield* Effect.result(fixture.provider.account))._tag,
+                'Failure',
+            );
+            assert.equal(fixture.acquisitions.length, 1);
+            assert.equal(fixture.disconnects(), 1);
+            assert.equal(fixture.requests(), 0);
+        }).pipe(Effect.provide(TestClock.layer())),
+    );
 });
