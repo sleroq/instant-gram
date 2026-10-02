@@ -25,8 +25,6 @@ Checklist:
 - [ ] Do not auto-update doc_ids; document that matching friendly names do not guarantee compatible variables or response shape.
 - [ ] Verify with a mocked/simulated request or local instrumentation without exposing Instagram session data.
 
-
-
 ## Solid restoration handoff (2026-09-13)
 
 This proposal is R5.6–R5.7 under `icr-kj7d`, not a blocker for R1–R4. Keep it passive and diagnostics-only; never capture tokens/message bodies, auto-update descriptors, or expose protocol details in ordinary UI.

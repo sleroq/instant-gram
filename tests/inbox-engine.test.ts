@@ -277,6 +277,7 @@ test('native repository detail hydration preserves other inbox facts during a de
         ],
         entities: normalized.entities,
     });
+
     const network = deferred<Page<Thread>>();
     const engine = createInboxEngine(
         repository,
@@ -288,6 +289,7 @@ test('native repository detail hydration preserves other inbox facts during a de
         if (value.inbox.availability === 'present') inboxReady.resolve();
     });
     await inboxReady.promise;
+
     const detailReady = deferred<void>();
     const stopDetail = engine.subscribe((value) => {
         if (value.histories.one?.availability === 'present') {
@@ -298,6 +300,7 @@ test('native repository detail hydration preserves other inbox facts during a de
     }, 'one');
     await detailReady.promise;
     assert.equal(engine.snapshot().inbox.synchronization, 'refreshing');
+
     network.resolve(page(thread('one'), thread('two')));
     await engine.refresh();
     stopDetail();
@@ -357,6 +360,7 @@ test('hydrates cached inbox and history before one deferred background inbox ref
     });
     repository.entities = inbox.entities;
     repository.revision = 1;
+
     const network = deferred<Page<Thread>>();
     const networkStarted = deferred<void>();
     let inboxCalls = 0;
@@ -376,6 +380,7 @@ test('hydrates cached inbox and history before one deferred background inbox ref
         }),
     );
     t.after(engine.dispose);
+
     const cached = deferred<void>();
     engine.subscribe((value) => {
         if (value.inbox.orderedIds[0] === 'cached' && value.histories.cached)
@@ -385,6 +390,7 @@ test('hydrates cached inbox and history before one deferred background inbox ref
     await networkStarted.promise;
     assert.equal(inboxCalls, 1);
     assert.equal(historyCalls, 0);
+
     network.resolve(page(thread('fresh')));
     await engine.refresh();
     assert.deepEqual(engine.snapshot().inbox.orderedIds, ['fresh']);
@@ -544,11 +550,13 @@ test('reselecting a detail drops its old generation and sends a new request', as
         }),
     );
     t.after(engine.dispose);
+
     const first = engine.subscribe(() => undefined, 'thread');
     await oldStarted.promise;
     first();
     engine.subscribe(() => undefined, 'thread');
     await newStarted.promise;
+
     oldResult.resolve({
         items: [message('m-old')],
         hasNextPage: false,
@@ -598,10 +606,12 @@ test('a second listener keeps a queued shared detail flight alive', async (t) =>
         }),
     );
     t.after(engine.dispose);
+
     const unsubscribers = threads.map((item) =>
         engine.subscribe(() => undefined, item.key),
     );
     await Promise.all(started.slice(0, 4).map((item) => item.promise));
+
     const second = engine.subscribe(() => undefined, 't-4');
     for (const result of results.slice(0, 4))
         result.resolve({ items: [], hasNextPage: false, viewerId: 'viewer' });
@@ -699,11 +709,13 @@ test('history retention persists complete 501 rows while projecting at most 400 
         }),
     );
     t.after(engine.dispose);
+
     const unsubscribers = threads
         .slice(0, 20)
         .map((item) => engine.subscribe(() => undefined, item.key));
     for (const item of threads.slice(0, 20))
         await engine.refreshHistory(item.key);
+
     const historyRows =
         repository.resources.get('history:t-0')?.orderedIds ?? [];
     const roots = [...repository.resources.values()].filter(
@@ -715,6 +727,7 @@ test('history retention persists complete 501 rows while projecting at most 400 
     assert.equal(engine.snapshot().histories['t-0'].orderedIds.length, 400);
     assert.equal(engine.snapshot().histories['t-0'].cachedOlder, true);
     assert.ok(roots.length <= 20);
+
     const rejected = engine.snapshot().histories['t-20'];
     assert.equal(rejected, undefined);
     for (const unsubscribe of unsubscribers) unsubscribe();
@@ -849,6 +862,7 @@ test('provider identity unavailability retains authorized cache but authenticati
         if (value.inbox.availability === 'present') ready.resolve();
     });
     await ready.promise;
+
     failure = 'provider_unavailable';
     await engine.refresh();
     assert.equal(engine.snapshot().inbox.error?.kind, 'provider_unavailable');
@@ -860,12 +874,14 @@ test('provider identity unavailability retains authorized cache but authenticati
     assert.equal(retained.accountId, 'account');
     assert.equal(retained.entities.threadsById.inbox.title, 'Thread inbox');
     assert.equal(retained.inbox.error?.kind, 'provider_unavailable');
+
     let newcomer: InboxProjection | undefined;
     const stopNewcomer = engine.subscribe((value) => {
         newcomer = value;
     });
     assert.equal(newcomer?.accountId, null);
     assert.deepEqual(newcomer?.entities, emptyEntities());
+
     // Drain the newcomer's unavailable renewal before changing its outcome.
     await engine.refresh();
     failure = 'auth';

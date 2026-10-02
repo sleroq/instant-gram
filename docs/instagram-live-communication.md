@@ -1,44 +1,28 @@
 # Instagram DM live communication
 
-**Status: protocol evidence and historical implementation notes.** The current
-Solid client does not poll or mark messages read. R2 restores worker-owned
-interest-driven polling and durable paired read commands; passive Iris/MQTT
-observation remains gated by fresh evidence in R5. See the
+**Status: protocol evidence, NOT current runtime capabilities.** The production
+closed provider exposes only reads under the [engine contract](engine-inbox-contract.md);
+the Solid client does not poll, mark messages read, or send mutations. R2 plans
+worker-owned interest-driven polling and durable paired read commands; passive
+Iris/MQTT observation remains gated by fresh evidence in R5. See the
 [application contract](application-architecture.md) and
 [restoration checklist](solid-restoration-checklist.md). Do not restore a UI
-polling loop or UI-owned reconciliation store from the notes below.
+polling loop or UI-owned reconciliation store from these protocol references.
 
-Source: `examples/www.instagram.com-live-communication.har`. Use the same common GraphQL form fields and headers as `instagram-har-useful-requests.md`; all calls below are `POST https://www.instagram.com/api/graphql`.
+Tracked reference capture: `examples/www.instagram.com-live-communication.har` under `docs/examples`; the request examples here are sanitized. The separately named `message-editing.har` is local, untracked evidence. Use the same common GraphQL form fields and headers as `instagram-har-useful-requests.md`; all calls below are `POST https://www.instagram.com/api/graphql`.
 
 ## Listen for new messages
 
 - Bootstrap with `PolarisDirectInboxQuery` / `IGDThreadDetailQuery`, passing the live `device_id_for_iris_subscription`.
 - Instagram web keeps DMs live through its Iris/MQTT subscription; the HAR does not include decoded WebSocket frames, but the page CSP allows `wss://edge-chat.instagram.com` and the inbox queries are named `*_for_iris_subscription`.
-- Practical implementation path: keep an Instagram anchor tab open and listen in the page context to the app's live thread updates, or poll `IGDThreadDetailQuery` as a fallback using the newest seen message id/timestamp for de-dupe.
-- The retired implementation used that fallback. No authenticated two-account
-  session or decoded Iris/MQTT fixture was available to prove a narrow passive
-  page-runtime event contract, so implementing a page observer would have meant
-  guessing at private runtime or raw frame behavior. While the UI is visible it
-  polls the captured initial `PolarisDirectInboxQuery` and, when a loaded thread
-  is selected, the captured initial `IGDThreadDetailQuery`. Repeating the
-  no-cursor request is structurally the authoritative initial/newest 20-message
-  shape, so it is the safest permitted fallback; whether repeated live requests
-  expose peer updates promptly is not yet verified and requires authenticated
-  two-account validation. The older-only cursor query is never used for
-  synchronization. Both responses are already normalized by the anchor parsers
-  and only protocol-neutral entities cross into the UI store.
-- Polling starts after a 5-second interval, is single-flight, pauses completely
-  while the UI document is hidden, and refreshes immediately when it becomes
-  visible. Failures use exponential 10/20/40/60-second retry delays (capped at
-  60 seconds); a successful combined inbox/thread snapshot resets the delay. A
-  timer or visibility refresh that finds an ordinary inbox initial/pagination
-  read in flight schedules one replacement attempt at the current delay, rather
-  than issuing a duplicate request or stopping the loop.
-  Teardown removes the visibility listener, clears the timer, and generation-
-  gates any request already in flight. Incoming peer read-receipt updates and
-  typing remain unsupported; selected unread conversations do send the captured
-  read pair. Passive Iris/MQTT observation and manual two-account validation
-  remain future live-session work.
+- No authenticated two-account session or decoded Iris/MQTT fixture establishes
+  a narrow passive page-runtime event contract. Page observation requires fresh
+  evidence rather than guesses about private runtime or raw frames.
+- The captured no-cursor `PolarisDirectInboxQuery` and `IGDThreadDetailQuery`
+  provide initial/newest snapshots (20 messages for thread detail). They are
+  candidates for future worker-owned refresh, not proof that repeated requests
+  expose peer updates promptly. That requires authenticated two-account
+  validation. The older-only cursor query supplies history, not synchronization.
 - When a message is displayed/read, Instagram sends read markers:
     - `useIGDMarkThreadAsReadMutation`, `doc_id=27356881703909995`
     - `useIGDMarkThreadAsReadValidationMutation`, `doc_id=35211594988486314`
@@ -97,15 +81,13 @@ Everything else is the same as a normal send. In the HAR, `replied_to_client_con
 Use another emoji value to change/create a reaction. Revocation sends the current
 emoji through the same mutation with `reaction_status: "deleted"`. The local web
 capture proves the creation shape; the deletion value follows Instagram's direct
-reaction contract and is reconciled only from the mutation's authoritative array.
-Read responses also carry complete authoritative arrays: accepted empty or
-timestamp-less arrays may remove/replace earlier reactions. The UI rejects stale
-overlapping reads by request ownership and local reaction revisions, not by
-comparing reaction timestamps.
+reaction contract, not a captured deletion request. Read responses carry
+complete reaction arrays, including empty or timestamp-less arrays; timestamps
+alone are not a reliable reconciliation basis for future mutation support.
 
 ## Edit a text message
 
-`docs/message-editing.har` captures `IGDirectEditMessageMutation`,
+The local, untracked `message-editing.har` captures `IGDirectEditMessageMutation`,
 `doc_id=32480262318254796`, with:
 
 ```json
@@ -121,4 +103,4 @@ comparing reaction timestamps.
 The receipt is
 `data.direct_edit_message_with_slide_messaging_response` and contains matching
 `message_id`/`id` plus the original message `timestamp_ms`. The capture proves
-text editing only; media and other message variants are not exposed as editable.
+text editing only, not editing of media or other message variants.

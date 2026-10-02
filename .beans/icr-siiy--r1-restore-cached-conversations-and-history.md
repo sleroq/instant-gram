@@ -1,7 +1,7 @@
 ---
 # icr-siiy
 title: 'R1: Restore cached conversations and history'
-status: in-progress
+status: completed
 type: milestone
 priority: critical
 tags:
@@ -9,7 +9,7 @@ tags:
     - solid-restoration
     - history
 created_at: 2026-09-13T12:04:07Z
-updated_at: 2026-09-30T22:14:25Z
+updated_at: 2026-10-01T20:25:52Z
 blocking:
     - icr-9ib2
 ---
@@ -64,3 +64,7 @@ Historical assessment before the fix pass — 2026-09-30: one pinned Effect Mana
 ## Fix-pass outcome — 2026-09-30
 
 Fixed icr-nel3, icr-w08c, icr-tbbg, icr-7sjz and icr-45nb. Final suite: 173 passed; lint/check/build/diff check pass; shared scan exits 0 with 102 warnings. Installed production verifies toolbar/reload recovery, visual bounds, exact Back/focus, offline Retry, shared-read cancellation and actual worker restart. Provisional warm p95 8.4ms/12 samples and authorized retained-cold p95 80.4ms/5 samples. Durable >1,200/changed-head/restart/eviction is fixture-tested; live history has 160 messages. R1 stays open for remaining acceptance in docs/r1-verification.md; R2 remains blocked.
+
+## User acceptance
+
+The user confirms that this read-only stage is working and manual testing passed, and explicitly requests completion before continuing to new features. Closed on that acceptance together with the recorded 173-test and installed-production evidence. Earlier agent-only evidence gaps remain historical limitations, not pending stage blockers; no additional per-scenario measurements are claimed.

@@ -19,7 +19,7 @@ dictionary shared by inbox and selected/retained history resources. Dictionary
 reconciliation preserves unchanged records and rows. In the current R1 slice,
 refresh is explicit; R2.11 replaces routine manual refresh with worker-owned
 interest-driven synchronization while retaining refresh only as a repair affordance.
-the fixed 72px inbox mounts at most 31 rows and history mounts at most 80.
+The fixed 72px inbox mounts at most 31 rows and history mounts at most 80.
 Routes and logical scroll/focus restoration are window state, not a second
 cache. Message previews do not imply a modal player or media-info API. Polling
 and mutations remain later milestones.

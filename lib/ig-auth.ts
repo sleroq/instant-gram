@@ -234,7 +234,7 @@ function requestAuthProbe() {
 }
 
 export function startAuthProbeListener() {
-    const receive = (event: WindowEventMap[typeof AUTH_PROBE_EVENT]) => {
+    function receive(event: WindowEventMap[typeof AUTH_PROBE_EVENT]) {
         const detail = event.detail;
         if (!detail) return;
 
@@ -247,7 +247,7 @@ export function startAuthProbeListener() {
         } catch {
             // Ignore malformed data crossing the page/content-script boundary.
         }
-    };
+    }
     window.addEventListener(AUTH_PROBE_EVENT, receive);
     return () => window.removeEventListener(AUTH_PROBE_EVENT, receive);
 }
@@ -276,6 +276,7 @@ function harvestTokensNow(): Tokens {
     const roots = pageJson();
     const text = pageText();
     const sources: TokenSources = {};
+
     const fbDtsg =
         source(
             sources,
@@ -431,6 +432,7 @@ function harvestTokensNow(): Tokens {
         cookie('csrftoken'),
         'csrftoken cookie',
     );
+
     if (!fbDtsg || !lsd || !jazoest || !deviceId || !viewerId || !csrfToken)
         throw authError({
             fbDtsg,
@@ -440,6 +442,7 @@ function harvestTokensNow(): Tokens {
             viewerId,
             csrfToken,
         });
+
     return { fbDtsg, lsd, jazoest, csrfToken, deviceId, viewerId };
 }
 

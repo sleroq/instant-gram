@@ -1,6 +1,8 @@
 # Useful HAR request examples
 
-Sanitized extracts from `examples/www.instagram.com.har` and `examples/www.instagram.com-the-second.har`. Auth/session fields are intentionally placeholders; fill them from the live Instagram anchor tab before replaying.
+**Status: protocol reference, NOT current runtime capabilities.** The production closed provider exposes only reads defined by [the engine contract](engine-inbox-contract.md). Media, engagement, and mutations are references for future R2–R5, not implemented UI features.
+
+Sanitized request extracts from tracked captures under `docs/examples`, including `examples/www.instagram.com.har` and `examples/www.instagram.com-the-second.har`. Other named captures below are local and untracked; only sanitized descriptions are recorded here. Auth/session fields are intentionally placeholders; replay requires current credentials from the live Instagram anchor tab.
 
 ## Common POST form fields
 
@@ -60,7 +62,7 @@ data.get_slide_mailbox_for_iris_subscription.threads_by_folder.page_info.has_nex
 
 ## 2. Inbox pagination
 
-Source: `examples/www.instagram.com-the-second.har`, entry `44`. This was the missing request in the original plan.
+Source: `examples/www.instagram.com-the-second.har`, entry `44`.
 
 ```txt
 POST https://www.instagram.com/api/graphql
@@ -189,10 +191,10 @@ The separate `examples/www.instagram.com-open-reel-from-chat-and-watch.har`
 captures the browser's follow-up media reads:
 
 ```txt
-lines 3126–3139: GET /api/v1/media/3887864898364318881/info/
-line 3389: response items[0].pk = 3887864898364318881 and
-           items[0].id = 3887864898364318881_7750680154
-lines 1434–1447: GET /api/v1/media/3887864898364318881/comments/
+lines 3126–3139: GET /api/v1/media/<media-id>/info/
+line 3389: response items[0].pk = <media-id> and
+           items[0].id = <media-id>_<owner-id>
+lines 1434–1447: GET /api/v1/media/<media-id>/comments/
                  ?can_support_threading=true&permalink_enabled=false
 ```
 
@@ -201,9 +203,8 @@ no comments request with `min_id`; do not infer pagination from `next_min_id`.
 The later sanitized `real-loading` captures prove that Instagram's URL-safe
 base64 shortcode decodes to the same numeric media ID used by comments and the
 REST info path. Prefer a numeric DM media-ID hint and use that deterministic
-decode only when the hint is absent. The former plan/live-bundle-derived
-`PolarisPostActionLoadPostQueryQuery` was not captured and is no longer called.
-Always validate REST `items[0].pk` and `items[0].code` before caching media.
+decode only when the hint is absent in a future media loader. Validate REST
+`items[0].pk` and `items[0].code` before caching media.
 
 ## 7. Followed-account engagement social context
 
@@ -211,37 +212,38 @@ Always validate REST `items[0].pk` and `items[0].code` before caching media.
 authenticated REST reads:
 
 ```txt
-GET /api/v1/media/3934570309998833710/comments/
+GET /api/v1/media/<media-id>/comments/
     ?can_support_threading=true&permalink_enabled=false
-GET /api/v1/media/3934570309998833710/info/
+GET /api/v1/media/<media-id>/info/
 ```
 
 The comments response is base64-encoded in the HAR. After decoding, the root has
-`is_ranked: true`; comment `17959665483171459` has `comment_index: 0`,
+`is_ranked: true`; comment `<comment-id>` has `comment_index: 0`,
 `is_ranked_comment: true`, its text, and a complete user identity including
-username `mezzanine.proxy`, numeric user ID `35122899956`, and
+username `<engaged-username>`, numeric user ID `<engaged-user-id>`, and
 `profile_pic_url`. The response does **not** include `user.friendship_status`
 or another following flag, so ranking alone does not prove the requested cue.
 
-The info response separately has `top_likers: ["mezzanine.proxy"]` and a matching
+The info response separately has `top_likers: ["<engaged-username>"]` and a matching
 `facepile_top_likers` user with the same numeric ID. `social_context` and
 `preview_comments` are both empty. Those two REST responses prove like and
 comment engagement by the same account, but still not viewer-following.
 
 `more-requests.har` captures the missing correlation in the same navigation.
-The comments and info reads start at `21:40:01.827Z` and `21:40:01.828Z`. At
-`21:40:03.128Z`, request `PolarisUserHoverCardContentV2Query` uses document
-`27756568060663620` with exactly `{"userID":"35122899956"}`. Its response
+The comments and info reads start at `<comments-time>` and `<info-time>`. At
+`<engaged-hover-time>`, request `PolarisUserHoverCardContentV2Query` uses document
+`27756568060663620` with `{"userID":"<engaged-user-id>"}`. Its response
 returns the same `pk`/username and `friendship_status.following: true`. A second
-hover-card request at `21:40:03.281Z` targets media author `70358899590` and
+hover-card request at `<author-hover-time>` targets media author `<author-user-id>` and
 returns `following: false`; it must not be correlated to the comment merely
 because it occurs nearby. The numeric user IDs, not timing or rank, join the
 three responses.
 
-ICR therefore accepts the first five ordered `top_likers`/facepile matches,
-executes the captured user-ID query for each after media info, and exposes only
-accounts whose response IDs match and whose `following` value is exactly true.
-The ranked index-zero comment cue is further gated to one of those proven account
-IDs. This bounds friendship enrichment to five lookups per media load. A followed
-commenter who is not also a named top liker remains undetectable from these
-captures and is intentionally omitted rather than guessed.
+A proposed future enrichment could take the first five ordered
+`top_likers`/facepile matches, execute the captured user-ID query for each after
+media info, and include only accounts whose response IDs match and whose
+`following` value is exactly true. The ranked index-zero comment cue would also
+require one of those proven account IDs. This would bound enrichment to five
+lookups per media load; it is NOT implemented UI behavior. A followed commenter
+who is not also a named top liker remains undetectable from these captures and
+must not be inferred.

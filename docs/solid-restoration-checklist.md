@@ -1,64 +1,16 @@
 # Solid restoration checklist
 
-> **Restoration checklist, with a verified bounded R1 slice.** Unchecked items
-> are not completion claims. The current read-only slice is described by the
-> [frontend architecture](frontend-architecture.md) and
-> [engine inbox contract](engine-inbox-contract.md).
->
-> Audit date: **2026-09-10**.
-
-## How to read this plan
-
-This document separates four things which the historical issue statuses alone
-cannot separate:
-
-1. **Current baseline:** behavior present in the Solid 2 production runtime.
-2. **Restoration:** behavior evidenced in the retired implementation that must
-   be rebuilt through the current worker contracts.
-3. **Unfinished backlog:** intended behavior that was not fully delivered or
-   verified, even if adjacent code existed.
-4. **Optional new scope:** ideas without evidence that they were shipped core
-   behavior. These are not restoration commitments.
-
-A completed bean does not mean its behavior exists in Solid, and a todo bean
-does not prove its behavior never shipped. Likewise, scrapping an old
-Svelte/Teact design does not reject later restoration of the user behavior.
-The appendix preserves bean statuses at the September 10 audit. Current delivery
-status lives in the R0–R5 milestone beans; later edits to historical beans do not
-retroactively change that audit.
-
-The retired behavior reference is commit `d001f89`. Inspect it without restoring
-deleted files into the working tree:
-
-```sh
-git show d001f89:docs/frontend-architecture.md
-git show d001f89:entrypoints/ui/history.browser.test.ts
-git show d001f89:entrypoints/ui/store.test.ts
-```
-
-The most recent old editing/comment behavior is also present in ancestor
-`88b973d`. Current `lib/domain.ts`, catalog, handlers, and parsers are protocol
-evidence only: their presence is not a runtime feature. The
-[`solid-2-successor-review.md`](solid-2-successor-review.md) is a historical review,
-not the current roadmap or implemented state. Teact has already been eliminated; no phase
-restores its store, adapters, harness, or root force-render mechanism.
+R0 and R1 are complete by user acceptance, including complete-history retention.
+**R2 is next and not yet started.** Checked items describe accepted capabilities;
+unchecked items remain future requirements. See the [frontend architecture](frontend-architecture.md),
+[engine contract](engine-inbox-contract.md), and [verification record](r1-verification.md)
+for current ownership and evidence limits. Protocol types/parsers alone do not
+establish a runtime feature; optional scope is not a restoration commitment.
 
 ## Ordering and ownership
 
-The active work is **R1: resource-scoped persistence and cached
-conversation reads**, not a large framework build-out. R2 remains blocked until
-R1 acceptance and the quality gates are complete.
-
-The bounded read-only implementation passes the full 106-test quality gate;
-see [R1 verification](r1-verification.md). R1 is not closed: complete retention
-for active/recent histories, inactive-conversation eviction, and remaining
-acceptance/performance evidence are still open. Code presence alone does not
-check off an acceptance criterion.
-
-The former `replaceInbox` deleted all account facts and was valid only for the
-one-resource baseline. R1 replaces it with atomic resource-scoped writes,
-transitive reference-aware retention, and a tested v1 schema migration. Do not
-reintroduce account-wide replacement as a convenience for any single resource.
+Resource writes are atomic and reference-aware. Never replace all account facts
+as a convenience for refreshing one resource.
 
 Keep one canonical worker. The worker owns RPC, identity, persistence,
 single-flight, resource generations, and canonical facts. Solid projects worker
@@ -93,24 +45,26 @@ massive empty module tree.
       31 mounted rows.
 - [x] **R0.4 — Runtime checks.** The clean-restart runtime has focused tests,
       type/lint/build checks, and worker-owned identity/single-flight/stale-generation
-      behavior. Historical test-count labels are audit snapshots, not timeless
-      guarantees.
+      behavior.
 
-### Outstanding real-browser evidence
+### Accepted real-browser stage
 
-- [ ] **R0.5 — Installed extension path.** Record browser action launch,
+The user confirmed this stage works and manual testing passed; R0/R1 are complete.
+The [verification record](r1-verification.md) separates user acceptance from
+agent measurements and preserves the limits of the recorded evidence.
+
+- [x] **R0.5 — Installed extension path.** Record browser action launch,
       provider selection, account switch, and worker termination/restart in an
       unpacked build.
-- [ ] **R0.6 — Cache states.** Record fixture/bundle identity and missing, warm,
+- [x] **R0.6 — Cache states.** Record fixture/bundle identity and missing, warm,
       and retained-cold navigation input metrics. Separate mocked test evidence from
       live-account evidence.
-- [x] **R0.7 — Live-account gate recorded.** No live-account or installed-extension
-      path was verified in the September 13 session; see
-      [R1 verification](r1-verification.md). If an account is unavailable, record the gate
-      rather than blocking unrelated implementation or implying live verification.
+- [x] **R0.7 — Evidence boundaries.** Keep installed-extension/live-account evidence
+      separate from fixtures and user acceptance; record unavailable scenarios
+      rather than implying live verification. See [R1 verification](r1-verification.md).
 
-The timing and size budgets in the quality section are targets until measured;
-R0 does not claim them.
+Measured warm/retained-cold timings and bundle sizes are recorded separately;
+user acceptance does not invent missing-history metrics or additional measurements.
 
 ## R1 — Resource-scoped persistence and cached conversation reads
 
@@ -120,21 +74,18 @@ R0 does not claim them.
 | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [x] **R1.1 — Migrate v1 storage.**            | `lib/engine/db.ts`: migrate existing first-page data into explicit `inbox:primary` ownership without changing account identity or `commitRevision`.                                                              | A v1 database opens with the same authorized inbox; migration is atomic and repeatable.                                                                                                                     |
 | [x] **R1.2 — Resource-scoped writes.**        | Engine DB: generalized explicit keys (`inbox:primary`, page/cursor ownership, `history:<thread>`), resource-to-fact references, and reference-aware deletion. Never hold network work inside an IDB transaction. | Refreshing one resource neither deletes nor reorders facts still referenced by another; writes/deletions remain partition-isolated, and any explicit whole-partition clear is defined only when introduced. |
-| [ ] **R1.3 — Resource state.**                | Worker engine: per resource expose availability, freshness, sync state, cursor, exhaustion, last sync time, and typed error.                                                                                     | Missing, stale, refreshing, exhausted, and failed resources render distinctly without inventing cached success.                                                                                             |
-| [ ] **R1.4 — Scoped single-flight.**          | Worker: one read flight per account/resource/cursor, bounded client interests, and session generation as routes subscribe/unsubscribe.                                                                           | Two windows share a request; stale generations cannot commit; losing all interests ends eligible detail work.                                                                                               |
-| [ ] **R1.5 — Coherent snapshots.**            | Worker snapshot projector: retain account/worker epoch, client sequence, and global revision coherently across multiple resources.                                                                               | Gaps, duplicate/irrelevant commits, account changes, and snapshot races converge without cross-account state.                                                                                               |
+| [x] **R1.3 — Resource state.**                | Worker engine: per resource expose availability, freshness, sync state, cursor, exhaustion, last sync time, and typed error.                                                                                     | Missing, stale, refreshing, exhausted, and failed resources render distinctly without inventing cached success.                                                                                             |
+| [x] **R1.4 — Scoped single-flight.**          | Worker: one read flight per account/resource/cursor, bounded client interests, and session generation as routes subscribe/unsubscribe.                                                                           | Two windows share a request; stale generations cannot commit; losing all interests ends eligible detail work.                                                                                               |
+| [x] **R1.5 — Coherent snapshots.**            | Worker snapshot projector: retain account/worker epoch, client sequence, and global revision coherently across multiple resources.                                                                               | Gaps, duplicate/irrelevant commits, account changes, and snapshot races converge without cross-account state.                                                                                               |
 | [x] **R1.6 — Keep full snapshots initially.** | Worker RPC: continue complete snapshots while payloads are small. Add scoped delta batches only after measurement.                                                                                               | No durable replay log, generic sync framework, or client-side canonical store is introduced speculatively.                                                                                                  |
 
 ### Inbox pagination
 
-Historical evidence: retired sidebar pagination and preload behavior (`h7rl`) and
-the `d001f89` tests. It must be rebuilt on resource ownership, not ported.
-
 | Checklist                             | Lowest owner / implementation                                                                                           | Focused acceptance                                                                                                   |
 | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| [ ] **R1.7 — Page resources.**        | Provider/parser preserve each exact opaque cursor; engine merges ordered thread IDs while retaining page ownership.     | Loading page 2 keeps page 1 and server pin facts; refresh does not erase history. Durable pin ordering begins in R2. |
-| [ ] **R1.8 — Progress gates.**        | Engine cursor state detects duplicate cursors and successful responses that add no progress.                            | Duplicate/no-progress becomes a visible retryable resource failure, never an uncontrolled request loop.              |
-| [ ] **R1.9 — Explicit continuation.** | Solid sends a load-more intent for the resource; the worker selects its current opaque cursor and provides retry state. | Previous pages stay usable while the next page fails or retries; UI never owns cursor selection.                     |
+| [x] **R1.7 — Page resources.**        | Provider/parser preserve each exact opaque cursor; engine merges ordered thread IDs while retaining page ownership.     | Loading page 2 keeps page 1 and server pin facts; refresh does not erase history. Durable pin ordering begins in R2. |
+| [x] **R1.8 — Progress gates.**        | Engine cursor state detects duplicate cursors and successful responses that add no progress.                            | Duplicate/no-progress becomes a visible retryable resource failure, never an uncontrolled request loop.              |
+| [x] **R1.9 — Explicit continuation.** | Solid sends a load-more intent for the resource; the worker selects its current opaque cursor and provides retry state. | Previous pages stay usable while the next page fails or retries; UI never owns cursor selection.                     |
 
 ### Selection, routes, and layout
 
@@ -147,34 +98,23 @@ the `d001f89` tests. It must be rebuilt on resource ownership, not ported.
 
 ### Bounded history and scrolling
 
-The first R1 implementation retains at most 400 messages and 20 page segments per
-conversation, 20 conversations per account, and 20 inbox segments. Its local
-`retentionLimited` state is distinct from provider exhaustion, but the
-per-conversation ceiling is transitional—not the intended cache policy.
-
-`icr-itlg` replaces it with the simpler rule: retain all successfully loaded
-pages for active and recent conversations; under account-level storage pressure,
-evict whole least-recently-used inactive histories first. Do not build moving
-per-conversation ranges or evict active/recent history merely to bound runtime
-memory. Solid snapshots and worker working sets remain interest-bounded, and the
-DOM still mounts at most 80 history rows.
-
-Historical evidence: `7ycg`, `zmst`, `os6s`, `b6uv`, `jouw`, and `5uvl` plus
-the retired history/store tests. The old unbounded/200-message buffer design is
-superseded.
+IndexedDB v4 retains every successfully loaded page independently of runtime
+bounds. Under soft account storage pressure, evict whole least-recently-used
+inactive histories, protecting interested histories and two recent inactive
+histories. Inbox previews retain independent references. Client windows are at
+most 400 IDs; Solid mounts at most 80 history rows. An unmatched head refresh
+preserves one previous proven contiguous coverage and its frontier. Retained
+archives alone never establish cursor coverage; showing latest is explicit.
 
 | Checklist                            | Lowest owner / implementation                                                                                                                           | Focused acceptance                                                                                                                            |
 | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| [ ] **R1.14 — History resource.**    | Engine/provider/parser: `history:<thread>` starts at newest and persists exact older cursors and normalized facts.                                      | Initial history is bounded and survives inbox refresh/account-safe restart.                                                                   |
+| [x] **R1.14 — History resource.**    | Engine/provider/parser: `history:<thread>` starts at newest and persists exact older cursors and normalized facts.                                      | Initial history is bounded and survives inbox refresh/account-safe restart.                                                                   |
 | [x] **R1.15 — Local-first ranges.**  | Solid history projection asks for newer/older logical IDs already cached before network. Use a 40-message slice and mount no more than 80 message rows. | Scrolling within cached coverage performs no request and never expands the mounted window without bound.                                      |
-| [ ] **R1.16 — Logical restoration.** | Solid stores visited logical message ID plus offset, not raw scroll height.                                                                             | Return to a conversation restores the same content position after measurement changes.                                                        |
+| [x] **R1.16 — Logical restoration.** | Solid stores visited logical message ID plus offset, not raw scroll height.                                                                             | Return to a conversation restores the same content position after measurement changes.                                                        |
 | [x] **R1.17 — Stable prepend.**      | History viewport uses measurements/`ResizeObserver` to compensate prepends.                                                                             | Older-page insertion shifts the visual anchor by less than the provisional 1 px budget.                                                       |
-| [ ] **R1.18 — Controlled fill.**     | Newer traversal is local-only. The older sentinel may fill a short viewport one page at a time through explicit progress/exhaustion gates.              | Exhaustion stops older reads; an empty/short page cannot trigger uncontrolled draining, and no nonexistent newer network endpoint is implied. |
+| [x] **R1.18 — Controlled fill.**     | Newer traversal is local-only. The older sentinel may fill a short viewport one page at a time through explicit progress/exhaustion gates.              | Exhaustion stops older reads; an empty/short page cannot trigger uncontrolled draining, and no nonexistent newer network endpoint is implied. |
 
 ### Message projection
-
-Historical evidence: retired rendering/replies work (`vlgo`, `3br2`, `61iz`,
-`4gws`) and surviving friendly parsing/date code (`a0ow`, `2on6`).
 
 - [x] **R1.19 — Core content.** Project text, image, reel, post, inline/activity,
       unsupported, and reply-preview rows from normalized domain facts.
@@ -198,10 +138,6 @@ sender grouping remain correct across a prepend boundary.
 ## R2 — Durable core messaging
 
 ### Outbox and optimistic projection
-
-Historical evidence: retired mutation foundation (`9qjx`), send/reply (`4an3`),
-pin (`gyo4`), and hardening (`gi4a`). These behaviors must use the new engine,
-not archived mutation stores.
 
 | Checklist                                     | Lowest owner / implementation                                                                                                                                                                                                                                                                       | Focused acceptance                                                                                                                                         |
 | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -240,8 +176,8 @@ window.
       and prevent a newly arrived message from being rolled back to read.
 - [ ] **R2.11 — Interest-driven polling fallback.** The worker alone polls known
       inbox/detail queries for visible interested clients, stops with no interests,
-      and reconciles facts plus overlays without root reset. Historical 5 s active /
-      60 s backed-off timing is a benchmark to remeasure, not a universal claim.
+      and reconciles facts plus overlays without root reset. Choose and measure
+      active/backed-off timing.
       Normal inbox and selected-thread freshness becomes automatic: refresh buttons
       are no longer the primary synchronization UX and remain only as an explicit
       repair/retry affordance when automatic synchronization is delayed or fails.
@@ -257,11 +193,6 @@ automatically, while manual refresh remains available for recovery.
 
 ### Reactions and editing
 
-Historical evidence resolves an old contradiction: reaction removal was excluded
-from the August 3 `9qjx` scope, but later UI/tests and the current
-`setReaction(remove)` protocol evidence show it shipped. Restore the later
-behavior.
-
 - [ ] **R3.1 — Reaction rail.** Add/change/remove the viewer's reaction with six
       quick choices (default plus five) and accessible state.
 - [ ] **R3.2 — Full picker.** Provide categorized, searchable keyboard navigation
@@ -271,8 +202,8 @@ behavior.
 - [ ] **R3.4 — Timed edit.** Edit outgoing text within an inclusive 15-minute
       window, matching IDs and timestamp. Preserve draft/reply on cancel.
 - [ ] **R3.5 — Edit reconciliation.** Retry with immutable IDs and retain receipt
-      overlay until echo, using an explicit bounded policy (historically three merges
-      or two minutes), never a silent eternal overlay.
+      overlay until echo, using an explicit bounded policy (starting proposal:
+      three merges or two minutes), never a silent eternal overlay.
 
 ### Forwarding
 
@@ -288,10 +219,7 @@ behavior.
 
 ### Reply navigation
 
-Historical reply-jump/prefetch beans were scrapped with their Svelte/TanStack
-200-buffer design, but later Teact tests shipped bounded jumps, a return stack,
-and prefetch. Restore the behavior without restoring that design or assuming an
-around-message endpoint.
+Use opaque older cursors; do not assume an around-message endpoint.
 
 - [ ] **R3.10 — Local-first jump.** Search mounted/cached history first, then
       serially load older opaque cursors through the shared flight until found,
@@ -346,13 +274,11 @@ fetch; focus restoration and long-press produce no click-through.
 - [ ] **R4.4 — Lazy route code and read scheduling.** Load the route chunk on
       intent. The starting budget is 2 concurrent media reads, 2 likely-chat
       warmups, 1 adjacent older-history page, and 4 queued reply targets processed
-      serially at one page each. Historical delayed two-chat warmups (100/200 ms) are
-      only a policy to reuse if measurement supports it. Historical 8 means
-      speculative media starts per store lifetime, not concurrent work; remeasure a
-      worker-lifetime/interest budget, and never limit visible or explicit intent by
-      that speculative-start budget. Pull chat/history warmups into the R1/R2 read
-      scheduler when relevant rather than waiting for the media phase.
-- [ ] **R4.5 — Stable previews.** Reserve actual-aspect geometry up to the historic
+      serially at one page each. Measure a worker-lifetime/interest budget for
+      speculative starts separately from concurrency; never limit visible or explicit
+      intent by that budget. Pull chat/history warmups into the R1/R2 read scheduler
+      when relevant rather than waiting for the media phase.
+- [ ] **R4.5 — Stable previews.** Reserve actual-aspect geometry up to a
       300×300 preview; inline previews never autoplay. Retain thumbnails until playable content is
       ready rather than flashing blank.
 - [ ] **R4.6 — Safe avatars.** Reintroduce fetch/proxy support only when needed,
@@ -364,10 +290,6 @@ fetch; focus restoration and long-press produce no click-through.
       media, external reaction, and time-on-hover behavior.
 
 ### Modal and custom player
-
-Old custom-player/mute beans remained todo even though the behavior later
-shipped. Restoration follows implementation/test evidence, while new gestures
-remain R5 proposals.
 
 - [ ] **R4.9 — Accessible modal.** Trap/restore focus, inert the background, lock
       scroll, close outside/on Escape, and use aspect-aware desktop presentation plus
@@ -384,7 +306,7 @@ remain R5 proposals.
       hold with cleanup; support comma/period one-frame stepping (1/30 fallback) and
       arrows without leaking into global shortcuts.
 - [ ] **R4.14 — Controls visibility.** Keep controls visible with focus; otherwise
-      treat the historical initial 10 s idle / 1.5 s pointer-leave policy as a
+      treat an initial 10 s idle / 1.5 s pointer-leave policy as a
       starting point, not a measured SLA.
 - [ ] **R4.15 — State authority.** Playback position/paused state is per window.
       Global volume/mute uses one `storage.local` service and only adds permission
@@ -403,8 +325,7 @@ remain R5 proposals.
 - [ ] **R4.19 — Lazy comments.** Start only after modal open/media ready. Preserve
       exact top-level and child cursors and explicit server pagination.
 - [ ] **R4.20 — Comment budget.** Choose and test a mounted-comment budget before
-      shipping; historical evidence is not strong enough to claim the history
-      80-row limit for comments.
+      shipping; do not assume the history 80-row limit applies to comments.
 - [ ] **R4.21 — Like/save/comment reactions.** Route media like/save and comment
       like/unlike through the durable outbox with strict receipt identity.
 - [ ] **R4.22 — Create/reply comments.** Enforce the 2200-character limit and
@@ -495,9 +416,8 @@ because parsers/types exist.
 
 - [ ] Run `npm test`, `npm run check`, `npm run lint`, `npm run build`,
       `git diff --check`, and the repository shared `ast-grep` scan.
-- [ ] Split tests by feature/owner. Restore key behavioral assertions via
-      `git show`, rewritten for current contracts; do not restore the retired Teact
-      harness or one giant suite.
+- [ ] Split tests by feature/owner and cover behavioral requirements through
+      current contracts; do not restore a retired harness or one giant suite.
 - [ ] Cover offline unknown-identity recovery, account changes, epoch/sequence
       gaps, duplicate/irrelevant commits, and snapshot races as multi-resource state
       is introduced.
@@ -522,71 +442,3 @@ because parsers/types exist.
       the budget before a large restored scope rather than applying 15 KiB to all
       restoration. Never claim a performance win from comparing against a retired
       bundle that contained more features.
-
-## First implementation slice
-
-The first pull request should deliver one vertical path, not scaffolding:
-
-1. Migrate a v1 database safely to explicit resource ownership.
-2. Upsert/read resources without cross-resource deletion.
-3. Preserve the current first-page inbox behavior and tests.
-4. Add inbox next-page persistence plus cached history subscription/selection
-   with one bounded initial newest-history window.
-5. Add a regression proving inbox refresh does not erase cached history.
-6. Add no mutation before R2 and no parallel legacy authority.
-
-Acceptance: reopen a migrated database, authorize the same account, show the
-retained first inbox page, fetch/store another inbox page and one conversation,
-refresh the first page, and still read the other page and conversation. Account
-switch and stale-generation tests must remain authoritative.
-
-## Bean inventory audit (all 37)
-
-“Disposition” maps each historical record to exactly one primary checklist area;
-overlapping work is intentionally merged rather than duplicated. Stored statuses
-are copied without modification.
-
-| Bean                                                                                            | Stored status | New disposition / primary task                                                                   |
-| ----------------------------------------------------------------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------ |
-| [`icr-7ycg`](../.beans/archive/icr-7ycg--chat-history-ux-lazy-preloading-and-bottom-navigat.md) | completed     | Restore bounded history navigation in R1.15–R1.18.                                               |
-| [`icr-zmst`](../.beans/archive/icr-zmst--chat-history-ux-message-cache-and-stable-state.md)     | completed     | Superseded by resource cache and logical restoration, R1.14–R1.16.                               |
-| [`icr-os6s`](../.beans/archive/icr-os6s--chat-history-ux-scroll-preservation-and-non-resett.md) | completed     | Restore stable prepend/non-reset behavior, R1.16–R1.18.                                          |
-| [`icr-9qjx`](../.beans/icr-9qjx--dm-mutations-foundation-refactor.md)                           | completed     | Rebuild durable mutation foundation in R2.1–R2.4; archived send/reaction/hardening overlap here. |
-| [`icr-3br2`](../.beans/archive/icr-3br2--render-message-replies.md)                             | completed     | Restore reply previews in R1.19 and jumps in R3.10–R3.14.                                        |
-| [`icr-b6uv`](../.beans/archive/icr-b6uv--teact-message-history-and-infinite-scroll.md)          | completed     | Restore behavior via R1.14–R1.18; Teact implementation is rejected.                              |
-| [`icr-61iz`](../.beans/icr-61iz--telegram-style-shared-post-history.md)                         | completed     | Restore clean-room shared-post projection, R1.19 and R4.8.                                       |
-| [`icr-4gws`](../.beans/icr-4gws--make-shared-posts-media-forward-in-history.md)                 | completed     | Restore media-forward cards in R4.8.                                                             |
-| [`icr-c5ud`](../.beans/icr-c5ud--lazy-preload-and-cache-reel-info.md)                           | completed     | Rebuild resource-owned media loading/caching, R4.1–R4.5.                                         |
-| [`icr-iqhf`](../.beans/icr-iqhf--replace-hover-reaction-button-with-reaction-rail-a.md)         | completed     | Restore reaction rail/picker, R3.1–R3.3.                                                         |
-| [`icr-2on6`](../.beans/archive/icr-2on6--investigate-message-dates-becoming-epoch.md)           | completed     | Preserve numeric-string timestamp/date tests in R1.20.                                           |
-| [`icr-5uvl`](../.beans/archive/icr-5uvl--chat-history-ux-manual-qa-and-performance-verifica.md) | completed     | Re-run relevant browser and budget evidence under the quality gate.                              |
-| [`icr-rvb8`](../.beans/icr-rvb8--add-focused-message-enter-and-space-shortcuts.md)              | completed     | Restore scoped physical shortcuts, R3.17–R3.18.                                                  |
-| [`icr-h7rl`](../.beans/archive/icr-h7rl--add-infinite-scroll-with-preloading-to-chat-sideba.md) | completed     | Restore cursor-safe inbox pagination, R1.7–R1.9.                                                 |
-| [`icr-lb3r`](../.beans/icr-lb3r--make-chat-sidebar-horizontally-resizable.md)                   | completed     | Restore bounded desktop resize, R1.12; persistence waits for R5.10.                              |
-| [`icr-vlgo`](../.beans/archive/icr-vlgo--improve-chat-message-rendering-ux.md)                  | completed     | Restore message projection/grouping in R1.19–R1.21.                                              |
-| [`icr-llfi`](../.beans/archive/icr-llfi--record-browser-exploration-baseline.md)                | completed     | Historical evidence only; repeat current installed-browser evidence in R0.5–R0.7.                |
-| [`icr-gyo4`](../.beans/icr-gyo4--add-a-pinunpin-action-to-conversation-rows.md)                 | done          | Restore authoritative durable pins, R2.4 and R2.9.                                               |
-| [`icr-z4vy`](../.beans/icr-z4vy--make-all-ui-motion-optional-and-animation-safe.md)             | todo          | Unfinished motion preference and lifecycle, R5.1–R5.4.                                           |
-| [`icr-a0ow`](../.beans/icr-a0ow--use-friendly-inbox-and-unsupported-message-summari.md)         | todo          | Surviving parser/date work is evidence; complete UI audit via R1.20–R1.21 and R5.11.             |
-| [`icr-0tpu`](../.beans/icr-0tpu--improve-reel-player-ux.md)                                     | todo          | Restore evidenced player UX in R4.9–R4.18.                                                       |
-| [`icr-yvm4`](../.beans/icr-yvm4--make-unavailable-shares-an-intentional-card-state.md)          | todo          | Finish intentional unavailable state, R1.21 and R4.7.                                            |
-| [`icr-tniw`](../.beans/icr-tniw--add-scroll-controlled-reel-volume-and-speed.md)                | todo          | Optional gated wheel interaction, R5.5; not silent restoration.                                  |
-| [`icr-1xh8`](../.beans/icr-1xh8--build-a-custom-reel-player.md)                                 | todo          | Later implementation evidence overrides old todo for restoration, R4.10–R4.16.                   |
-| [`icr-mfim`](../.beans/icr-mfim--remember-reel-mute-preference.md)                              | todo          | Later implementation evidence overrides old todo; one preference authority, R4.12 and R4.15.     |
-| [`icr-i4mm`](../.beans/icr-i4mm--detect-stale-instagram-graphql-doc-ids-from-page-r.md)         | todo          | Unfinished passive diagnostics only, R5.6–R5.7.                                                  |
-| [`icr-qq3b`](../.beans/icr-qq3b--synchronize-incoming-instagram-dm-updates.md)                  | in-progress   | Polling existed, but passive feed/two-account live QA remains open, R2.11–R2.12 and R5.8.        |
-| [`icr-kphj`](../.beans/archive/icr-kphj--lazy-older-message-buffer-above-viewport.md)           | scrapped      | Old buffer superseded by bounded 40/80 local-first window, R1.15–R1.18.                          |
-| [`icr-5say`](../.beans/archive/icr-5say--render-and-leave-reactions.md)                         | scrapped      | Behavior merged into durable reaction work, R3.1–R3.3; no archived adapter.                      |
-| [`icr-pdaz`](../.beans/archive/icr-pdaz--scrolltomessage-api-for-reply-navigation.md)           | scrapped      | Old API replaced by bounded logical jump, R3.10–R3.14.                                           |
-| [`icr-4an3`](../.beans/archive/icr-4an3--send-messages-and-replies.md)                          | scrapped      | Behavior merged into durable outbox/composer, R2.1–R2.8.                                         |
-| [`icr-03bb`](../.beans/archive/icr-03bb--virtualized-chat-history-foundation.md)                | scrapped      | Old virtualizer replaced by bounded history contract, R1.15–R1.18.                               |
-| [`icr-jouw`](../.beans/archive/icr-jouw--chat-history-scroll-qa-and-performance-hardening.md)   | scrapped      | Assertions inform R1.16–R1.18 and the quality gate; no retired suite port.                       |
-| [`icr-gi4a`](../.beans/archive/icr-gi4a--refresh-and-mutation-ux-hardening.md)                  | scrapped      | Behavior merged into R2 durable receipts and R3.20 feedback.                                     |
-| [`icr-5npn`](../.beans/archive/icr-5npn--reply-target-prefetch-and-ux-integration.md)           | scrapped      | Later bounded prefetch evidence restored in R3.10–R3.14, not the old 200 buffer.                 |
-| [`icr-gbx1`](../.beans/archive/icr-gbx1--add-dark-theme-and-settings-page-to-appsvelte.md)      | scrapped      | Split: restore dark theme at R1.13; generic settings page remains optional R6.6.                 |
-| [`icr-w5fx`](../.beans/archive/icr-w5fx--make-chats-sidebar-foldable-and-resizable.md)          | scrapped      | Resize is subsumed by `lb3r`/R1.12; foldability remains optional R6.6.                           |
-
-Inventory total: **37** — completed 17, done 1, todo 8, in-progress 1,
-scrapped 10. The implementation priority is deliberately not “finish todo
-beans”: much completed historical functionality is absent from the current Solid
-runtime and must first be restored on safe persistence and worker contracts.

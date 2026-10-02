@@ -1,8 +1,7 @@
 # Unicode License v3
 
-The generated emoji catalog in
-[`entrypoints/ui/emoji-catalog.ts`](../entrypoints/ui/emoji-catalog.ts) is derived
-from Unicode Emoji 17.0 `emoji-test.txt` (2025-08-04), pinned at
+The retained [`emoji generator`](../scripts/generate-emoji-catalog.mjs) targets
+Unicode Emoji 17.0 `emoji-test.txt` (2025-08-04), pinned at
 <https://www.unicode.org/Public/17.0.0/emoji/emoji-test.txt> (SHA-256
 `1d8a944f88d7952f7ef7c5167fef3c67995bcae24543949710231b03a201acda`).
 It can be regenerated deterministically after downloading that file with:

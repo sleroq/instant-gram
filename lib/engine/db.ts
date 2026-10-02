@@ -105,6 +105,7 @@ function validResource(
         value.failedOperation !== 'continuation'
     )
         return false;
+
     if (!isJsonObject(value.refs)) return false;
     return (
         isStringArray(value.refs.threadIds) &&
@@ -189,6 +190,7 @@ function validMessage(
         !isString(value.kind)
     )
         return false;
+
     switch (value.kind) {
         case 'text':
             return isString(value.text) && validSentMessageFields(value);
@@ -392,6 +394,7 @@ async function migrateV1(
                 messagesRequest,
                 resourcesRequest,
             ]);
+
         const users = legacyRows(rawUsers);
         const threads = legacyRows(rawThreads);
         const messages = legacyRows(rawMessages);
@@ -431,6 +434,7 @@ async function migrateV1(
             facts.set(row.id, row.value);
             messagesByAccount.set(row.accountId, facts);
         }
+
         for (const row of resources) {
             if (!validAccountId(row.accountId))
                 throw new Error('Invalid v1 resource account');
@@ -496,6 +500,7 @@ function openDatabase(factory: IDBFactory): Promise<IDBDatabase> {
                 reject(new InboxError('storage'));
                 return;
             }
+
             try {
                 let resourcesStore: IDBObjectStore;
                 if (event.oldVersion < 1) {
@@ -513,16 +518,26 @@ function openDatabase(factory: IDBFactory): Promise<IDBDatabase> {
                 } else {
                     resourcesStore = transaction.objectStore('resources');
                 }
+
                 if (event.oldVersion < 4) {
                     database.createObjectStore('historyPrevious', {
                         keyPath: ['accountId', 'threadId'],
                     });
-                    const previous = database.createObjectStore('historyPreviousOrder', {
-                        keyPath: ['accountId', 'threadId', 'messageId'],
-                    });
-                    previous.createIndex('rank', ['accountId', 'threadId', 'generation', 'rank']);
+                    const previous = database.createObjectStore(
+                        'historyPreviousOrder',
+                        {
+                            keyPath: ['accountId', 'threadId', 'messageId'],
+                        },
+                    );
+                    previous.createIndex('rank', [
+                        'accountId',
+                        'threadId',
+                        'generation',
+                        'rank',
+                    ]);
                     previous.createIndex('thread', ['accountId', 'threadId']);
                 }
+
                 if (event.oldVersion < 3) {
                     database.createObjectStore('refs', {
                         keyPath: ['accountId', 'kind', 'id'],
@@ -575,6 +590,7 @@ function openDatabase(factory: IDBFactory): Promise<IDBDatabase> {
                 abortUpgrade(transaction);
             }
         };
+
         request.onsuccess = () => resolve(request.result);
         request.onerror = () => reject(new InboxError('storage'));
     });

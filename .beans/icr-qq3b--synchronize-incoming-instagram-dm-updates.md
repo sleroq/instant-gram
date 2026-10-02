@@ -85,8 +85,6 @@ Consumed poll timers and visibility resumes that collide with initial inbox or p
 
 The retained `MessagePane` now acknowledges incoming-follow versions by thread ID and version, baselines each destination thread during its selection layout transition without scrolling, and ignores stale follow measurements for unselected threads. A production-App browser regression preserves thread B's row anchor and non-bottom geometry after thread A follows an incoming message, then proves a fresh bottom measurement lets B follow its next incoming message. The regression was also run against the former scalar acknowledgement and failed at the restored-anchor DOM assertion as intended. Focused browser/store tests, `npm run check`, `npm run build`, and `git diff --check` pass. Full `npm test` passes 162/163; only the known unrelated extreme-reel-ratio browser assertion at `history.browser.test.ts:684` fails. The bean remains in progress, and authenticated two-account validation remains unchecked.
 
-
-
 ## Solid restoration reset (2026-09-13)
 
 The polling implementation described above belonged to the retired Teact UI and is not present in production Solid. This bean is no longer in progress. R2.11 under `icr-uizd` owns worker-only interest-driven polling restoration. This bean now tracks only the evidence-gated R5.8 Iris/MQTT investigation under `icr-kj7d`: require fresh authenticated capture and two-account validation, observe Instagram’s own client, do not build a raw MQTT client, and do not create a second synchronization authority.

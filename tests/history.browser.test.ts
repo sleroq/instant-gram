@@ -136,6 +136,7 @@ async function openHistory(
                 },
             },
         };
+
         const inboxIds = Array.from(
             { length: 100 },
             (_, index) => `thread-${index}`,
@@ -174,6 +175,7 @@ async function openHistory(
             synchronization: 'idle',
             viewerId: 'viewer',
         };
+
         let boundedStart = 1000;
         if (options.bounded) {
             for (let index = 0; index < 1400; index++) {
@@ -193,6 +195,7 @@ async function openHistory(
             projection.histories['thread-0'].cachedOlder = true;
             projection.histories['thread-0'].cachedNewer = false;
         }
+
         const authorized = structuredClone(projection);
         if (options.checking) {
             projection.accountId = null;
@@ -200,6 +203,7 @@ async function openHistory(
             projection.inbox.orderedIds = [];
             projection.histories = {};
         }
+
         let active: TestActivePort | undefined;
         let sequence = 1;
         window.historyTest = {
@@ -229,6 +233,7 @@ async function openHistory(
                         };
                         active = connection;
                         let firstSnapshot = true;
+
                         return {
                             onMessage: {
                                 addListener: (
@@ -282,6 +287,7 @@ async function openHistory(
                                         ),
                                     );
                                 }
+
                                 if (
                                     command.kind === 'subscribe' &&
                                     (!command.threadId ||
@@ -317,6 +323,7 @@ async function openHistory(
             },
         });
     }, options);
+
     await page.goto(
         `${new URL('ui.html', baseUrl).href}${options.checking ? '#/thread/thread-0' : ''}`,
     );
@@ -606,6 +613,7 @@ test('prepending cached history keeps the logical first visible message anchored
         .locator('[data-message-id="message-80"]')
         .boundingBox();
     assert.ok(before);
+
     await page.evaluate(() => {
         const next = structuredClone(window.historyTest.current);
         const oldIds = next.histories['thread-0'].orderedIds;
@@ -626,6 +634,7 @@ test('prepending cached history keeps the logical first visible message anchored
         }
         window.historyTest.send(next, 2);
     });
+
     await page.waitForTimeout(30);
     const after = await page
         .locator('[data-message-id="message-80"]')
@@ -649,6 +658,7 @@ test(
         await page
             .getByRole('button', { name: 'Cached conversation' })
             .waitFor();
+
         await page.evaluate(() => {
             const inbox = document.querySelector<HTMLElement>(
                 '[aria-label="Primary inbox"]',
@@ -668,6 +678,7 @@ test(
         await page.waitForFunction(
             () => window.location.hash === '#/thread/thread-0',
         );
+
         await page.evaluate(() => {
             document
                 .querySelector<HTMLButtonElement>('.solid-conversation button')
@@ -689,6 +700,7 @@ test(
         await page.waitForFunction(
             () => window.location.hash === '#/thread/thread-0',
         );
+
         await page.evaluate(() => window.history.back());
         await page.waitForFunction(() => window.location.hash === '#/');
         await page.evaluate(() => window.history.forward());
@@ -724,6 +736,7 @@ test('message variants remain accessible and do not create provider work', async
             author: 'Peer',
             caption: 'Shared reel',
         };
+
         next.entities.messagesById['message-82'] = {
             ...base,
             id: 'message-82',
@@ -742,6 +755,7 @@ test('message variants remain accessible and do not create provider work', async
                 preview: 'Not available',
             },
         };
+
         next.entities.messagesById['message-84'] = {
             ...base,
             id: 'message-84',
@@ -751,6 +765,7 @@ test('message variants remain accessible and do not create provider work', async
         };
         window.historyTest.send(next, 2);
     });
+
     await page.getByText('Shared a reel').waitFor();
     await page.getByText('Shared post').waitFor();
     await page.getByText('Unavailable attachment').waitFor();
@@ -900,6 +915,7 @@ test('a direct compact route has a safe in-app Back destination', async () => {
             },
         });
     });
+
     await page.goto(`${new URL('ui.html', baseUrl).href}#/thread/not-loaded`);
     await page.getByRole('button', { name: 'Back' }).waitFor();
     await page.getByRole('button', { name: 'Back' }).click();
@@ -923,6 +939,7 @@ for (const checkingEpoch of [0, 1])
                 offset: top - row.getBoundingClientRect().top,
             };
         });
+
         await page.evaluate((checkingEpoch) => {
             const authorized = structuredClone(window.historyTest.current);
             authorized.workerEpoch = 'worker-restarted';
@@ -939,7 +956,7 @@ for (const checkingEpoch of [0, 1])
             window.historyTest.current = checking;
             const commandCount = window.historyTest.commands.length;
             window.historyTest.restart();
-            const publish = () => {
+            function publish() {
                 if (
                     !window.historyTest.commands
                         .slice(commandCount)
@@ -949,9 +966,10 @@ for (const checkingEpoch of [0, 1])
                     return;
                 }
                 window.historyTest.send(authorized, 2);
-            };
+            }
             requestAnimationFrame(publish);
         }, checkingEpoch);
+
         await page.waitForFunction(
             (id) =>
                 window.historyTest.commands.some(
@@ -972,6 +990,7 @@ for (const checkingEpoch of [0, 1])
                     requestAnimationFrame(() => resolve()),
                 ),
         );
+
         assert.equal(
             await page.evaluate(() => location.hash),
             '#/thread/thread-0',
@@ -1099,6 +1118,7 @@ test('bounded worker windows traverse exhausted cached history without cursor or
                         ),
                     ),
             );
+
             const afterStart = await page.evaluate(
                 () => window.historyTest.boundedStart,
             );
@@ -1126,6 +1146,7 @@ test('bounded worker windows traverse exhausted cached history without cursor or
                     1,
                 );
             }
+
             assert.ok((await page.locator('[data-message-id]').count()) <= 80);
             assert.equal(
                 await page.evaluate(
@@ -1141,6 +1162,7 @@ test('bounded worker windows traverse exhausted cached history without cursor or
             target,
         );
     }
+
     const commands = await page.evaluate(() =>
         window.historyTest.commands.filter((command) =>
             command.kind.startsWith('load-'),
@@ -1182,6 +1204,7 @@ test('bounded history reselection carries the saved logical anchor to the worker
     await page.getByText('Second conversation message').waitFor();
     await page.locator('[data-thread-id="thread-0"]').click();
     await page.locator(`[data-message-id="${anchor.id}"]`).waitFor();
+
     const command = await page.evaluate(() =>
         window.historyTest.commands.findLast(
             (item) => item.kind === 'subscribe' && item.threadId === 'thread-0',
@@ -1230,6 +1253,7 @@ test('a previous cached range preserves its boundary and only explicitly jumps t
         current.histories['thread-0'].freshness = 'stale';
         window.historyTest.send(current, 2);
     });
+
     const latest = page.getByRole('button', { name: 'Show latest messages' });
     await latest.waitFor();
     const offset = await viewport.evaluate((element, id) => {
@@ -1251,6 +1275,7 @@ test('a previous cached range preserves its boundary and only explicitly jumps t
         ),
         false,
     );
+
     await latest.click();
     assert.deepEqual(
         await page.evaluate(() => window.historyTest.commands.at(-1)),

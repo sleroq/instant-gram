@@ -20,6 +20,7 @@ export async function executeInboxProviderRequest(
     dependencies: ReadDependencies,
 ): Promise<ProviderResponse> {
     let expected: string | undefined;
+
     function verify() {
         try {
             const current = dependencies.account();
@@ -30,6 +31,7 @@ export async function executeInboxProviderRequest(
             throw new InboxError('auth');
         }
     }
+
     try {
         expected = verify();
         if (request.method === 'account') {
@@ -42,8 +44,10 @@ export async function executeInboxProviderRequest(
         }
         if (request.expectedAccountId !== expected)
             throw new InboxError('auth');
+
         await dependencies.prepare();
         verify();
+
         if (request.method === 'history') {
             const value = await dependencies.history(
                 request.threadKey,
@@ -57,6 +61,7 @@ export async function executeInboxProviderRequest(
                 result: { ok: true, value },
             };
         }
+
         const value = await dependencies.inbox(request.cursor);
         verify();
         return {
@@ -91,6 +96,7 @@ export function registerInboxProvider(
 ) {
     let disposed = false;
     let releasePort: (() => void) | undefined;
+
     function connect() {
         if (disposed) return;
         let port: browser.Runtime.Port;
@@ -101,8 +107,10 @@ export function registerInboxProvider(
             dispose();
             return;
         }
+
         let closed = false;
-        const release = () => {
+
+        function release() {
             if (closed) return;
             closed = true;
             port.onMessage.removeListener(receive);
@@ -112,11 +120,13 @@ export function registerInboxProvider(
             } catch {
                 // An invalidated extension context no longer owns a usable Port.
             }
-        };
-        const disconnected = () => {
+        }
+
+        function disconnected() {
             release();
             connect();
-        };
+        }
+
         // SAFETY: the extension-owned provider Port receives its worker's closed ProviderRequest values.
         const receive = ((request: ProviderRequest) => {
             if (disposed || closed || request.kind !== 'request') return;
@@ -136,16 +146,19 @@ export function registerInboxProvider(
                 }
             });
         }) as Parameters<typeof port.onMessage.addListener>[0];
+
         releasePort = release;
         port.onMessage.addListener(receive);
         port.onDisconnect.addListener(disconnected);
     }
+
     function dispose() {
         if (disposed) return;
         disposed = true;
         releasePort?.();
         releasePort = undefined;
     }
+
     connect();
     return dispose;
 }

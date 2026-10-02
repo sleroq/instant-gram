@@ -489,6 +489,7 @@ export function parseThread(value: JsonValue | undefined): Thread | undefined {
         stringProp(thread.thread_igid) ??
         stringProp(thread.id);
     if (!key) return undefined;
+
     const users = (Array.isArray(thread.users) ? thread.users : [])
         .map(parseUser)
         .filter((user): user is User => Boolean(user));
@@ -502,6 +503,7 @@ export function parseThread(value: JsonValue | undefined): Thread | undefined {
         .map((user) => user.username || user.fullName)
         .filter(Boolean)
         .join(', ');
+
     const viewerFbid = stringProp(
         objectProp(thread.viewer)?.interop_messaging_user_fbid,
     );
@@ -524,6 +526,7 @@ export function parseThread(value: JsonValue | undefined): Thread | undefined {
             lastMessage.senderId !== viewerFbid &&
             lastMessage.ts > viewerWatermarkMs,
     );
+
     return {
         key,
         threadFbid:
@@ -923,6 +926,7 @@ export function parseSecondaryGraphqlResponse(
     json: JsonValue | undefined,
 ): InstagramSecondaryGraphqlResult {
     const data = responseData(json);
+
     if (operation === 'IGDEmojiPickerQuery') {
         const nodes = objectProp(data?.emoji_categories)?.nodes;
         const categories = (Array.isArray(nodes) ? nodes : []).flatMap(
@@ -1157,6 +1161,7 @@ function reelItem(
                 (numberProp(b.bandwidth) ?? 0) - (numberProp(a.bandwidth) ?? 0)
             );
         });
+
     const videoUrl = stringProp(versions[0]?.url) ?? stringProp(node.video_url);
     const id = stringProp(node.pk) ?? stringProp(node.id) ?? fallbackId;
     const dimensionPairs = [
@@ -1173,6 +1178,7 @@ function reelItem(
         .find((pair) => pair.width !== undefined && pair.height !== undefined);
     if (!dimensions?.width || !dimensions.height) return undefined;
     const { width, height } = dimensions;
+
     if (videoUrl)
         return {
             id,
@@ -1245,6 +1251,7 @@ export function parseReelInfoResponse(
         throw new Error(
             'Instagram reel REST identity did not match the requested reel',
         );
+
     const canDownload =
         booleanProp(item.is_third_party_downloads_eligible) ?? false;
     const isCarousel =
@@ -1269,6 +1276,7 @@ export function parseReelInfoResponse(
     );
     if (!items.length || items.some((child) => !child))
         throw new Error('Instagram reel carousel contained unavailable media');
+
     const caption = objectProp(item.caption);
     const musicMetadata = objectProp(item.music_metadata);
     const clipsMetadata = objectProp(item.clips_metadata);
@@ -1325,6 +1333,7 @@ export function parseReelInfoResponse(
     const parsedItems = items.filter(
         (child): child is ReelMediaItem => child !== undefined,
     );
+
     return {
         id: mediaId,
         shortcode: payload.shortcode,

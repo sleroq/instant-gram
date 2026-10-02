@@ -32,6 +32,7 @@ export function registerInboxClientPorts(
         port.disconnect();
         return;
     }
+
     let sequence = 0;
     let unsubscribe: (() => void) | undefined;
     let selectedListener: ((projection: InboxProjection) => void) | undefined;
@@ -49,6 +50,7 @@ export function registerInboxClientPorts(
             port.disconnect();
             return;
         }
+
         const command = unknownCommand;
         if (command.kind === 'subscribe') {
             // Acquire the replacement interest first so a route change cannot
@@ -86,6 +88,7 @@ export function registerInboxClientPorts(
         else
             handle(engine.loadNewerHistory(command.threadId, selectedListener));
     }
+
     port.onMessage.addListener(receive);
     port.onDisconnect.addListener(() => {
         closed = true;
@@ -110,6 +113,7 @@ export function prepareInboxClientPort(port: InboxClientPort) {
         port.disconnect();
         return (_engine: InboxEngine) => undefined;
     }
+
     port.onMessage.addListener((message) => {
         if (closed) return;
         if (receive) receive(message);
@@ -119,6 +123,7 @@ export function prepareInboxClientPort(port: InboxClientPort) {
         closed = true;
         buffered.length = 0;
     });
+
     return (engine: InboxEngine) => {
         if (closed) return;
         const adapter: InboxClientPort = {

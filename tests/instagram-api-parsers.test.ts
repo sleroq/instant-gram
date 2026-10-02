@@ -890,6 +890,7 @@ test('composer responses parse operation-specific emoji, sticker, music, avatar,
             categories: [{ id: 'faces', name: 'Faces', items: ['😀'] }],
         },
     );
+
     assert.deepEqual(
         parseSecondaryGraphqlResponse(
             'IGDComposerRichContentStickersV2_cutoutStickersQuery',
@@ -953,6 +954,7 @@ test('composer responses parse operation-specific emoji, sticker, music, avatar,
             ],
         },
     );
+
     assert.deepEqual(
         parseSecondaryGraphqlResponse('IGDComposerRichContentMusicQuery', {
             data: {
@@ -991,6 +993,7 @@ test('composer responses parse operation-specific emoji, sticker, music, avatar,
             hasNextPage: true,
         },
     );
+
     assert.deepEqual(
         parseSecondaryGraphqlResponse(
             'IGDComposerRichContentTray_AvatarAvailableQuery',
@@ -1003,6 +1006,7 @@ test('composer responses parse operation-specific emoji, sticker, music, avatar,
             available: false,
         },
     );
+
     assert.deepEqual(
         parseSecondaryGraphqlResponse(
             'IGDComposerRichContentStickersV2ThreadIGIDQuery',
@@ -1022,6 +1026,7 @@ test('composer responses parse operation-specific emoji, sticker, music, avatar,
             threadFbid: 'sticker-operation-id',
         },
     );
+
     assert.deepEqual(
         parseSecondaryGraphqlResponse(
             'IGDComposerRichContentMusicThreadIGIDQuery',
@@ -1236,6 +1241,7 @@ test('mutation parsers reject malformed successful GraphQL envelopes', () => {
         () => parseSentTextResponse({ data: {} }, '7001'),
         /message ID was not returned/,
     );
+
     assert.throws(
         () =>
             parseReactionMutationResponse({
@@ -1657,6 +1663,7 @@ test('reel comments retain the captured opaque pagination cursor', () => {
             hasNextPage: true,
         },
     );
+
     assert.deepEqual(
         parseReelLikeResponse(
             {
@@ -1724,6 +1731,7 @@ test('comment action responses normalize created replies and opaque child cursor
             },
         },
     );
+
     const reply = {
         pk: '17960232189149842',
         text: '@parent reply',

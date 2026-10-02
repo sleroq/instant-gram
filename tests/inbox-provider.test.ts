@@ -156,6 +156,7 @@ test('content execution preserves the account identity boundary', async () => {
         method: 'inbox',
         expectedAccountId: '1',
     } as const;
+
     for (const account of [
         () => {
             throw new Error('missing');
@@ -183,6 +184,7 @@ test('content execution preserves the account identity boundary', async () => {
         );
         assert.equal(reads, 0);
     }
+
     for (const after of ['2', undefined]) {
         let checks = 0;
         const response = await executeInboxProviderRequest(inboxRequest, {

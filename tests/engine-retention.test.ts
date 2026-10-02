@@ -57,6 +57,7 @@ test('different active threads retain complete window facts across bounded commi
         await engine.dispose();
         await repository.close();
     });
+
     await engine.refresh();
     const projections = new Map<string, InboxProjection>();
     for (const id of ['a', 'b']) {
@@ -68,8 +69,10 @@ test('different active threads retain complete window facts across bounded commi
         }, id);
         await loaded.promise;
     }
+
     await engine.refreshHistory('b');
     await engine.refresh();
+
     for (const id of ['a', 'b']) {
         const value = projections.get(id)!;
         assert.ok(value.histories[id].orderedIds.length > 0);
@@ -107,32 +110,35 @@ test('replacement owners receive one window and root credit without renewing hea
         await engine.dispose();
         await repository.close();
     });
+
     await engine.refresh();
     const owners: ((value: InboxProjection) => void)[] = [];
     const releases: (() => void)[] = [];
     for (let index = 0; index < 20; index++) {
         const loaded = ready();
-        const owner = (value: InboxProjection) => {
+        function owner(value: InboxProjection) {
             if (value.histories[`t-${index}`]?.availability === 'present')
                 loaded.resolve();
-        };
+        }
         owners.push(owner);
         releases.push(engine.subscribe(owner, `t-${index}`));
         await loaded.promise;
     }
+
     const before = accounts;
     let same!: InboxProjection;
-    const sameOwner = (value: InboxProjection) => {
+    function sameOwner(value: InboxProjection) {
         same = value;
-    };
+    }
     const stopSame = engine.subscribe(sameOwner, 't-0', 't-0', owners[0]);
     assert.equal(same.accountId, 'account');
     assert.notEqual(same.histories['t-0']?.error?.kind, 'capacity');
     releases[0]();
+
     let different!: InboxProjection;
-    const differentOwner = (value: InboxProjection) => {
+    function differentOwner(value: InboxProjection) {
         different = value;
-    };
+    }
     const stopDifferent = engine.subscribe(
         differentOwner,
         't-20',
@@ -144,6 +150,7 @@ test('replacement owners receive one window and root credit without renewing hea
     assert.equal(accounts, before);
     await engine.refreshHistory('t-20', differentOwner);
     assert.equal(different.histories['t-20'].availability, 'present');
+
     let rejected!: InboxProjection;
     const stopRejected = engine.subscribe((value) => {
         rejected = value;
@@ -411,27 +418,30 @@ test('changed heads preserve independent previous coverage and use its own older
         await engine.dispose();
         await repository.close();
     });
+
     const loaded = ready();
     let old!: InboxProjection;
-    const oldOwner = (value: InboxProjection) => {
+    function oldOwner(value: InboxProjection) {
         old = value;
         if (value.histories.durable?.availability === 'present')
             loaded.resolve();
-    };
+    }
     engine.subscribe(oldOwner, 'durable', 'row-1');
     await loaded.promise;
+
     changed = true;
     await engine.refreshHistory('durable', oldOwner, 'row-1');
     assert.equal(old.histories.durable.orderedIds[0], 'row-1');
     assert.equal(old.histories.durable.newerCoverageAvailable, true);
     assert.equal(old.histories.durable.freshness, 'stale');
+
     const latestReady = ready();
     let latest!: InboxProjection;
-    const latestOwner = (value: InboxProjection) => {
+    function latestOwner(value: InboxProjection) {
         latest = value;
         if (value.histories.durable?.orderedIds.includes('row-2001'))
             latestReady.resolve();
-    };
+    }
     engine.subscribe(latestOwner, 'durable');
     await latestReady.promise;
     const latestIds = [...latest.histories.durable.orderedIds];
@@ -439,14 +449,17 @@ test('changed heads preserve independent previous coverage and use its own older
         latest.histories.durable.coverageGeneration,
         old.histories.durable.coverageGeneration,
     );
+
     await engine.loadOlderHistory('durable', oldOwner);
     assert.equal(calls.at(-1), 'old-tail');
     assert.equal(old.histories.durable.orderedIds[0], 'row--39');
     assert.deepEqual(latest.histories.durable.orderedIds, latestIds);
+
     for (let step = 0; old.histories.durable.cachedNewer && step < 10; step++)
         await engine.loadNewerHistory('durable', oldOwner);
     assert.equal(old.histories.durable.cachedNewer, false);
     assert.equal(old.histories.durable.newerCoverageAvailable, true);
+
     const beforeLatest = calls.length;
     await engine.loadNewerHistory('durable', oldOwner);
     assert.deepEqual(old.histories.durable.orderedIds, latestIds);

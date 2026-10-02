@@ -18,6 +18,7 @@ Source of truth: `docs/application-architecture.md`. Delivery scope and exact ch
 Do not restore Teact, its UI-owned store, direct component RPC, or parallel cache/mutation authority. Features ship only through account-partitioned IndexedDB resources, worker-owned synchronization/outbox contracts, and bounded Solid projections.
 
 Program exit:
+
 - R0 release evidence is recorded;
 - R1 cached conversations/history and responsive layout ship;
 - R2 durable core messaging ships;
@@ -26,13 +27,11 @@ Program exit:
 - R5 selected cross-cutting backlog and preferences ship or receive explicit product decisions;
 - every slice passes the repository quality gate and updates current architecture documentation.
 
-
-
 ## Delivery beans (2026-09-13)
 
-- `icr-siiy` — R1, critical and next implementation milestone.
-- `icr-xgh3` — R0 evidence, may proceed alongside R1.
-- `icr-uizd` — R2, blocked by R1.
+- `icr-siiy` — R1, completed with user-confirmed manual acceptance.
+- `icr-xgh3` — R0 evidence, completed with user-confirmed manual acceptance.
+- `icr-uizd` — R2, next unblocked implementation milestone (not started).
 - `icr-jce7` — R3, blocked by R2.
 - `icr-iwr9` — R4, blocked by R2 and may proceed alongside R3.
 - `icr-kj7d` — R5, blocked until prerequisite restoration surfaces exist.

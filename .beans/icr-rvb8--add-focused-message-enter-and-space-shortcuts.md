@@ -21,8 +21,6 @@ Implemented focused-message Enter and Space shortcuts.
 
 Verified focused browser/store tests, two consecutive full `npm test` runs at 126/126 on an isolated workspace snapshot (the shared workspace had concurrent build/HMR activity), `npm run check`, `npm run build`, `git diff --check`, and `beans check`.
 
-
-
 ## Solid restoration handoff (2026-09-13)
 
 This completion records retired behavior. Restore it only as part of R3.17–R3.18 under `icr-jce7`, after durable reaction/media capabilities exist, while preserving bounded views and shortcut exclusions.

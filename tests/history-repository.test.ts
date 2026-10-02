@@ -563,6 +563,7 @@ test('covered single-head refresh skips proof maintenance but changed cursor cap
             (await repository.readHistoryInventory('one'))[0]?.segmentCount,
             2,
         );
+
         await repository.commitResources(
             'one',
             page('t', 1200, 502, undefined, 'changed'),
@@ -621,6 +622,7 @@ test('pressure evicts previous ownership, archives and indexes with the whole ro
         await repository.commitResources('one', page('recent-b', 0, 2));
         await repository.touchHistory('one', 'recent-a', 20);
         await repository.touchHistory('one', 'recent-b', 30);
+
         const update = page('active', 0, 2);
         update.retention = {
             maxHistories: 3,
@@ -719,6 +721,7 @@ test('previous proven coverage survives unmatched heads, restart and matching fr
     await repository.commitResources('one', page('t', 400, 800, 'a', 'b'));
     const generation = (await repository.readHistoryWindow('one', 't')).history!
         .coverageGeneration;
+
     await repository.commitResources(
         'one',
         page('t', 2000, 2, undefined, 'new'),
@@ -739,6 +742,7 @@ test('previous proven coverage survives unmatched heads, restart and matching fr
         assert.equal(old.history?.cursor, 'b');
         assert.equal(old.history?.coverageGeneration, generation);
         assert.equal(old.history?.newerCoverageAvailable, true);
+
         await repository.commitResources('one', page('t', 0, 400, 'b'));
         const oldest = await repository.readHistoryWindow('one', 't', {
             anchorId: 't:0',
@@ -757,6 +761,7 @@ test('previous proven coverage survives unmatched heads, restart and matching fr
             'history-archive:t:t:1200',
         ]);
         assert.equal(Object.keys(archive.entities.messagesById).length, 400);
+
         const before = await repository.readHistoryWindow('one', 't', {
             anchorId: 't:0',
             coverageGeneration: generation,

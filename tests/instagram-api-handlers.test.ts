@@ -423,6 +423,7 @@ test('reel action handlers dispatch distinct captured mutations and validate rec
             calls,
         ),
     );
+
     assert.deepEqual(
         await handlers.setReelLiked({
             mediaId: '3953224267254190889',
@@ -430,6 +431,7 @@ test('reel action handlers dispatch distinct captured mutations and validate rec
         }),
         { mediaId: '3953224267254190889', hasLiked: true },
     );
+
     assert.deepEqual(
         await handlers.setReelSaved({
             mediaId: '3953224267254190889',
@@ -447,6 +449,7 @@ test('reel action handlers dispatch distinct captured mutations and validate rec
             input: { mediaId: '3953224267254190889', clientMutationId: '2' },
         },
     ]);
+
     await assert.rejects(
         createInstagramRpcHandlers(
             executor(
@@ -483,6 +486,7 @@ test('conversation pin handler selects the exact mutation and rejects mismatched
             calls,
         ),
     );
+
     assert.deepEqual(
         await handlers.togglePin({
             threadKey: 'route-key',
@@ -507,6 +511,7 @@ test('conversation pin handler selects the exact mutation and rejects mismatched
         ['useIGDPinThreadMutation', 'useIGDUnpinThreadMutation'],
     );
     assert.deepEqual(calls[0]?.input, { threadFbid: '1789001' });
+
     await assert.rejects(
         handlers.togglePin({
             threadKey: 'opaque-route',
@@ -590,12 +595,14 @@ test('pin returns authoritative IDs and cutout send reuses supplied request ID',
             calls,
         ),
     );
+
     assert.deepEqual(
         await handlers.pinMessage({ threadFbid: 'fbid', messageId: 'm1' }),
         {
             pinnedMessageIds: ['m1'],
         },
     );
+
     assert.deepEqual(
         await handlers.sendCutoutSticker({
             threadFbid: 'fbid',
@@ -676,6 +683,7 @@ test('secondary GraphQL is discriminated, closed, and accepts captured empty sea
 test('credentialed handler boundary rejects empty IDs and invalid values before dispatch', async () => {
     const calls: Call[] = [];
     const handlers = createInstagramCatalogHandlers(executor({}, calls));
+
     await assert.rejects(
         handlers.sendText({
             threadFbid: '',
@@ -719,6 +727,7 @@ test('credentialed handler boundary rejects empty IDs and invalid values before 
         }),
         /timestamp/,
     );
+
     await assert.rejects(
         handlers.getInbox({ cursor: 'x'.repeat(4_097) }),
         /cursor is too long/,

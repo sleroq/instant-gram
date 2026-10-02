@@ -1,6 +1,8 @@
-# Instagram DM MVP methods
+# Instagram protocol reference: captured operations
 
-Source captures: `examples/www.instagram.com.har`, `examples/www.instagram.com-the-second.har`, and `examples/www.instagram.com-open-reel-from-chat-and-watch.har`. Values below omit live auth tokens; use the current page's harvested `fb_dtsg`, `lsd`, `jazoest`, `csrftoken`, `device_id_for_iris_subscription`, and viewer FBID. Read methods are HAR-backed except the shortcode-resolution GraphQL query noted below; conversation pin/unpin uses the dated live evidence recorded below. See `instagram-har-useful-requests.md` for copyable request examples.
+**Status: protocol reference, NOT current runtime capabilities.** The production closed provider exposes only the reads defined by [the engine contract](engine-inbox-contract.md). Mutations, polling, media loading, and comments are evidence for future R2–R5 restoration, not implemented UI features.
+
+Tracked reference captures: `examples/www.instagram.com.har`, `examples/www.instagram.com-the-second.har`, and `examples/www.instagram.com-open-reel-from-chat-and-watch.har`. Separately named captures below are local, untracked evidence; only their sanitized descriptions are recorded here. Values omit live auth tokens; replay requires current `fb_dtsg`, `lsd`, `jazoest`, `csrftoken`, `device_id_for_iris_subscription`, and viewer FBID. Read operations below are HAR-backed; conversation pin/unpin uses the dated live evidence recorded below. See `instagram-har-useful-requests.md` for sanitized request examples.
 
 ## Common request shape
 
@@ -8,7 +10,7 @@ Source captures: `examples/www.instagram.com.har`, `examples/www.instagram.com-t
 - Required body fields: `__d=www`, `__a=1`, `__comet_req=7`, `dpr=2`, `fb_api_caller_class=RelayModern`, `fb_api_req_friendly_name`, `server_timestamps=true`, `variables`, `doc_id`, plus current `fb_dtsg`, `lsd`, `jazoest`.
 - Required headers seen in both HARs: `content-type: application/x-www-form-urlencoded`, `x-ig-app-id: 936619743392459`, `x-asbd-id: 359341`, `x-fb-lsd`, `x-fb-friendly-name`, `x-csrftoken`.
 
-## Methods to implement
+## Captured operations
 
 | method             |                                                                              friendly name |                                   doc_id | variables                                                                                                                                                                                                                                                                                                                                                                                            | response path                                                                                                     |
 | ------------------ | -----------------------------------------------------------------------------------------: | ---------------------------------------: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
@@ -47,18 +49,17 @@ Source captures: `examples/www.instagram.com.har`, `examples/www.instagram.com-t
   range on each side, but not continuation requests that reconnect that range to
   the currently loaded contiguous history. These private documents are therefore
   recorded capability evidence, not currently exposed RPC methods.
-- `examples/www.instagram.com-open-reel-from-chat-and-watch.har` lines 3126–3139 capture `GET /api/v1/media/3887864898364318881/info/`; line 3389 returns matching `pk` and Instagram's compound `id` form. Lines 1434–1447 capture the initial comments request for that same numeric media ID with exactly `can_support_threading=true&permalink_enabled=false`. Later captures prove top-level `next_min_id` pagination. `comment-actions.har` additionally proves child-comment pages at `/api/v1/media/<media-id>/comments/<parent-id>/child_comments/`, with `is_chronological=true`, `paging_direction=view_more`, and opaque `next_min_child_cursor` returned unchanged as `min_id`.
-- `comment-actions.har` captures comment creation at `POST /api/v1/web/comments/<media-id>/add/` (`comment_text`, plus `replied_to_comment_id` for replies), the compact returned comment entity, and `PolarisCommentActionsLikeMutation` (`doc_id 27184292767848867`, `{ input:{ comment_id, actor_id, client_mutation_id } }`). It does not capture an unlike persisted query; ICR uses the authenticated web-comment unlike REST route and reconciles only a successful operation receipt.
-- `real-loading.har` and `real-loading-3.har` close the prior media-load gap
+- `examples/www.instagram.com-open-reel-from-chat-and-watch.har` lines 3126–3139 capture `GET /api/v1/media/<media-id>/info/`; line 3389 returns matching `pk` and Instagram's compound `id` form. Lines 1434–1447 capture the initial comments request for that same numeric media ID with exactly `can_support_threading=true&permalink_enabled=false`. Later captures prove top-level `next_min_id` pagination. `comment-actions.har` additionally proves child-comment pages at `/api/v1/media/<media-id>/comments/<parent-id>/child_comments/`, with `is_chronological=true`, `paging_direction=view_more`, and opaque `next_min_child_cursor` returned unchanged as `min_id`.
+- `comment-actions.har` captures comment creation at `POST /api/v1/web/comments/<media-id>/add/` (`comment_text`, plus `replied_to_comment_id` for replies), the compact returned comment entity, and `PolarisCommentActionsLikeMutation` (`doc_id 27184292767848867`, `{ input:{ comment_id, actor_id, client_mutation_id } }`). It does not capture an unlike persisted query or prove an unlike request.
+- Local `real-loading.har` and `real-loading-3.har` provide media-load evidence
   without a private shortcode GraphQL document. A successful reel route used
   shortcode `S`, and its comments used numeric media ID `M`; decoding `S` with
   Instagram's URL-safe base64 alphabet produced exactly `M`. A separate capture
   successfully requested `GET /api/v1/media/M/info/` and returned
   `{ items: [media], status: "ok", ... }` with matching `pk` and `code`.
-  `getReelMedia` therefore prefers a numeric ID already present on the DM XMA,
-  falls back to that proven deterministic decode, and validates both identities
-  in the REST response. The failing, uncaptured
-  `PolarisPostActionLoadPostQueryQuery` route is no longer configured or called.
+  A future media loader can prefer a numeric ID already present on the DM XMA,
+  otherwise use that deterministic decode, and validate both identities in the
+  REST response.
 
 ### Sanitized 2026-08 media-loading evidence
 
@@ -81,21 +82,20 @@ session data; do not commit or quote their headers, tokens, IDs, or CDN URLs.
   returns `data.xdt_api__v1__media__media_id__comments__connection`, while
   `PolarisClipsDesktopCommentsPopoverQuery`
   (`doc_id 26898197033164947`, `{ media_id }`) returns
-  `data.fetch__XDTMediaDict` summary metadata. ICR keeps the smaller captured
-  REST comments request rather than coupling to both.
+  `data.fetch__XDTMediaDict` summary metadata. The smaller captured REST
+  comments request is a separate protocol option.
 - `real-loading-3.har` proves authenticated
   `GET /api/v1/media/<media-id>/info/` with no query parameters and
   `GET /api/v1/media/<media-id>/comments/?can_support_threading=true&permalink_enabled=false`.
   The info response is `items[0]`; comments contain `comments`,
-  `has_more_comments`, and `next_min_id`. The capture had no next page. ICR
-  exposes one lazy comments page because no continuation request was captured.
+  `has_more_comments`, and `next_min_id`. This capture had no next-page request;
+  those response fields alone do not prove continuation.
 - Successful video responses contain three `video_versions` entries (types
   101, 102, and 103); REST video captures under `docs/examples` show the same
-  contract. The parser retains every unique variant, sorted by dimensions then
-  bandwidth. The frontend offers Auto plus explicit variants. The new captures
-  contain a single-image feed post and clips videos; `real-loading-2.har` starts
-  after metadata loading and contains only CDN video transfers, so it does not
-  prove a new carousel request shape. Existing strict carousel parsing remains.
+  contract. These are media descriptors, not evidence of a current player or
+  variant selector. The local captures contain a single-image feed post and
+  clips videos; `real-loading-2.har` starts after metadata loading and contains
+  only CDN video transfers, so it does not prove a carousel request shape.
 
 ## Live private-protocol evidence
 

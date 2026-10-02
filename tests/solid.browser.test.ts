@@ -116,6 +116,7 @@ async function openInbox(): Promise<{ page: Page; errors: string[] }> {
             },
             histories: {},
         };
+
         let active:
             | {
                   messages: Set<(message: SnapshotMessage) => void>;
@@ -149,6 +150,7 @@ async function openInbox(): Promise<{ page: Page; errors: string[] }> {
                 port.disconnects.clear();
             },
         };
+
         Object.assign(globalThis, {
             chrome: {
                 runtime: {
@@ -164,6 +166,7 @@ async function openInbox(): Promise<{ page: Page; errors: string[] }> {
                             disconnected: false,
                         };
                         active = connection;
+
                         return {
                             onMessage: {
                                 addListener: (
@@ -219,11 +222,13 @@ async function openInbox(): Promise<{ page: Page; errors: string[] }> {
             },
         });
     });
+
     const errors: string[] = [];
     page.on('console', (message) => {
         if (message.type() === 'error') errors.push(message.text());
     });
     page.on('pageerror', (error) => errors.push(error.message));
+
     await page.goto(`${baseUrl}/ui.html`);
     await page.getByRole('heading', { name: 'Messages' }).waitFor();
     await page.getByText('thread-0').waitFor();

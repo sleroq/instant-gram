@@ -1,36 +1,14 @@
 import type { Runtime } from 'webextension-polyfill';
-import type { JsonValue } from '../json.ts';
-import type {
-    InboxProviderEffects,
-    ProviderPort,
-    ProviderResponseInput,
-} from './inbox.ts';
+import type { InboxProviderEffects, ProviderPort } from './inbox.ts';
 
 /** Preserve host listener identity; the provider validates response envelopes. */
 export function providerPortFromBrowser(port: Runtime.Port): ProviderPort {
-    const listeners = new Map<
-        (message: ProviderResponseInput) => void,
-        (message: unknown) => void
-    >();
+    // SAFETY: This extension-owned Port transports JSON; the provider validates response envelopes.
+    const onMessage = port.onMessage as ProviderPort['onMessage'];
     return {
         name: port.name,
         sender: port.sender,
-        onMessage: {
-            addListener(listener) {
-                function receive(message: unknown) {
-                    // SAFETY: Provider Port messages use the structured-clone JSON protocol.
-                    listener(message as JsonValue);
-                }
-                listeners.set(listener, receive);
-                port.onMessage.addListener(receive);
-            },
-            removeListener(listener) {
-                const receive = listeners.get(listener);
-                if (!receive) return;
-                port.onMessage.removeListener(receive);
-                listeners.delete(listener);
-            },
-        },
+        onMessage,
         onDisconnect: port.onDisconnect,
         postMessage: (message) => port.postMessage(message),
         disconnect: () => port.disconnect(),

@@ -66,6 +66,7 @@ test('text and read builders preserve captured nulls and string timestamps', () 
             send_attribution: 'igd_web_chat_tab:in_thread',
         },
     );
+
     assert.deepEqual(
         [
             INSTAGRAM_GRAPHQL_OPERATIONS.useIGDMarkThreadAsReadMutation.docId,
@@ -82,6 +83,7 @@ test('text and read builders preserve captured nulls and string timestamps', () 
             },
         ],
     );
+
     assert.equal(
         INSTAGRAM_GRAPHQL_OPERATIONS.useIGDMarkThreadAsReadValidationMutation
             .docId,
@@ -213,6 +215,7 @@ test('reaction builder matches the HAR-backed mutation variables exactly', () =>
             },
         },
     );
+
     assert.deepEqual(
         INSTAGRAM_GRAPHQL_OPERATIONS.IGDirectReactionSendMutation.buildVariables(
             {

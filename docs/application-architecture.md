@@ -94,7 +94,7 @@ type Resource = {
     orderedIds: string[];
     cursor?: string;
     hasNextPage: boolean; // Provider continuation, not local retention capacity.
-    /** Transitional R1 state until account-level history retention replaces it. */
+    /** Local resource capacity, distinct from provider exhaustion. */
     retentionLimited?: boolean;
     fetchedAt: number;
     availability: 'absent' | 'present';

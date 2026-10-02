@@ -94,6 +94,7 @@ export function createInboxReader(
     ) {
         const tokens = await getTokens();
         verify(expected);
+
         const body = new URLSearchParams({
             __d: 'www',
             __a: '1',
@@ -128,6 +129,7 @@ export function createInboxReader(
         if (response.status === 401 || response.status === 403)
             throw new InboxError('auth');
         if (!response.ok) throw new InboxError('protocol');
+
         const json = parseJson(await response.text());
         verify(expected);
         const errors = field(json, 'errors');
@@ -136,6 +138,7 @@ export function createInboxReader(
             (!Array.isArray(errors) || errors.length > 0)
         )
             throw new InboxError('protocol');
+
         return { json, viewerId: tokens.viewerId };
     }
 

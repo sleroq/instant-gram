@@ -199,6 +199,7 @@ export function ConversationPane(props: {
                 ids.length !== previousIds.length ||
                 ids.some((id, index) => id !== previousIds[index]);
             const threadChanged = threadId !== previous?.[0];
+
             if (threadChanged) {
                 const savedIndex = savedAnchor
                     ? ids.indexOf(savedAnchor.id)
@@ -228,6 +229,7 @@ export function ConversationPane(props: {
                     setRange(initialHistoryWindow(ids.length));
                 }
             }
+
             previousIds = ids;
             queueMicrotask(() => {
                 const element = controller.element();
@@ -384,6 +386,7 @@ export function ConversationPane(props: {
                                                 previous.senderId),
                                 );
                             };
+
                             return (
                                 <>
                                     <Show when={newDate()}>

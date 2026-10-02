@@ -109,6 +109,7 @@ export function MessageRow(props: {
     showSender: boolean;
 }) {
     const reply = () => replyPreview(props.message);
+
     return (
         <article
             class={{

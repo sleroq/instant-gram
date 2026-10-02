@@ -190,6 +190,7 @@ export function InboxList(props: {
                     <For each={ids()}>
                         {(id, index) => {
                             const thread = () => props.facts.threadsById[id];
+
                             return (
                                 <li
                                     class="solid-inbox__thread-slot"

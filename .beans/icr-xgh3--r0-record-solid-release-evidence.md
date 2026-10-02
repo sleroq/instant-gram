@@ -1,14 +1,14 @@
 ---
 # icr-xgh3
 title: 'R0: Record Solid release evidence'
-status: in-progress
+status: completed
 type: milestone
 priority: high
 tags:
     - solid-restoration
     - evidence
 created_at: 2026-09-13T12:04:07Z
-updated_at: 2026-09-30T22:14:25Z
+updated_at: 2026-10-01T20:25:52Z
 blocking:
     - icr-9ib2
 ---
@@ -31,3 +31,7 @@ Exit: evidence names fixture/build/browser/hardware/account state; provisional b
 ## Fix-pass outcome — 2026-09-30
 
 Production build installed unpacked with authenticated profile intact and no private artifacts. Chrome Developer mode was required; disabled unpacked/CDP failures were environmental, and final toolbar/reload/worker-stop flows were rerun successfully. 173 tests and quality gates pass; shared scan has 102 warnings. Warm p95 8.4ms/12 samples and authorized retained-cold p95 80.4ms/5 real worker stops meet provisional 100/300ms targets; methods/overhead are recorded. Still unverified: account switch/logout, unknown-identity offline cold open, missing-history p95, real delayed images, server unread-state regression and live >400/pressure. This does not establish packaged/Web Store acceptance.
+
+## User acceptance
+
+The user confirms that this read-only stage is working and manual testing passed, and explicitly requests completion before continuing to new features. Closed on that acceptance together with the recorded 173-test and installed-production evidence. Earlier agent-only evidence gaps remain historical limitations, not pending stage blockers; no additional per-scenario measurements are claimed.

@@ -24,8 +24,6 @@ Checklist:
 - [ ] Show current volume and speed values in the UI.
 - [ ] Verify scroll interaction does not accidentally scroll the modal/page.
 
-
-
 ## Solid restoration handoff (2026-09-13)
 
 This is optional R5.5, not part of baseline R4 player restoration. Ship only with a discoverable opt-in or explicit control target that cannot hijack page scroll; otherwise scrap the gesture proposal.

@@ -118,6 +118,7 @@ async function seedV1(
     transaction
         .objectStore('messages')
         .put({ accountId: 'one', id: 'm-one', value: message('m-one') });
+
     transaction
         .objectStore('users')
         .put({ accountId: 'one', id: 'u-orphan', value: user('u-orphan') });
@@ -134,6 +135,7 @@ async function seedV1(
     transaction
         .objectStore('resources')
         .put({ accountId: 'one', id: 'inbox:primary', value: resourceValue });
+
     transaction
         .objectStore('users')
         .put({ accountId: 'two', id: 'u-two', value: user('u-two') });
@@ -150,6 +152,7 @@ async function seedV1(
         id: 'inbox:primary',
         value: { orderedIds: ['t-two'], fetchedAt: 2, hasNextPage: false },
     });
+
     transaction.objectStore('meta').put(revision, 'revision');
     await new Promise<void>((resolve, reject) => {
         transaction.oncomplete = () => resolve();
@@ -260,6 +263,7 @@ test('rejects dangling persisted references on read and commit', async () => {
         resources: [head],
         entities: entities(facts),
     });
+
     await assert.rejects(
         repository.commitResources('one', {
             resources: [
@@ -363,6 +367,7 @@ test('refreshing a head retains facts referenced by another resource', async () 
         ],
         entities: entities(first, second),
     });
+
     await repository.commitResources('one', {
         resources: [
             resource('inbox:primary', {
@@ -373,6 +378,7 @@ test('refreshing a head retains facts referenced by another resource', async () 
         ],
         entities: entities(first),
     });
+
     const result = await repository.readResources('one', [
         'inbox:primary:page:*',
     ]);
@@ -402,6 +408,7 @@ test('current thread dependencies retain updated participant and latest message'
         ],
         entities: entities(initial),
     });
+
     const updated = [
         thread('t', 'v-new', 'm-new'),
         user('v-new'),
@@ -418,6 +425,7 @@ test('current thread dependencies retain updated participant and latest message'
         entities: entities(updated),
         deleteKeys: ['inbox:primary'],
     });
+
     const result = await repository.readResources('one', ['history:t']);
     assert.ok(result.entities.threadsById.t);
     assert.ok(result.entities.usersById['v-new']);

@@ -47,8 +47,6 @@ hit an unrelated timing-sensitive reply-prefetch retry timeout; that exact test
 passes when rerun alone. All sidebar acceptance criteria pass, so this bean
 remains completed.
 
-
-
 ## Solid restoration handoff (2026-09-13)
 
 This completion records retired behavior. R1.12 under `icr-siiy` owns the Solid restoration; width is initially window-local and persistence waits for the single global settings service.

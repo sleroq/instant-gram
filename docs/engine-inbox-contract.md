@@ -114,5 +114,5 @@ Media bytes and auth secrets are not persisted.
 
 Repository/engine tests use `fake-indexeddb` and controlled providers; browser
 fixtures exercise the built Solid page with a mocked Port. These are not live
-Instagram or installed-extension lifecycle evidence. R0 release gates remain
-explicit in the verification record.
+Instagram or installed-extension lifecycle evidence. The accepted R0/R1 stage
+and independent evidence limits are recorded in the verification record.

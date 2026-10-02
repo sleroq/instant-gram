@@ -196,6 +196,7 @@ export function parseInstagramGraphqlPayload(
 function validateSecondary(value: JsonValue): InstagramSecondaryGraphqlRequest {
     const payload = record(value);
     const operation = requiredString(payload.operation, 'operation', 128);
+
     if (
         operation === 'PolarisAutomaticPreviewsDisabledContextProviderQuery' ||
         operation === 'useFeatureLimitsOffMsysQuery' ||
@@ -497,6 +498,7 @@ function createInstagramHandlers(
             );
             if (!isBoolean(payload.sourceIsViewer))
                 throw new Error('Invalid Instagram forwarding sender state');
+
             const content = record(payload.content, 'forwarding content');
             if (content.kind === 'text') {
                 exactKeys(content, ['kind', 'text']);
@@ -659,6 +661,7 @@ function createInstagramHandlers(
                 messageId: requiredString(payload.messageId, 'message ID'),
                 messageTimestampMs: timestamp(payload.messageTimestampMs),
             };
+
             const [receipt, validation] = await Promise.allSettled([
                 execute('useIGDMarkThreadAsReadMutation', input),
                 execute('useIGDMarkThreadAsReadValidationMutation', input),
@@ -677,6 +680,7 @@ function createInstagramHandlers(
                     );
                 }
             }
+
             let parsedValidation:
                 | ReturnType<typeof parseMarkThreadReadValidationResponse>
                 | undefined;
@@ -695,6 +699,7 @@ function createInstagramHandlers(
                     );
                 }
             }
+
             if (failures.length)
                 throw new Error(
                     `Instagram mark-read request failed (${failures.join('; ')})`,

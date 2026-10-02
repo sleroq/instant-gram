@@ -71,6 +71,7 @@ test('live reader uses exact captured descriptors, opaque cursors, and account-s
             );
         },
     });
+
     await reader.inbox();
     await reader.inbox('opaque:page/==');
     assert.deepEqual(
@@ -86,6 +87,7 @@ test('live reader uses exact captured descriptors, opaque cursors, and account-s
             tokens,
         ),
     );
+
     const history = await reader.history('operation');
     assert.equal(history.viewerId, 'strong-viewer');
     assert.deepEqual(
@@ -95,6 +97,7 @@ test('live reader uses exact captured descriptors, opaque cursors, and account-s
             tokens,
         ),
     );
+
     await reader.history('operation', 'older/==');
     assert.deepEqual(calls[3].variables, {
         after: 'older/==',
@@ -113,6 +116,7 @@ test('live reader uses exact captured descriptors, opaque cursors, and account-s
             tokens,
         ),
     );
+
     account = 'account-2';
     await reader.inbox('same-cursor');
     assert.equal(

@@ -50,8 +50,6 @@ No Telegram scheduler/heavy-animation integration, generic pane-stack/catalogue,
 - Add focused pure/browser coverage for preference resolution/persistence/live media-query update, reduced/full modal lifecycle and focus, disabled spinner, virtual-row geometry, message eligibility, and no-motion history anchor/follow paths.
 - Run `npm test`, `npm run check`, `npm run build`, `git diff --check`, and `beans check`.
 
-
-
 ## Superseded by Solid restoration milestones (2026-09-13)
 
 This Teact-oriented milestone is closed as a scheduling unit. Every restored surface must honor system reduced motion when it ships; R5.1–R5.4 are now owned by `icr-kj7d`. That scope uses one `storage.local` System/Reduced/Full preference and Solid lifecycle coverage, without restoring Teact retained-exit machinery.

@@ -12,6 +12,7 @@ test('client command validation accepts only the JSON command vocabulary', () =>
         isClientCommand({ kind: 'refresh-history', threadId: 'thread-1' }),
         true,
     );
+
     assert.equal(
         isClientCommand({ kind: 'subscribe', threadId: undefined }),
         false,
@@ -22,6 +23,7 @@ test('client command validation accepts only the JSON command vocabulary', () =>
         false,
     );
     assert.equal(isClientCommand(['refresh']), false);
+
     assert.equal(
         isClientCommand({
             kind: 'subscribe',
@@ -42,6 +44,7 @@ test('client command validation accepts only the JSON command vocabulary', () =>
         isClientCommand({ kind: 'load-newer-history', threadId: 'thread-1' }),
         true,
     );
+
     for (const command of [
         { kind: 'subscribe', anchorId: 'message-2' },
         { kind: 'subscribe', threadId: 'thread-1', anchorId: '' },

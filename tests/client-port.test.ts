@@ -100,6 +100,7 @@ test('real client Port forwards detail interest, keeps sequence across routes, a
         },
         snapshot: () => projection,
     };
+
     const onMessage =
         event<
             Parameters<browser.Runtime.Port['onMessage']['addListener']>[0]
@@ -122,6 +123,7 @@ test('real client Port forwards detail interest, keeps sequence across routes, a
             for (const listener of onDisconnect.listeners) listener(port);
         },
     };
+
     const activate = prepareInboxClientPort(port);
     for (const listener of onMessage.listeners)
         listener({ kind: 'subscribe', threadId: 'first' }, port);
@@ -136,6 +138,7 @@ test('real client Port forwards detail interest, keeps sequence across routes, a
             },
             port,
         );
+
     for (const listener of onMessage.listeners) {
         listener({ kind: 'load-older-history', threadId: 'second' }, port);
         listener({ kind: 'load-newer-history', threadId: 'second' }, port);
@@ -148,6 +151,7 @@ test('real client Port forwards detail interest, keeps sequence across routes, a
             port,
         );
     }
+
     assert.deepEqual(interests, ['first', 'second']);
     assert.deepEqual(anchors, [undefined, 'second-message']);
     assert.deepEqual(replacements, [undefined, projectionListeners[0]]);
@@ -170,6 +174,7 @@ test('real client Port forwards detail interest, keeps sequence across routes, a
         ['refreshing', 'idle'],
     );
     assert.equal(released, 1);
+
     port.disconnect();
     assert.equal(released, 2);
     for (const listener of onMessage.listeners)

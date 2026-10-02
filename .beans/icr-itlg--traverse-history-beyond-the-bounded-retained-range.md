@@ -1,13 +1,13 @@
 ---
 # icr-itlg
 title: Retain complete active and recent conversation history
-status: in-progress
+status: completed
 type: task
 priority: high
 tags:
     - solid-restoration
 created_at: 2026-09-13T13:04:39Z
-updated_at: 2026-09-30T22:14:25Z
+updated_at: 2026-10-01T20:25:52Z
 parent: icr-siiy
 ---
 
@@ -16,3 +16,7 @@ Replace the current per-conversation 400-message/20-segment persistence ceiling 
 ## Fix-pass outcome — 2026-09-30
 
 Implementation is complete in v4. Production-code regressions exceed 1,200 messages and cover changed-head/restart, independent 400-ID windows and whole inactive-root eviction with inbox/account protections. Installed production recovered 160 messages after worker stop. Keep this acceptance task open until live >400/pressure evidence exists; synthetic fixtures must not be relabeled as live Instagram data.
+
+## User acceptance
+
+The user confirms that this read-only stage is working and manual testing passed, and explicitly requests completion before continuing to new features. Closed on that acceptance together with the recorded 173-test and installed-production evidence. Earlier agent-only evidence gaps remain historical limitations, not pending stage blockers; no additional per-scenario measurements are claimed.

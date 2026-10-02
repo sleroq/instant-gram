@@ -272,6 +272,7 @@ function providerResponse(
             result: failure,
         };
     }
+
     if (header.method === 'account') {
         const result = decode(AccountResult, header.result);
         return (
@@ -283,6 +284,7 @@ function providerResponse(
             }
         );
     }
+
     if (header.method === 'inbox') {
         const result = decode(InboxResult, header.result);
         if (!result) return;
@@ -293,6 +295,7 @@ function providerResponse(
             result,
         };
     }
+
     const result = decode(HistoryResult, header.result);
     if (!result) return;
     return {
@@ -369,6 +372,7 @@ export function makeInboxProvider(options: {
             port.disconnect();
             return;
         }
+
         const tabId = port.sender?.tab?.id;
         const url = port.sender?.url ? new URL(port.sender.url) : undefined;
         if (
@@ -382,6 +386,7 @@ export function makeInboxProvider(options: {
             port.disconnect();
             return;
         }
+
         const selectedTabId = tabId;
         const connection: Connection = {
             port,
@@ -416,6 +421,7 @@ export function makeInboxProvider(options: {
                 connections.delete(selectedTabId);
             retire(connection);
         }
+
         connections.set(tabId, connection);
         port.onMessage.addListener(onMessage);
         port.onDisconnect.addListener(onDisconnect);

@@ -37,7 +37,7 @@ export default defineConfig({
                 ...(config.chromiumArgs ?? []),
                 `--remote-debugging-port=${port}`,
             ];
-            const openUi = async () => {
+            async function openUi() {
                 const browser = await chromium.connectOverCDP(
                     `http://127.0.0.1:${port}`,
                 );
@@ -54,7 +54,7 @@ export default defineConfig({
                 } finally {
                     await browser.close();
                 }
-            };
+            }
             const start = server.start.bind(server);
             server.start = async () => {
                 await start();
@@ -71,7 +71,7 @@ export default defineConfig({
         plugins: [solid({ include: [/entrypoints\/ui\/.*\.[jt]sx$/] })],
     }),
     manifest: ({ command }) => ({
-        ...(command === 'serve' ? { key: devKey } : {}),
+        key: command === 'serve' ? devKey : undefined,
         permissions: ['tabs', 'scripting'],
         host_permissions: ['https://www.instagram.com/*'],
         action: { default_title: 'Instagram DM Client' },

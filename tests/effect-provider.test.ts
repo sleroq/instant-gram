@@ -169,6 +169,7 @@ test('request timeout removes pending state and ignores a late response', async 
         postMessage: (message) => sent.push(message),
         disconnect: () => undefined,
     });
+
     const result = await Effect.runPromise(
         Effect.gen(function* () {
             const first = yield* Effect.forkChild(provider.account);
@@ -192,6 +193,7 @@ test('request timeout removes pending state and ignores a late response', async 
             return [firstExit, yield* Fiber.join(second)] as const;
         }).pipe(Effect.provide(TestClock.layer())),
     );
+
     assert.equal(result[0]._tag, 'Failure');
     assert.equal(result[1], 'current');
     assert.deepEqual(
@@ -229,6 +231,7 @@ test('interruption removes a provider request and malformed envelopes are ignore
         postMessage: (message) => sent.push(message),
         disconnect: () => undefined,
     });
+
     const value = await Effect.runPromise(
         Effect.gen(function* () {
             const interrupted = yield* Effect.forkChild(provider.account);
@@ -257,6 +260,7 @@ test('interruption removes a provider request and malformed envelopes are ignore
             return yield* Fiber.join(current);
         }),
     );
+
     assert.equal(value, 'ok');
     assert.deepEqual(
         sent.map((request) => request.id),
@@ -293,6 +297,7 @@ test('matching malformed provider results fail immediately as protocol errors', 
         postMessage: (message) => sent.push(message),
         disconnect: () => undefined,
     });
+
     const cases: Array<[Effect.Effect<void, InboxError>, JsonValue]> = [
         [
             Effect.asVoid(provider.account),
@@ -371,6 +376,7 @@ test('matching malformed provider results fail immediately as protocol errors', 
             },
         ],
     ];
+
     for (const [operation, result] of cases) {
         const running = Effect.runPromise(Effect.result(operation));
         while (sent.length === 0) await Promise.resolve();
@@ -397,6 +403,7 @@ function anchorFixture() {
     });
     let requests = 0;
     let disconnects = 0;
+
     function accept(tabId: number) {
         const inbound = { receive(_message: ProviderResponseInput) {} };
         provider.accept({
@@ -433,6 +440,7 @@ function anchorFixture() {
             },
         });
     }
+
     return {
         provider,
         acquisitions,

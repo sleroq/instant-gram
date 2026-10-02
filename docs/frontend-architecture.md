@@ -30,10 +30,10 @@ History starts with a 40-message window and mounts at most 80 rows. Movement
 consumes retained IDs before requesting an older page. Newer traversal is local
 only; the provider has no newer-page UI capability. Retry and continuation are
 domain intents—the worker chooses their opaque cursors. Cached content remains
-visible during refresh or errors. The current local retention limit is
-transitional and is not presented as the end of the Instagram conversation.
-Removing that durable limit does not enlarge Solid's interest-scoped projection
-or 80-row DOM window.
+visible during refresh or errors. IndexedDB retains complete loaded history;
+400-ID client windows and the 80-row DOM bound are independent of durable
+retention. Under account storage pressure, the worker evicts whole inactive
+histories while protecting interested and recent histories.
 
 Images and share/reply previews are read-only message content. Share links open
 their external targets; no modal player, media-info fetching, comments, composer,

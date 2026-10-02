@@ -53,8 +53,6 @@ Expose a compact, accessible pin/unpin control (or accessible context action) fr
 - [x] Two consecutive full test passes with identical discovery counts,
       typecheck, production build, diff-check, and `beans check` all pass.
 
-
-
 ## Solid restoration handoff (2026-09-13)
 
 This completion records retired behavior, not current production capability. Restore pin/unpin as R2.4/R2.9 under `icr-uizd` with durable account-partitioned acceptance and receipt validation; do not restore background-only pin persistence or Teact optimistic state.
