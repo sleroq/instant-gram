@@ -45,7 +45,7 @@ type CommandCandidate = {
     kind?: unknown;
     threadId?: unknown;
     anchorId?: unknown;
-    command?: unknown;
+    command?: JsonValue;
     accountId?: unknown;
     accountEpoch?: unknown;
     operationId?: unknown;

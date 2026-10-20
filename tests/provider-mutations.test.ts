@@ -59,11 +59,6 @@ const thread = {
     serverIsPin: false,
     users: [],
 };
-function fails(kind: string) {
-    return (error: unknown) =>
-        error instanceof InboxError && error.kind === kind;
-}
-
 for (const isPinned of [true, false])
     test(`pin ${isPinned} validates exact id/state and descriptor`, async () => {
         const input = {
@@ -110,7 +105,7 @@ for (const isPinned of [true, false])
             else
                 await assert.rejects(
                     mutate('account', input),
-                    fails('unknown_outcome'),
+                    new InboxError('unknown_outcome'),
                 );
         }
     });
@@ -187,7 +182,7 @@ test('send/reply requires captured receipt and matching history echo, never fabr
         else
             await assert.rejects(
                 mutate('account', send),
-                fails('unknown_outcome'),
+                new InboxError('unknown_outcome'),
             );
     }
 });
@@ -256,7 +251,7 @@ test('paired reads validate BOTH receipts including captured false validation', 
         else
             await assert.rejects(
                 mutate('account', read),
-                fails('unknown_outcome'),
+                new InboxError('unknown_outcome'),
             );
         assert.deepEqual(calls, ['27356881703909995', '35211594988486314']);
     }
@@ -328,12 +323,12 @@ test('API validates before network; network/lost/malformed/status errors after d
                 ...send,
                 intent: { type: 'send', threadId: 'key', text: ' ' },
             }),
-            fails('invalid_request'),
+            new InboxError('invalid_request'),
         );
         assert.equal(calls, 0);
         await assert.rejects(
             api.mutate('account', pin),
-            fails('unknown_outcome'),
+            new InboxError('unknown_outcome'),
         );
         assert.equal(calls, 1);
     }
@@ -350,8 +345,8 @@ test('API validates before network; network/lost/malformed/status errors after d
             throw Error('unused');
         },
     });
-    await assert.rejects(api.mutate('account', send), fails('auth'));
-    await assert.rejects(api.mutate('other', pin), fails('auth'));
+    await assert.rejects(api.mutate('account', send), new InboxError('auth'));
+    await assert.rejects(api.mutate('other', pin), new InboxError('auth'));
     assert.equal(calls, 0);
 });
 
@@ -564,7 +559,7 @@ test('invalid targets and timestamps are rejected before the API dispatch', asyn
     for (const input of invalid)
         await assert.rejects(
             mutate('account', input),
-            fails('invalid_request'),
+            new InboxError('invalid_request'),
         );
     assert.equal(calls, 0);
 });

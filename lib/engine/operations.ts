@@ -1,4 +1,5 @@
 import type { Message } from '../domain.ts';
+import { isJsonObject, type JsonValue } from '../json.ts';
 import type { EngineError, InboxProjection } from './resources.ts';
 import { HISTORY_WINDOW_LIMIT } from './projection-limits.ts';
 
@@ -63,8 +64,10 @@ export type OperationResult =
 export const MAX_SEND_TEXT_LENGTH = 1000;
 export const ACTIVE_OPERATION_LIMIT = 200;
 
-export function isMutationCommand(value: unknown): value is MutationCommand {
-    if (typeof value !== 'object' || value === null) return false;
+export function isMutationCommand(
+    value: JsonValue | undefined,
+): value is MutationCommand {
+    if (!isJsonObject(value)) return false;
     return (
         Object.keys(value).every((key) =>
             ['accountId', 'accountEpoch', 'operationId', 'intent'].includes(
@@ -86,8 +89,10 @@ export function isMutationCommand(value: unknown): value is MutationCommand {
     );
 }
 
-export function isMutationIntent(value: unknown): value is MutationIntent {
-    if (typeof value !== 'object' || value === null) return false;
+export function isMutationIntent(
+    value: JsonValue | undefined,
+): value is MutationIntent {
+    if (!isJsonObject(value)) return false;
     if (
         !('type' in value) ||
         !('threadId' in value) ||
