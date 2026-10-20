@@ -31,15 +31,20 @@ bun run dev
 ```
 
 Development uses a dedicated persistent Chromium profile at
-`.dev/chromium-profile` (ignored by Git). WXT opens the extension's Messages page
-after the addon has loaded, without depending on a background-worker event.
+`.dev/chromium-profile` (ignored by Git). The extension is labeled
+**Instagram DM Client (Dev)** in this browser. WXT opens its Messages page on
+startup and reopens it after extension reloads or browser restarts, without
+leaving a blank launcher tab. Existing Messages tabs (including conversation
+routes) are reused rather than duplicated; a replacement tab starts at the inbox.
 Log into Instagram once in the browser
 opened by `bun run dev`; subsequent runs reuse its cookies and session until
 Instagram expires it or you log out. Keep an Instagram tab open for the extension
 provider. Close the previous dev browser before restarting; do not run two dev
 instances against the same profile. Delete `.dev/chromium-profile` with the dev
 browser closed to reset it. This directory contains private session data—do not
-share it.
+share it. If this profile also contains a manually loaded production/test copy,
+disable or remove that copy in `chrome://extensions`; only the **(Dev)** copy is
+updated by `bun run dev`.
 
 The dev browser exposes remote debugging on `127.0.0.1:9223`.
 `opencode.json` attaches Chrome DevTools MCP to that same browser; start

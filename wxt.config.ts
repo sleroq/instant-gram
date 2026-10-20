@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import solid from '@solidjs/vite-plugin';
 import { defineConfig } from 'wxt';
+import { openDevUi } from './lib/dev-browser';
 
 const chromiumProfile = fileURLToPath(
     new URL('./.dev/chromium-profile/', import.meta.url),
@@ -35,32 +36,21 @@ export default defineConfig({
                 wxt.config.runnerConfig.config.disabled
             )
                 return;
-            async function openUi() {
-                const endpoint = `http://127.0.0.1:${devPort}`;
-                const url = `chrome-extension://${devId}/ui.html`;
-                const pages: Array<{ id: string; url: string }> = await fetch(
-                    `${endpoint}/json/list`,
-                ).then((response) => response.json());
-                const page = pages.find((page) => page.url === url);
-                // Playwright's bundled WebSocket transport cannot attach in Bun.
-                const response = await fetch(
-                    page
-                        ? `${endpoint}/json/activate/${page.id}`
-                        : `${endpoint}/json/new?${url}`,
-                    { method: page ? 'GET' : 'PUT' },
+            function openUi() {
+                return openDevUi(
+                    `http://127.0.0.1:${devPort}`,
+                    `chrome-extension://${devId}/ui.html`,
                 );
-                if (!response.ok)
-                    throw new Error(`Cannot open dev UI: ${response.status}`);
             }
             const start = server.start.bind(server);
             server.start = async () => {
                 await start();
                 await openUi();
-            };
-            const restart = server.restartBrowser.bind(server);
-            server.restartBrowser = async () => {
-                await restart();
-                await openUi();
+                // Register after initial opening so startup cannot create two tabs.
+                // This also covers runtime.reload() and browser restarts.
+                server.ws.on('wxt:background-initialized', () => {
+                    void openUi().catch((error) => wxt.logger.error(error));
+                });
             };
         },
     },
@@ -68,9 +58,15 @@ export default defineConfig({
         plugins: [solid({ include: [/entrypoints\/ui\/.*\.[jt]sx$/] })],
     }),
     manifest: ({ command }) => ({
+        name: command === 'serve' ? 'Instagram DM Client (Dev)' : undefined,
         key: command === 'serve' ? devKey : undefined,
         permissions: ['tabs', 'scripting'],
         host_permissions: ['https://www.instagram.com/*'],
-        action: { default_title: 'Instagram DM Client' },
+        action: {
+            default_title:
+                command === 'serve'
+                    ? 'Instagram DM Client (Dev)'
+                    : 'Instagram DM Client',
+        },
     }),
 });
