@@ -44,8 +44,12 @@ a:focus-visible {
     background: #15171c;
 }
 .solid-layout__conversation {
+    grid-column: 3;
     min-width: 0;
     background: #101216;
+}
+.solid-inbox__separator[hidden] {
+    display: none;
 }
 .solid-inbox__separator {
     position: relative;
@@ -59,6 +63,69 @@ a:focus-visible {
     touch-action: none;
 }
 
+.solid-inbox__fold svg,
+svg.solid-inbox__compact-icon {
+    width: 20px;
+    height: 20px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.75;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+.solid-inbox__compact-icon {
+    display: none;
+}
+.solid-inbox__list-panel--folded {
+    .solid-inbox__heading-copy,
+    .solid-inbox__status,
+    .solid-inbox__thread-copy,
+    .solid-inbox__control-copy {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip-path: inset(50%);
+        white-space: nowrap;
+    }
+    .solid-inbox__list-heading {
+        flex-direction: column-reverse;
+        gap: 4px;
+        padding: 12px;
+
+        button {
+            display: grid;
+            width: 40px;
+            height: 40px;
+            place-items: center;
+            padding: 0;
+        }
+    }
+    .solid-inbox__compact-icon {
+        display: block;
+    }
+    .solid-inbox__thread {
+        position: relative;
+        justify-content: center;
+        padding-inline: 4px;
+    }
+    .solid-inbox__unread {
+        position: absolute;
+        inset-inline-end: 10px;
+        top: 12px;
+    }
+    .solid-inbox__list-footer {
+        padding-inline: 8px;
+    }
+    .solid-inbox__error,
+    .solid-inbox__limit {
+        margin-inline: 4px;
+        overflow-wrap: anywhere;
+        font-size: 12px;
+    }
+}
 .solid-inbox__list-panel {
     display: flex;
     height: 100vh;

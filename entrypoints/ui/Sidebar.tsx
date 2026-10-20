@@ -1,4 +1,4 @@
-import { createSignal, onCleanup, onSettled } from 'solid-js';
+import { createEffect, createSignal, onCleanup, onSettled } from 'solid-js';
 import type { JSX } from '@solidjs/web';
 
 const MIN_WIDTH = 280;
@@ -7,8 +7,10 @@ const MAX_WIDTH = 520;
 export function Sidebar(props: {
     inbox: JSX.Element;
     conversation: JSX.Element;
+    folded: boolean;
+    width: number;
+    onResize(width: number): void;
 }) {
-    const [width, setWidth] = createSignal(360);
     const [availableWidth, setAvailableWidth] = createSignal(window.innerWidth);
     let layout!: HTMLDivElement;
     let separator: HTMLButtonElement | undefined;
@@ -21,7 +23,7 @@ export function Sidebar(props: {
         Math.max(MIN_WIDTH, Math.min(maximum(containerWidth), value));
     const move = (event: PointerEvent) => {
         if (dragging)
-            setWidth(
+            props.onResize(
                 clamp(event.clientX - layout.getBoundingClientRect().left),
             );
     };
@@ -45,21 +47,21 @@ export function Sidebar(props: {
     const keydown = (event: KeyboardEvent) => {
         if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
             event.preventDefault();
-            setWidth((value) =>
-                clamp(value + (event.key === 'ArrowRight' ? 16 : -16)),
+            props.onResize(
+                clamp(props.width + (event.key === 'ArrowRight' ? 16 : -16)),
             );
         } else if (event.key === 'Home') {
             event.preventDefault();
-            setWidth(MIN_WIDTH);
+            props.onResize(MIN_WIDTH);
         } else if (event.key === 'End') {
             event.preventDefault();
-            setWidth(maximum());
+            props.onResize(maximum());
         }
     };
     const resize = () => {
         const containerWidth = layout.clientWidth;
         setAvailableWidth(containerWidth);
-        setWidth((value) => clamp(value, containerWidth));
+        props.onResize(clamp(props.width, containerWidth));
     };
     onSettled(() => {
         resize();
@@ -67,12 +69,20 @@ export function Sidebar(props: {
     });
     onCleanup(() => window.removeEventListener('resize', resize));
     onCleanup(end);
+    createEffect(
+        () => props.folded,
+        (folded) => {
+            if (folded) end();
+        },
+    );
 
     return (
         <div
             class="solid-layout"
             ref={(element) => (layout = element)}
-            style={{ '--sidebar-width': `${width()}px` }}
+            style={{
+                '--sidebar-width': props.folded ? '88px' : `${props.width}px`,
+            }}
         >
             <aside class="solid-sidebar">{props.inbox}</aside>
             <button
@@ -83,7 +93,8 @@ export function Sidebar(props: {
                 aria-label="Resize conversations"
                 aria-valuemin={MIN_WIDTH}
                 aria-valuemax={maximum()}
-                aria-valuenow={width()}
+                aria-valuenow={props.width}
+                hidden={props.folded}
                 tabindex={0}
                 ref={(element) => (separator = element)}
                 onPointerDown={start}

@@ -487,12 +487,13 @@ test('separator exposes keyboard resizing, focus and responsive accessibility bo
     await page.close();
 });
 
-test('separator pointer capture ends on release, cancellation and owner disposal', async () => {
+test('separator pointer capture ends on release, cancellation, folding and owner disposal', async () => {
     const page = await openHistory();
     const errors: string[] = [];
     page.on('pageerror', (error) => errors.push(error.message));
     const separator = page.getByRole('separator', {
         name: 'Resize conversations',
+        includeHidden: true,
     });
     const listeners = await page.evaluateHandle(() => {
         const active = new Map<
@@ -609,6 +610,31 @@ test('separator pointer capture ends on release, cancellation and owner disposal
     await page.mouse.up();
 
     await start();
+    const collapse = page.getByRole('button', {
+        name: 'Collapse conversations',
+        exact: true,
+    });
+    await collapse.focus();
+    await collapse.press('Enter');
+    await page
+        .getByRole('button', { name: 'Expand conversations', exact: true })
+        .waitFor();
+    await assertDragEnded();
+    assert.equal(
+        await separator.evaluate(
+            (element, state) => element.hasPointerCapture(state.id),
+            pointer,
+        ),
+        false,
+    );
+    await page.mouse.move(point.x + 100, point.y);
+    await page.mouse.up();
+    await page
+        .getByRole('button', { name: 'Expand conversations', exact: true })
+        .click();
+    assert.equal(await value(), released);
+
+    await start();
     assert.equal(
         await listeners.evaluate((active) => active.has('pointermove')),
         true,
@@ -697,6 +723,220 @@ test('resizing preserves logical history and inbox focus within mounted-row budg
         await page.evaluate(() => window.historyTest.commands.length),
         before,
     );
+    await page.close();
+});
+
+test('folding preserves logical list/history identity, drafts, focus and subscriptions', async () => {
+    const page = await openHistory(1100, { composer: true });
+    const editor = page.getByRole('textbox', { name: 'Message', exact: true });
+    await editor.fill('Keep this draft\nwhile folding');
+    const editorNode = await editor.elementHandle();
+    const history = page.getByLabel('Messages', { exact: true });
+    await history.evaluate((element) => {
+        element.scrollTop = element.scrollHeight / 2;
+        element.dispatchEvent(new Event('scroll'));
+    });
+    await layoutSettled(page);
+    const anchor = await visibleMessage(page);
+    const message = await page
+        .locator(`[data-message-id="${anchor}"]`)
+        .elementHandle();
+    const inbox = page.getByRole('region', {
+        name: 'Primary inbox',
+        exact: true,
+    });
+    await inbox.evaluate((element) => {
+        element.scrollTop = element.scrollHeight * 0.4;
+        element.dispatchEvent(new Event('scroll'));
+    });
+    await layoutSettled(page);
+    function logicalInboxPosition() {
+        return inbox.evaluate((element) => {
+            const top = element.getBoundingClientRect().top;
+            return [
+                ...element.querySelectorAll<HTMLElement>('[data-thread-id]'),
+            ].find((row) => row.getBoundingClientRect().bottom > top)?.dataset
+                .threadId;
+        });
+    }
+    const threadId = await logicalInboxPosition();
+    const thread = page.locator(`[data-thread-id="${threadId}"]`);
+    const threadNode = await thread.elementHandle();
+    const commands = await page.evaluate(() => window.historyTest.commands);
+    const route = page.url();
+    const collapse = page.getByRole('button', {
+        name: 'Collapse conversations',
+        exact: true,
+    });
+    assert.equal(await collapse.getAttribute('aria-expanded'), 'true');
+    assert.equal(
+        await collapse.getAttribute('aria-controls'),
+        await page
+            .getByRole('region', { name: 'Inbox', exact: true })
+            .getAttribute('id'),
+    );
+    await collapse.focus();
+    await collapse.press('Enter');
+    const expand = page.getByRole('button', {
+        name: 'Expand conversations',
+        exact: true,
+    });
+    await expand.waitFor();
+    await layoutSettled(page);
+    assert.equal(await expand.getAttribute('aria-expanded'), 'false');
+    assert.equal(
+        await expand.evaluate((element) => element === document.activeElement),
+        true,
+    );
+    assert.equal(
+        await page
+            .getByRole('separator', { name: 'Resize conversations' })
+            .count(),
+        0,
+    );
+    assert.equal(await logicalInboxPosition(), threadId);
+    assert.equal(await visibleMessage(page), anchor);
+    assert.equal(
+        await message!.evaluate((element) => element.isConnected),
+        true,
+    );
+    assert.equal(
+        await editorNode!.evaluate((element) => element.isConnected),
+        true,
+    );
+    assert.equal(
+        await threadNode!.evaluate((element) => element.isConnected),
+        true,
+    );
+    assert.equal(await editor.inputValue(), 'Keep this draft\nwhile folding');
+    assert.equal(page.url(), route);
+    assert.deepEqual(
+        await page.evaluate(() => window.historyTest.commands),
+        commands,
+    );
+    assert.ok((await page.locator('[data-thread-id]').count()) <= 31);
+    assert.ok((await page.locator('[data-message-id]').count()) <= 80);
+
+    await thread.evaluate((element: HTMLButtonElement) =>
+        element.focus({ preventScroll: true }),
+    );
+    // An action dispatched without moving focus must not replace the focused row.
+    await expand.evaluate((element: HTMLButtonElement) => element.click());
+    await collapse.waitFor();
+    await layoutSettled(page);
+    assert.equal(
+        await thread.evaluate((element) => element === document.activeElement),
+        true,
+    );
+    assert.equal(await logicalInboxPosition(), threadId);
+    assert.equal(await visibleMessage(page), anchor);
+    assert.deepEqual(
+        await page.evaluate(() => window.historyTest.commands),
+        commands,
+    );
+    await page.close();
+});
+
+test('folded conversations keep accessible selection, tab routing and compact Back restoration', async () => {
+    const page = await openHistory(1100, { composer: true });
+    const editor = page.getByRole('textbox', { name: 'Message', exact: true });
+    await editor.fill('Thread zero draft');
+    const longName =
+        'A very long conversation name with colleagues and friends — Друзья';
+    await page.evaluate((title) => {
+        const next = structuredClone(window.historyTest.current);
+        Object.assign(next.entities.threadsById['thread-0'], {
+            title,
+            isUnread: true,
+            serverIsPin: true,
+            lastMessageId: 'message-0',
+        });
+        window.historyTest.send(next, 2);
+    }, longName);
+    const selected = page.getByRole('button', { name: longName, exact: true });
+    await selected.waitFor();
+    const separator = page.getByRole('separator', {
+        name: 'Resize conversations',
+    });
+    await separator.press('Home');
+    await separator.press('ArrowRight');
+    const preferred = await separator.getAttribute('aria-valuenow');
+    await page
+        .getByRole('button', { name: 'Collapse conversations', exact: true })
+        .click();
+    assert.equal(await selected.getAttribute('aria-current'), 'page');
+    assert.equal(
+        await selected.getAttribute('aria-description'),
+        'Message 0 · Pinned · Unread',
+    );
+    assert.equal(
+        await selected.getAttribute('title'),
+        `${longName} — Message 0 · Pinned · Unread`,
+    );
+    const second = page.getByRole('button', { name: 'thread-1', exact: true });
+    await second.focus();
+    await second.press('Enter');
+    await page
+        .getByText('Second conversation message', { exact: true })
+        .waitFor();
+    assert.equal(await second.getAttribute('aria-current'), 'page');
+    assert.ok(page.url().endsWith('#/thread/thread-1'));
+    await editor.fill('Thread one draft');
+    await selected.focus();
+    await selected.press('Enter');
+    await page.getByRole('heading', { name: longName, exact: true }).waitFor();
+    assert.equal(await editor.inputValue(), 'Thread zero draft');
+
+    const chats = page.getByRole('tab', { name: 'Chats', exact: true });
+    const settings = page.getByRole('tab', { name: 'Settings', exact: true });
+    await chats.focus();
+    await chats.press('ArrowDown');
+    await page.getByRole('switch', { name: 'Animations' }).waitFor();
+    assert.ok(page.url().endsWith('#/settings'));
+    assert.equal(await settings.getAttribute('aria-selected'), 'true');
+    assert.equal(
+        await settings.evaluate(
+            (element) => element === document.activeElement,
+        ),
+        true,
+    );
+    assert.equal(await chats.getAttribute('tabindex'), '-1');
+    await settings.press('Home');
+    await page
+        .getByRole('button', { name: 'Expand conversations', exact: true })
+        .waitFor();
+    assert.equal(await chats.getAttribute('aria-selected'), 'true');
+    assert.equal(
+        await chats.evaluate((element) => element === document.activeElement),
+        true,
+    );
+    assert.ok(page.url().endsWith('#/thread/thread-0'));
+    assert.equal(await editor.inputValue(), 'Thread zero draft');
+    assert.equal(await selected.getAttribute('aria-current'), 'page');
+
+    await page.setViewportSize({ width: 390, height: 700 });
+    await page.getByRole('button', { name: 'Back', exact: true }).click();
+    await selected.waitFor();
+    await page.waitForFunction(
+        () =>
+            document.activeElement?.getAttribute('data-thread-id') ===
+            'thread-0',
+    );
+    await selected.press('Enter');
+    await editor.waitFor();
+    assert.equal(await editor.inputValue(), 'Thread zero draft');
+    await page.setViewportSize({ width: 1100, height: 700 });
+    await page
+        .getByRole('button', { name: 'Expand conversations', exact: true })
+        .click();
+    assert.equal(await separator.getAttribute('aria-valuenow'), preferred);
+    await separator.press('ArrowRight');
+    assert.ok(
+        Number(await separator.getAttribute('aria-valuenow')) >
+            Number(preferred),
+    );
+    assert.ok((await page.locator('[data-thread-id]').count()) <= 31);
+    assert.ok((await page.locator('[data-message-id]').count()) <= 80);
     await page.close();
 });
 

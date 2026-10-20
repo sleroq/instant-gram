@@ -330,13 +330,16 @@ test('pinned conversations lead the inbox and rows expose their status', async (
         await rows.first().getAttribute('data-thread-id'),
         'thread-20',
     );
-    assert.equal(
-        await rows.first().locator('[aria-label="Pinned"]').count(),
-        1,
+    assert.match(
+        (await rows.first().getAttribute('aria-description')) ?? '',
+        /Pinned/,
     );
 
     const unread = page.locator('[data-thread-id="thread-1"]');
-    assert.equal(await unread.locator('[aria-label="Unread"]').count(), 1);
+    assert.match(
+        (await unread.getAttribute('aria-description')) ?? '',
+        /Unread/,
+    );
     assert.deepEqual(errors, []);
     await page.close();
 });
