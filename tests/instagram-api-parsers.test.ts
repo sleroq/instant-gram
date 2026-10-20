@@ -81,6 +81,23 @@ test('current inbox aliases normalize thread flags, folders, and server pins', (
     });
 });
 
+test('thread type follows explicit server flags, not the projected user count', () => {
+    const thread = {
+        thread_key: 'chat-type',
+        users: [user, { ...user, interop_messaging_user_fbid: 'viewer-1' }],
+    };
+    assert.equal(parseThread({ ...thread, is_group: false })?.isGroup, false);
+    assert.equal(
+        parseThread({ ...thread, is_group_thread: true })?.isGroup,
+        true,
+    );
+    assert.equal(
+        parseThread({ ...thread, is_group: false, is_group_thread: true })
+            ?.isGroup,
+        false,
+    );
+});
+
 test('thread unread state compares the latest incoming message with the viewer watermark', () => {
     const parsed = parseThread({
         thread_key: 'person-1',

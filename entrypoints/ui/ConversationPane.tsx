@@ -594,18 +594,21 @@ export function ConversationPane(props: {
                                                 dateLabel(previous.ts)),
                                 );
                             };
-                            const showSender = () => {
+                            const continuesSender = () => {
                                 const current = message();
                                 const previous = prior();
                                 return Boolean(
                                     current &&
+                                        previous &&
                                         'senderId' in current &&
-                                        (!previous ||
-                                            !('senderId' in previous) ||
-                                            current.senderId !==
-                                                previous.senderId),
+                                        'senderId' in previous &&
+                                        current.senderId === previous.senderId,
                                 );
                             };
+                            const groupStart = () =>
+                                !continuesSender() ||
+                                newDate() ||
+                                message()!.ts - prior()!.ts > 5 * 60_000;
 
                             return (
                                 <>
@@ -646,7 +649,16 @@ export function ConversationPane(props: {
                                                 }
                                                 user={userFor(id)}
                                                 outgoing={outgoing(id)}
-                                                showSender={showSender()}
+                                                groupStart={groupStart()}
+                                                senderRunStart={
+                                                    index() === 0 ||
+                                                    !continuesSender()
+                                                }
+                                                isGroup={
+                                                    props.facts.threadsById[
+                                                        props.threadId
+                                                    ]?.isGroup ?? false
+                                                }
                                             />
                                         )}
                                     </Show>
