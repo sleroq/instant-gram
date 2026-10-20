@@ -56,7 +56,7 @@ test.after(async () => {
 
 async function openHistory(
     width = 1100,
-    options: { checking?: boolean; bounded?: boolean } = {},
+    options: { checking?: boolean; bounded?: boolean; grouping?: boolean } = {},
 ): Promise<Page> {
     const page = await browser.newPage({
         viewport: { width, height: 700 },
@@ -209,6 +209,63 @@ async function openHistory(
             projection.histories['thread-0'].cachedOlder = true;
             projection.histories['thread-0'].cachedNewer = false;
             selectWindowFacts(projection);
+        }
+
+        if (options.grouping) {
+            projection.entities.threadsById['thread-0'].isGroup = true;
+            projection.entities.usersById.other = {
+                id: 'other',
+                username: 'other',
+                fullName: 'Other participant',
+                picUrl: null,
+            };
+            const noon = new Date(2026, 9, 20, 12).getTime();
+            for (const [index, id] of ids.entries()) {
+                messagesById[id] = {
+                    id,
+                    ts: noon + index * 60_000,
+                    kind: 'text',
+                    text: `Message ${index}`,
+                    senderId: 'peer',
+                };
+            }
+            for (const [index, minutes, senderId] of [
+                [108, 108, 'peer'],
+                [109, 113, 'peer'],
+                [110, 118, 'peer'],
+                [111, 123 + 1 / 60_000, 'peer'],
+                [112, 124, 'other'],
+                [113, 125, 'viewer'],
+                [114, 126, 'viewer'],
+                [116, 128, 'peer'],
+                [118, 130, 'peer'],
+                [119, 131, 'peer'],
+            ] as const) {
+                messagesById[`message-${index}`] = {
+                    id: `message-${index}`,
+                    ts: noon + minutes * 60_000,
+                    kind: 'text',
+                    text: `Message ${index}`,
+                    senderId,
+                };
+            }
+            messagesById['message-114'].delivery = {
+                operationId: 'send',
+                status: 'queued',
+                retryable: false,
+            };
+            messagesById['message-115'] = {
+                id: 'message-115',
+                ts: noon + 127 * 60_000,
+                kind: 'activity',
+                text: 'Participant joined',
+            };
+            messagesById['message-117'] = {
+                id: 'message-117',
+                ts: noon + 129 * 60_000,
+                kind: 'reaction_log',
+                fragment: 'Reaction activity',
+            };
         }
 
         const authorized = structuredClone(projection);
@@ -380,6 +437,242 @@ test('cached history stays bounded and local traversal sends no older request', 
         await page.evaluate(() => window.historyTest.commands.length),
         before,
     );
+    await page.close();
+});
+
+for (const width of [1100, 600]) {
+    test(`grouped rows preserve gutters, spacing, outgoing alignment and settlement at ${width}px`, async () => {
+        const page = await openHistory(width, { grouping: true });
+        function row(index: number) {
+            return page.locator(`[data-message-id="message-${index}"]`);
+        }
+        const geometry = await page
+            .locator('[data-message-id]')
+            .evaluateAll((rows) =>
+                Object.fromEntries(
+                    rows.map((row) => {
+                        const rect = row.getBoundingClientRect();
+                        const body = row
+                            .querySelector('.solid-message__body')!
+                            .getBoundingClientRect();
+                        return [
+                            row.getAttribute('data-message-id'),
+                            {
+                                left: body.left,
+                                right: body.right,
+                                top: rect.top,
+                                bottom: rect.bottom,
+                                rowLeft: rect.left,
+                                rowRight: rect.right,
+                            },
+                        ];
+                    }),
+                ),
+            );
+        for (const index of [108, 109, 110, 111, 112, 116, 118, 119]) {
+            const current = geometry[`message-${index}`];
+            assert.equal(current.left - current.rowLeft, 36);
+            assert.equal(current.left, geometry['message-108'].left);
+        }
+        for (const index of [109, 110, 114, 119]) {
+            assert.equal(
+                await row(index).locator('.solid-message__avatar').count(),
+                0,
+            );
+            assert.equal(
+                await row(index).locator('.solid-message__author').count(),
+                0,
+            );
+            assert.equal(
+                geometry[`message-${index}`].top -
+                    geometry[`message-${index - 1}`].bottom,
+                2,
+            );
+        }
+        for (const index of [111, 112, 116, 118]) {
+            assert.equal(
+                await row(index).locator('.solid-message__avatar').count(),
+                1,
+            );
+            assert.equal(
+                geometry[`message-${index}`].top -
+                    geometry[`message-${index - 1}`].bottom,
+                14,
+            );
+        }
+        assert.equal(
+            await row(112).locator('.solid-message__author').textContent(),
+            'Other participant',
+        );
+        assert.equal(
+            await row(111).locator('.solid-message__author').textContent(),
+            'Peer',
+        );
+        for (const index of [113, 114]) {
+            assert.equal(
+                geometry[`message-${index}`].right,
+                geometry[`message-${index}`].rowRight,
+            );
+            assert.equal(
+                await row(index).locator('.solid-message__avatar').count(),
+                0,
+            );
+        }
+        assert.equal(
+            geometry['message-113'].right,
+            geometry['message-114'].right,
+        );
+        assert.ok(
+            await page.evaluate(
+                () => document.documentElement.scrollWidth <= innerWidth,
+            ),
+        );
+
+        const pending = await row(114).elementHandle();
+        const reply = row(113).getByRole('button', {
+            name: 'Reply',
+            exact: true,
+        });
+        await reply.focus();
+        const viewport = page.locator('.solid-history__viewport');
+        const before = await viewport.evaluate((element) => {
+            element.dispatchEvent(new Event('scroll'));
+            const top = element.getBoundingClientRect().top + element.clientTop;
+            const first = [
+                ...element.querySelectorAll<HTMLElement>('[data-message-id]'),
+            ].find((row) => row.getBoundingClientRect().bottom > top)!;
+            return {
+                id: first.dataset.messageId!,
+                offset: top - first.getBoundingClientRect().top,
+            };
+        });
+        await page.evaluate(() => {
+            const next = structuredClone(window.historyTest.current);
+            const message = next.entities.messagesById['message-114'];
+            message.serverId = 'accepted-server-id';
+            message.delivery!.status = 'succeeded';
+            if (message.kind === 'text') message.text = 'Accepted message';
+            window.historyTest.send(next, 2);
+        });
+        await row(114).getByText('Accepted message').waitFor();
+        assert.ok(
+            await pending!.evaluate((node) =>
+                node.isSameNode(
+                    document.querySelector('[data-message-id="message-114"]'),
+                ),
+            ),
+        );
+        assert.equal(
+            await row(114).evaluate((row) =>
+                row.classList.contains('solid-message--group-start'),
+            ),
+            false,
+        );
+        assert.equal(
+            await row(114)
+                .getByRole('button', { name: 'Reply', exact: true })
+                .count(),
+            1,
+        );
+        assert.ok(
+            await reply.evaluate(
+                (element) => element === document.activeElement,
+            ),
+        );
+
+        // Same retained ID, revised timestamp: presentation must remain reactive.
+        await page.evaluate(() => {
+            const next = structuredClone(window.historyTest.current);
+            next.entities.messagesById['message-119'].ts =
+                next.entities.messagesById['message-118'].ts + 300_001;
+            window.historyTest.send(next, 3);
+        });
+        await row(119)
+            .locator('.solid-message__avatar')
+            .waitFor({ state: 'attached' });
+        await page.waitForFunction(({ id, offset }) => {
+            const viewport = document.querySelector(
+                '.solid-history__viewport',
+            )!;
+            const row = viewport.querySelector(`[data-message-id="${id}"]`)!;
+            return (
+                Math.abs(
+                    viewport.getBoundingClientRect().top +
+                        viewport.clientTop -
+                        row.getBoundingClientRect().top -
+                        offset,
+                ) <= 1
+            );
+        }, before);
+        assert.ok(
+            await reply.evaluate(
+                (element) => element === document.activeElement,
+            ),
+        );
+        assert.ok((await page.locator('[data-message-id]').count()) <= 80);
+        await page.close();
+    });
+}
+
+test('long group authors wrap without horizontal history overflow at 320px', async () => {
+    const page = await openHistory(320, { grouping: true });
+    const name = 'W'.repeat(100);
+    await page.evaluate((name) => {
+        const next = structuredClone(window.historyTest.current);
+        next.entities.usersById.other.fullName = name;
+        window.historyTest.send(next, 2);
+    }, name);
+    const author = page.locator(
+        '[data-message-id="message-112"] .solid-message__author',
+    );
+    await author.getByText(name).waitFor({ state: 'attached' });
+    assert.ok(
+        await page
+            .locator('.solid-history__viewport')
+            .evaluate((element) => element.scrollWidth <= element.clientWidth),
+    );
+    assert.ok(
+        await author.evaluate(
+            (element) => element.scrollWidth <= element.clientWidth,
+        ),
+    );
+    await page.close();
+});
+
+test('grouping uses retained predecessors across mounted/page edges without fetching for context', async () => {
+    const page = await openHistory(1100, { grouping: true });
+    const first = page.locator('[data-message-id="message-80"]');
+    // Message 79 is retained but outside the 40-row mounted slice.
+    assert.equal(
+        await page.locator('[data-message-id="message-79"]').count(),
+        0,
+    );
+    assert.equal(await first.locator('.solid-message__avatar').count(), 0);
+    const requests = await page.evaluate(
+        () => window.historyTest.commands.length,
+    );
+    await page.evaluate(() => {
+        const next = structuredClone(window.historyTest.current);
+        next.histories['thread-0'].orderedIds =
+            next.histories['thread-0'].orderedIds.slice(80);
+        window.historyTest.send(next, 2);
+    });
+    await first
+        .locator('.solid-message__avatar')
+        .waitFor({ state: 'attached' });
+    await page.evaluate(() => {
+        const next = structuredClone(window.historyTest.current);
+        next.histories['thread-0'].orderedIds.unshift('message-79');
+        window.historyTest.send(next, 3);
+    });
+    await first
+        .locator('.solid-message__avatar')
+        .waitFor({ state: 'detached' });
+    assert.equal(
+        await page.evaluate(() => window.historyTest.commands.length),
+        requests,
+    );
+    assert.ok((await page.locator('[data-message-id]').count()) <= 80);
     await page.close();
 });
 

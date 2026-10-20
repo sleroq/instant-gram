@@ -23,6 +23,7 @@ import type {
     OperationResult,
 } from '../../lib/engine/operations';
 import { MessageRow, dateLabel } from './MessageRow';
+import { messageGrouping } from './message-grouping';
 
 export function ConversationPane(props: {
     threadId: string;
@@ -583,32 +584,13 @@ export function ConversationPane(props: {
                                 messageFor(
                                     allIds()[range().start + index() - 1],
                                 );
-                            const newDate = () => {
-                                const current = message();
-                                const previous = prior();
-                                return Boolean(
-                                    current &&
-                                        (!previous ||
-                                            dateLabel(current.ts) !==
-                                                dateLabel(previous.ts)),
-                                );
-                            };
-                            const showSender = () => {
-                                const current = message();
-                                const previous = prior();
-                                return Boolean(
-                                    current &&
-                                        'senderId' in current &&
-                                        (!previous ||
-                                            !('senderId' in previous) ||
-                                            current.senderId !==
-                                                previous.senderId),
-                                );
-                            };
+                            const grouping = createMemo(() =>
+                                messageGrouping(message(), prior()),
+                            );
 
                             return (
                                 <>
-                                    <Show when={newDate()}>
+                                    <Show when={grouping().newDate}>
                                         <div
                                             class="solid-history__date"
                                             aria-label={dateLabel(
@@ -645,7 +627,14 @@ export function ConversationPane(props: {
                                                 }
                                                 user={userFor(id)}
                                                 outgoing={outgoing(id)}
-                                                showSender={showSender()}
+                                                startsGroup={
+                                                    grouping().startsGroup
+                                                }
+                                                groupConversation={Boolean(
+                                                    props.facts.threadsById[
+                                                        props.threadId
+                                                    ]?.isGroup,
+                                                )}
                                             />
                                         )}
                                     </Show>

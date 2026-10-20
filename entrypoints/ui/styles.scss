@@ -262,7 +262,18 @@ a:focus-visible {
     align-items: flex-end;
     gap: 8px;
     max-width: 78%;
-    margin: 8px 0;
+    margin: 2px 0 0;
+}
+.solid-message--group-start {
+    margin-top: 14px;
+}
+.solid-message:not(.solid-message--outgoing) {
+    display: grid;
+    grid-template-columns: 28px minmax(0, max-content);
+}
+.solid-message:not(.solid-message--outgoing) .solid-message__body {
+    grid-column: 2;
+    grid-row: 1;
 }
 .solid-message--outgoing {
     margin-left: auto;
@@ -271,7 +282,8 @@ a:focus-visible {
 .solid-message__avatar {
     width: 28px;
     height: 28px;
-    flex-basis: 28px;
+    grid-column: 1;
+    grid-row: 1;
     align-self: flex-end;
     font-size: 10px;
 }
@@ -284,6 +296,12 @@ a:focus-visible {
 }
 .solid-message__body {
     min-width: 0;
+}
+.solid-message__author {
+    margin-bottom: 4px;
+    color: #b9c0cc;
+    font-size: 11px;
+    overflow-wrap: anywhere;
 }
 .solid-message__content,
 .solid-message__reply,
