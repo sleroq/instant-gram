@@ -9,17 +9,21 @@ export function Sidebar(props: {
     conversation: JSX.Element;
 }) {
     const [width, setWidth] = createSignal(360);
-    const [windowWidth, setWindowWidth] = createSignal(window.innerWidth);
+    const [availableWidth, setAvailableWidth] = createSignal(window.innerWidth);
+    let layout!: HTMLDivElement;
     let separator: HTMLButtonElement | undefined;
     let dragging = false;
     let pointerId = 0;
 
-    const maximum = (viewportWidth = windowWidth()) =>
-        Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, viewportWidth - 320));
-    const clamp = (value: number, viewportWidth = windowWidth()) =>
-        Math.max(MIN_WIDTH, Math.min(maximum(viewportWidth), value));
+    const maximum = (containerWidth = availableWidth()) =>
+        Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, containerWidth - 320));
+    const clamp = (value: number, containerWidth = availableWidth()) =>
+        Math.max(MIN_WIDTH, Math.min(maximum(containerWidth), value));
     const move = (event: PointerEvent) => {
-        if (dragging) setWidth(clamp(event.clientX));
+        if (dragging)
+            setWidth(
+                clamp(event.clientX - layout.getBoundingClientRect().left),
+            );
     };
     const end = () => {
         if (!dragging) return;
@@ -53,15 +57,23 @@ export function Sidebar(props: {
         }
     };
     const resize = () => {
-        setWindowWidth(window.innerWidth);
-        setWidth((value) => clamp(value, window.innerWidth));
+        const containerWidth = layout.clientWidth;
+        setAvailableWidth(containerWidth);
+        setWidth((value) => clamp(value, containerWidth));
     };
-    onSettled(() => window.addEventListener('resize', resize));
+    onSettled(() => {
+        resize();
+        window.addEventListener('resize', resize);
+    });
     onCleanup(() => window.removeEventListener('resize', resize));
     onCleanup(end);
 
     return (
-        <div class="solid-layout" style={{ '--sidebar-width': `${width()}px` }}>
+        <div
+            class="solid-layout"
+            ref={(element) => (layout = element)}
+            style={{ '--sidebar-width': `${width()}px` }}
+        >
             <aside class="solid-sidebar">{props.inbox}</aside>
             <button
                 class="solid-inbox__separator"

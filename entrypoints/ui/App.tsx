@@ -16,11 +16,24 @@ import { createInboxClient } from './client';
 import { InboxList } from './InboxList';
 import { createRouteController } from './route';
 import { Sidebar } from './Sidebar';
+import { AppNavigation } from './AppNavigation';
+import { SettingsPage } from './SettingsPage';
+import { createPreferences } from './preferences';
 import type { HistoryAnchor } from './history-window';
 import type { ListAnchor } from './virtual-list';
 
 export default function App() {
+    const preferences = createPreferences();
     const client = createInboxClient();
+    createEffect(
+        () => preferences.animationsEnabled(),
+        (enabled) => {
+            document.documentElement.dataset.motion = enabled ? 'on' : 'off';
+        },
+    );
+    onCleanup(() => {
+        delete document.documentElement.dataset.motion;
+    });
     const [drafts, setDrafts] = createStore<Record<string, ThreadDraft>>({});
     const pendingDrafts = new Map<string, Promise<OperationResult>>();
     function mutateWithDraftGuard(
@@ -74,7 +87,7 @@ export default function App() {
     onCleanup(() => window.removeEventListener('resize', onResize));
 
     createEffect(
-        () => route.route().threadId,
+        () => route.chats().threadId,
         (threadId) =>
             client.select(
                 threadId,
@@ -120,7 +133,7 @@ export default function App() {
 
     const inbox = () => client.state.inbox;
     const facts = () => client.state.entities;
-    const selected = () => route.route().threadId;
+    const selected = () => route.chats().threadId;
 
     const list = () => (
         <Show when={navigationKey()} keyed>
@@ -130,6 +143,7 @@ export default function App() {
                     resource={inbox()}
                     selectedId={selected()}
                     restore={listAnchor}
+                    restoreFocus={!route.returningToChats()}
                     onPosition={(anchor) => {
                         if (key === navigationGeneration + 1)
                             listAnchor = anchor;
@@ -179,22 +193,57 @@ export default function App() {
 
     return (
         <main class="solid-app">
-            <Show
-                when={compact()}
-                fallback={
-                    <Sidebar
-                        inbox={list()}
-                        conversation={
-                            <Show when={selected()} keyed>
-                                {(id) => conversation(id)}
-                            </Show>
-                        }
+            <Show when={preferences.ready()}>
+                <div class="solid-shell">
+                    <AppNavigation
+                        active={route.route().tab}
+                        onSelect={route.selectTab}
                     />
-                }
-            >
-                <Show when={selected()} fallback={list()} keyed>
-                    {(id) => conversation(id)}
-                </Show>
+                    <div class="solid-shell__content">
+                        <div
+                            role="tabpanel"
+                            id="chats-panel"
+                            aria-labelledby="chats-tab"
+                            tabindex={0}
+                            hidden={route.route().tab !== 'chats'}
+                        >
+                            <Show when={route.route().tab === 'chats'}>
+                                <Show
+                                    when={compact()}
+                                    fallback={
+                                        <Sidebar
+                                            inbox={list()}
+                                            conversation={
+                                                <Show when={selected()} keyed>
+                                                    {(id) => conversation(id)}
+                                                </Show>
+                                            }
+                                        />
+                                    }
+                                >
+                                    <Show
+                                        when={selected()}
+                                        fallback={list()}
+                                        keyed
+                                    >
+                                        {(id) => conversation(id)}
+                                    </Show>
+                                </Show>
+                            </Show>
+                        </div>
+                        <div
+                            role="tabpanel"
+                            id="settings-panel"
+                            aria-labelledby="settings-tab"
+                            tabindex={0}
+                            hidden={route.route().tab !== 'settings'}
+                        >
+                            <Show when={route.route().tab === 'settings'}>
+                                <SettingsPage preferences={preferences} />
+                            </Show>
+                        </div>
+                    </div>
+                </div>
             </Show>
         </main>
     );

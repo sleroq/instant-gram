@@ -25,6 +25,7 @@ test('composer preserves newer drafts on acceptance and supports IME and replies
     const browser = await chromium.launch({ headless: true });
     try {
         const page = await browser.newPage();
+        page.setDefaultTimeout(5_000);
         await page.addInitScript(() => {
             const commands: MutationCommand[] = [];
             type ServerMessage =
@@ -270,6 +271,19 @@ test('composer preserves newer drafts on acceptance and supports IME and replies
             });
             Object.assign(globalThis, {
                 chrome: {
+                    storage: {
+                        local: {
+                            get: (
+                                _key: string,
+                                callback: (value: { motion?: boolean }) => void,
+                            ) => callback({}),
+                            set: (
+                                _value: { motion: boolean },
+                                callback: () => void,
+                            ) => callback(),
+                        },
+                        onChanged: { addListener() {}, removeListener() {} },
+                    },
                     runtime: {
                         id: 'test',
                         connect: () => {
@@ -391,7 +405,13 @@ test('composer preserves newer drafts on acceptance and supports IME and replies
             .locator('[data-message-id^="operation:"]')
             .getAttribute('data-message-id');
         await editor.fill('newer');
+        await page.getByRole('tab', { name: 'Settings', exact: true }).click();
+        await page
+            .getByRole('heading', { name: 'Settings', exact: true })
+            .waitFor();
         await page.evaluate('window.r2.accept()');
+        await page.goBack();
+        await editor.waitFor();
         assert.equal(await editor.inputValue(), 'newer');
         assert.equal(
             await page
