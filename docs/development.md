@@ -2,7 +2,7 @@
 
 ## Setup
 
-Requires Bun 1.3.13 or newer. Node.js is not required.
+Requires Bun 1.4.3 or newer. Node.js is not required.
 
 ```sh
 bun install --frozen-lockfile
@@ -33,6 +33,9 @@ After updates, reload the extension and existing Instagram tabs so both use the 
   Start the dev browser first; restart MCP after configuration changes.
 - Install test Chromium once with `bun run test:setup`.
 - Run the checks in [repository guidance](../AGENTS.md#verification).
+- Tests run each file in a separate Bun process to preserve isolation without
+  Bun's [Linux `--isolate` stdio leak](https://github.com/oven-sh/bun/issues/37968),
+  which remains present in 1.4.3.
 - `bun run format` formats the repository. Avoid unrelated formatting changes.
 - Browser tests use mocked extension Ports. They do not prove live API behavior.
 - Use a test conversation for live checks. Visible latest messages can be marked read.

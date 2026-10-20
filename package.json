@@ -2,9 +2,9 @@
     "name": "instagram-client-reels",
     "version": "0.1.0",
     "type": "module",
-    "packageManager": "bun@1.3.13",
+    "packageManager": "bun@1.4.3",
     "engines": {
-        "bun": ">=1.3.13"
+        "bun": ">=1.4.3"
     },
     "scripts": {
         "dev": "wxt",
@@ -14,7 +14,7 @@
         "check": "tsc --noEmit",
         "zip": "wxt zip",
         "test:setup": "playwright install chromium",
-        "test": "bun test --isolate --timeout 30000 tests/*.test.ts",
+        "test": "sh -c 'for file in tests/*.test.ts; do bun test --timeout 30000 \"$file\" || exit $?; done'",
         "prepare": "wxt prepare"
     },
     "dependencies": {

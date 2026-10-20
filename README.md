@@ -18,7 +18,7 @@ Next: UI polish, richer interactions, and media playback.
 
 ## Try it
 
-Requires Bun 1.3.13 or newer.
+Requires Bun 1.4.3 or newer.
 
 ```sh
 bun install --frozen-lockfile
