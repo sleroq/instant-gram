@@ -7,8 +7,8 @@ feature evolution are governed by the
 The production `ui.html` uses `solid-js` and `@solidjs/web` 2.0.0-rc.7 with
 `@solidjs/vite-plugin` 3.0.0-next.41, TypeScript 6.0.3, and Vite 8.1.3. TypeScript
 preserves JSX with `@solidjs/web` as its JSX source, and the Vite plugin is
-scoped to `entrypoints/ui/**`. Run `npm run dev` or build the ordinary extension
-with `npm run build`; there is no preview gate or alternate output.
+scoped to `entrypoints/ui/**`. Run `bun run dev` or build the ordinary extension
+with `bun run build`; there is no preview gate or alternate output.
 
 Components import reactive primitives from `solid-js` and DOM rendering from
 `@solidjs/web`, retain reactive props, use draft store setters, stable keyed
@@ -38,6 +38,6 @@ Oxlint configuration follows the official Solid 2 basic template at
 https://github.com/solidjs/templates/blob/50736223547106aaf370a552e6daf69767f637e9/solid-v2/basic/oxlint.config.ts
 with only WXT generated-output ignores added.
 
-Run `npm run lint`, `npm test`, `npm run check`, and `npm run build` before
+Run `bun run lint`, `bun run test`, `bun run check`, and `bun run build` before
 finishing frontend work. Formatting is available separately through
-`npm run format`.
+`bun run format`.

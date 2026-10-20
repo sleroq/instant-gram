@@ -414,7 +414,7 @@ because parsers/types exist.
 
 ## Quality gate for every slice
 
-- [ ] Run `npm test`, `npm run check`, `npm run lint`, `npm run build`,
+- [ ] Run `bun run test`, `bun run check`, `bun run lint`, `bun run build`,
       `git diff --check`, and the repository shared `ast-grep` scan.
 - [ ] Split tests by feature/owner and cover behavioral requirements through
       current contracts; do not restore a retired harness or one giant suite.

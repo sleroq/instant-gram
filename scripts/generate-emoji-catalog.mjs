@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 
 import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
@@ -21,7 +21,7 @@ const CATEGORY_DETAILS = {
 const [inputPath, outputPath] = process.argv.slice(2);
 if (!inputPath || !outputPath) {
     console.error(
-        'Usage: node scripts/generate-emoji-catalog.mjs <emoji-test.txt> <output.ts>',
+        'Usage: bun scripts/generate-emoji-catalog.mjs <emoji-test.txt> <output.ts>',
     );
     process.exit(1);
 }

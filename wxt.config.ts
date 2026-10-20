@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { chromium } from 'playwright';
 import solid from '@solidjs/vite-plugin';
 import { defineConfig } from 'wxt';
 
@@ -9,6 +8,8 @@ const chromiumProfile = fileURLToPath(
     new URL('./.dev/chromium-profile/', import.meta.url),
 );
 mkdirSync(chromiumProfile, { recursive: true });
+// Shared with opencode.json so MCP attaches to the dev browser.
+const devPort = 9223;
 
 // Public key only: fixes the development addon ID for the browser startup URL.
 const devKey =
@@ -25,35 +26,31 @@ export default defineConfig({
     webExt: {
         chromiumProfile,
         keepProfileChanges: true,
+        chromiumArgs: [`--remote-debugging-port=${devPort}`],
     },
     hooks: {
         async 'server:created'(wxt, server) {
-            if (wxt.config.browser === 'firefox') return;
-            // Shared with opencode.json so MCP attaches to the dev browser.
-            const port = 9223;
-            const config = wxt.config.runnerConfig.config;
-            if (config.disabled) return;
-            config.chromiumArgs = [
-                ...(config.chromiumArgs ?? []),
-                `--remote-debugging-port=${port}`,
-            ];
+            if (
+                wxt.config.browser === 'firefox' ||
+                wxt.config.runnerConfig.config.disabled
+            )
+                return;
             async function openUi() {
-                const browser = await chromium.connectOverCDP(
-                    `http://127.0.0.1:${port}`,
+                const endpoint = `http://127.0.0.1:${devPort}`;
+                const url = `chrome-extension://${devId}/ui.html`;
+                const pages: Array<{ id: string; url: string }> = await fetch(
+                    `${endpoint}/json/list`,
+                ).then((response) => response.json());
+                const page = pages.find((page) => page.url === url);
+                // Playwright's bundled WebSocket transport cannot attach in Bun.
+                const response = await fetch(
+                    page
+                        ? `${endpoint}/json/activate/${page.id}`
+                        : `${endpoint}/json/new?${url}`,
+                    { method: page ? 'GET' : 'PUT' },
                 );
-                try {
-                    const context = browser.contexts()[0];
-                    const url = `chrome-extension://${devId}/ui.html`;
-                    const pages = context.pages();
-                    const page =
-                        pages.find((page) => page.url() === url) ??
-                        pages.find((page) => page.url() === 'about:blank') ??
-                        (await context.newPage());
-                    if (page.url() !== url) await page.goto(url);
-                    await page.bringToFront();
-                } finally {
-                    await browser.close();
-                }
+                if (!response.ok)
+                    throw new Error(`Cannot open dev UI: ${response.status}`);
             }
             const start = server.start.bind(server);
             server.start = async () => {

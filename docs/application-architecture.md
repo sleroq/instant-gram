@@ -322,7 +322,7 @@ architecture:
   scrolling, responsive routes, media, and same-frame feedback;
 - installed-extension/live-account checks recorded separately from mocked tests.
 
-Every change runs `npm run lint`, `npm test`, `npm run check`, `npm run build`,
+Every change runs `bun run lint`, `bun run test`, `bun run check`, `bun run build`,
 `git diff --check`, and the shared ast-grep scan. Tests assert one authority,
 partition isolation, no network inside transactions, and explicit memory,
 projection, DOM, and persistence bounds.

@@ -22,18 +22,19 @@ unknown account identity and genuinely missing data still require waiting.
 
 ## Develop
 
-Requires Node.js 22 or newer.
+Requires Bun 1.3.13 or newer; Node.js is not needed. Install dependencies from
+the committed lockfile with `--frozen-lockfile`.
 
 ```sh
-npm ci
-npm run dev
+bun install --frozen-lockfile
+bun run dev
 ```
 
 Development uses a dedicated persistent Chromium profile at
 `.dev/chromium-profile` (ignored by Git). WXT opens the extension's Messages page
 after the addon has loaded, without depending on a background-worker event.
 Log into Instagram once in the browser
-opened by `npm run dev`; subsequent runs reuse its cookies and session until
+opened by `bun run dev`; subsequent runs reuse its cookies and session until
 Instagram expires it or you log out. Keep an Instagram tab open for the extension
 provider. Close the previous dev browser before restarting; do not run two dev
 instances against the same profile. Delete `.dev/chromium-profile` with the dev
@@ -42,20 +43,20 @@ share it.
 
 The dev browser exposes remote debugging on `127.0.0.1:9223`.
 `opencode.json` attaches Chrome DevTools MCP to that same browser; start
-`npm run dev` before using browser tools and restart MCP after changing its
+`bun run dev` before using browser tools and restart MCP after changing its
 configuration. Keep port `9223` free of other browser debugging sessions.
 
 Before submitting a change:
 
 ```sh
-npm run lint
-npm test
-npm run check
-npm run build
+bun run lint
+bun run test
+bun run check
+bun run build
 git diff --check
 ```
 
-Install browser test Chromium once with `npm run test:setup` when needed.
+Install browser test Chromium once with `bun run test:setup` when needed.
 
 The repository's local shared lint policy additionally requires an existing
 `$HOME/sgconfig.yml`:
@@ -67,8 +68,8 @@ ast-grep scan --config "$HOME/sgconfig.yml" --no-ignore hidden .
 ## Install the unpacked extension
 
 ```sh
-npm ci
-npm run build
+bun install --frozen-lockfile
+bun run build
 ```
 
 Open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**,

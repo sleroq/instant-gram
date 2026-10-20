@@ -5,8 +5,8 @@
             "chrome-devtools": {
                 "type": "local",
                 "command": [
-                    "npx",
-                    "-y",
+                    "bunx",
+                    "--bun",
                     "chrome-devtools-mcp@latest",
                     "--browser-url=http://127.0.0.1:9223",
                     "--categoryExtensions",

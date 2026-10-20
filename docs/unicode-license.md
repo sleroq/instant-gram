@@ -7,7 +7,7 @@ Unicode Emoji 17.0 `emoji-test.txt` (2025-08-04), pinned at
 It can be regenerated deterministically after downloading that file with:
 
 ```sh
-node scripts/generate-emoji-catalog.mjs emoji-test.txt entrypoints/ui/emoji-catalog.ts
+bun scripts/generate-emoji-catalog.mjs emoji-test.txt entrypoints/ui/emoji-catalog.ts
 ```
 
 COPYRIGHT AND PERMISSION NOTICE

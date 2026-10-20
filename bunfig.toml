@@ -1,0 +1,3 @@
+[run]
+# Run Node-shebang CLIs with Bun, even when Node is installed.
+bun = true

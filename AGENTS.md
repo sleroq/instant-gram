@@ -22,8 +22,8 @@ remain protocol references for future rebuilding.
 
 You can verify UI and UX behaviour by testing the extension via chrome mcp skill yourself if the task requires it.
 
-Verify frontend changes with `npm run lint`, `npm test`, `npm run check`,
-`npm run build`, `git diff --check`, and the shared repository scan:
+Verify frontend changes with `bun run lint`, `bun run test`, `bun run check`,
+`bun run build`, `git diff --check`, and the shared repository scan:
 
 ```sh
 ast-grep scan --config "$HOME/sgconfig.yml" --no-ignore hidden .
