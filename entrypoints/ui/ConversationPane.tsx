@@ -43,8 +43,8 @@ export function ConversationPane(props: {
     saveAnchor(anchor: HistoryAnchor | undefined): void;
 }) {
     const [range, setRange] = createSignal<HistoryWindow>({ start: 0, end: 0 });
-    const [olderIntent, setOlderIntent] = createSignal('');
-    const [newerIntent, setNewerIntent] = createSignal('');
+    let olderIntent = '';
+    let newerIntent = '';
     const allIds = createMemo(() => props.history?.orderedIds || []);
     const visibleIds = createMemo(() => {
         const current = range();
@@ -52,7 +52,7 @@ export function ConversationPane(props: {
     });
     const viewport = createHistoryViewportController(() => {
         const element = controller.element();
-        if (element && followBottom) element.scrollTop = element.scrollHeight;
+        if (element && followBottom) controller.scrollToBottom();
         else if (anchor) controller.correct(anchor);
         if (element && element.scrollHeight <= element.clientHeight + 1) {
             requestOlderIfNeeded();
@@ -85,13 +85,13 @@ export function ConversationPane(props: {
     function capture() {
         const next = controller.capture();
         if (next) {
-            anchor = next;
-            props.saveAnchor(next);
+            anchor = { ...next, followNewest: followBottom };
+            props.saveAnchor(anchor);
         }
     }
 
     function windowKey(history: HistoryProjection) {
-        return `${history.fetchedAt}:${history.orderedIds[0]}:${history.orderedIds.at(-1)}:${history.orderedIds.length}`;
+        return `${history.coverageGeneration}:${history.fetchedAt}:${history.orderedIds[0]}:${history.orderedIds.at(-1)}:${history.orderedIds.length}:${history.cachedNewer}:${history.newerCoverageAvailable}`;
     }
 
     function requestOlderIfNeeded(history = props.history) {
@@ -107,23 +107,32 @@ export function ConversationPane(props: {
         )
             return;
         const key = windowKey(history);
-        if (olderIntent() === key) return;
-        setOlderIntent(key);
+        if (olderIntent === key) return;
+        olderIntent = key;
         props.onLoadOlder();
     }
 
-    function requestNewerIfNeeded(history = props.history) {
+    function requestNewerIfNeeded(
+        history = props.history,
+        adoptCurrent = followBottom,
+    ) {
         const element = controller.element();
         if (
-            !history?.cachedNewer ||
+            !history ||
+            (!history.cachedNewer &&
+                !(adoptCurrent && history.newerCoverageAvailable)) ||
             !element ||
             range().end < history.orderedIds.length ||
             element.scrollTop + element.clientHeight < element.scrollHeight - 1
         )
             return;
         const key = windowKey(history);
-        if (newerIntent() === key) return;
-        setNewerIntent(key);
+        if (newerIntent === key) return;
+        newerIntent = key;
+        if (adoptCurrent && !history.cachedNewer) {
+            anchor = undefined;
+            followBottom = true;
+        }
         props.onLoadNewer();
     }
 
@@ -135,7 +144,7 @@ export function ConversationPane(props: {
                 (history.retentionLimited || !history.hasNextPage))
         )
             return;
-        setOlderIntent('');
+        olderIntent = '';
         capture();
         props.onLoadOlder();
     }
@@ -148,13 +157,6 @@ export function ConversationPane(props: {
     function retryHistoryError() {
         if (props.history?.failedOperation === 'continuation') retryOlder();
         else refreshHistory();
-    }
-
-    function showLatest() {
-        anchor = undefined;
-        followBottom = true;
-        firstRender = true;
-        props.onLoadNewer();
     }
 
     function moveOlderLocal() {
@@ -301,28 +303,54 @@ export function ConversationPane(props: {
         () => queueMicrotask(markSeen),
     );
 
+    function atBottom() {
+        const element = controller.element();
+        return Boolean(
+            element &&
+                element.scrollTop + element.clientHeight >=
+                    element.scrollHeight - 1,
+        );
+    }
+
+    function atNewest() {
+        return (
+            range().end === allIds().length &&
+            !props.history?.cachedNewer &&
+            !props.history?.newerCoverageAvailable
+        );
+    }
+
+    function advanceNewer() {
+        if (atNewest()) followBottom = true;
+        capture();
+        const next = moveNewer(range(), allIds().length);
+        if (next.end !== range().end) {
+            localMovePending = true;
+            setRange(next);
+        } else requestNewerIfNeeded(props.history, true);
+    }
+
     function handleScroll(event: Event) {
         const element = controller.element();
         if (!element || event.currentTarget !== element) return;
+        const direction = controller.scrollDirection();
         capture();
         markSeen();
-        const atBottom =
-            element.scrollTop + element.clientHeight >=
-            element.scrollHeight - 1;
-        followBottom =
-            atBottom &&
-            range().end === allIds().length &&
-            !props.history?.cachedNewer;
-        if (element.scrollTop <= 1) {
+        // Corrections and recycled windows do not express navigation intent.
+        if (!direction) return;
+        followBottom = atBottom() && atNewest();
+        if (direction < 0 && element.scrollTop <= 1) {
             if (!moveOlderLocal()) requestOlderIfNeeded();
-        } else if (atBottom) {
-            const next = moveNewer(range(), allIds().length);
-            if (next.end !== range().end) {
-                localMovePending = true;
-                setRange(next);
-            } else requestNewerIfNeeded();
-        }
+        } else if (direction > 0 && atBottom()) advanceNewer();
     }
+
+    function forwardAtBottom(event: Event) {
+        if (!atBottom()) return;
+        event.preventDefault();
+        advanceNewer();
+    }
+
+    let touchY = 0;
 
     createEffect(
         () => {
@@ -337,7 +365,7 @@ export function ConversationPane(props: {
                 history ? { ...history, orderedIds: ids } : undefined,
             ] as const;
         },
-        ([threadId, ids, savedAnchor, , , history], previous) => {
+        ([threadId, ids, savedAnchor], previous) => {
             const previousIds = previous?.[1] ?? [];
             const idsChanged =
                 ids.length !== previousIds.length ||
@@ -349,22 +377,28 @@ export function ConversationPane(props: {
                     ? ids.indexOf(savedAnchor.id)
                     : -1;
                 anchor = savedAnchor;
+                followBottom = savedAnchor?.followNewest ?? false;
                 if (ids.length > 0 && savedIndex < 0) anchor = undefined;
                 setRange(
-                    savedIndex >= 0
+                    savedIndex >= 0 && !followBottom
                         ? windowContaining(ids.length, savedIndex)
                         : initialHistoryWindow(ids.length),
                 );
-                setOlderIntent('');
-                setNewerIntent('');
+                olderIntent = '';
+                newerIntent = '';
                 firstRender = true;
-            } else if (anchor && ids.length > 0 && !ids.includes(anchor.id)) {
+            } else if (
+                anchor &&
+                !followBottom &&
+                ids.length > 0 &&
+                !ids.includes(anchor.id)
+            ) {
                 anchor = undefined;
                 setRange(initialHistoryWindow(ids.length));
                 firstRender = true;
             } else if (idsChanged) {
                 const target = anchor ? ids.indexOf(anchor.id) : -1;
-                if (followBottom && !history?.cachedNewer) {
+                if (followBottom) {
                     anchor = undefined;
                     setRange(initialHistoryWindow(ids.length));
                 } else if (target >= 0) {
@@ -376,14 +410,18 @@ export function ConversationPane(props: {
 
             queueMicrotask(() => {
                 const element = controller.element();
+                const history = props.history;
                 if (!element) return;
                 if (firstRender) {
-                    followBottom = !anchor && !history?.cachedNewer;
-                    if (anchor) controller.correct(anchor);
-                    else element.scrollTop = element.scrollHeight;
+                    followBottom ||=
+                        !anchor &&
+                        !history?.cachedNewer &&
+                        !history?.newerCoverageAvailable;
+                    if (anchor && !followBottom) controller.correct(anchor);
+                    else controller.scrollToBottom();
                     firstRender = false;
                 } else if (followBottom) {
-                    element.scrollTop = element.scrollHeight;
+                    controller.scrollToBottom();
                 } else if (anchor) {
                     controller.correct(anchor);
                 }
@@ -552,6 +590,29 @@ export function ConversationPane(props: {
                     class="solid-history__viewport"
                     ref={(element) => controller.attach(element)}
                     onScroll={handleScroll}
+                    onWheel={(event) => {
+                        if (!event.ctrlKey && event.deltaY > 0)
+                            forwardAtBottom(event);
+                    }}
+                    onKeyDown={(event) => {
+                        if (
+                            event.target === event.currentTarget &&
+                            ['End', 'PageDown', 'ArrowDown', ' '].includes(
+                                event.key,
+                            ) &&
+                            !event.shiftKey
+                        )
+                            forwardAtBottom(event);
+                    }}
+                    onTouchStart={(event) => {
+                        touchY = event.touches[0].clientY;
+                    }}
+                    onTouchMove={(event) => {
+                        const nextY = event.touches[0].clientY;
+                        if (event.touches.length === 1 && nextY < touchY)
+                            forwardAtBottom(event);
+                        touchY = nextY;
+                    }}
                     tabindex={0}
                     aria-label="Messages"
                 >
@@ -666,21 +727,6 @@ export function ConversationPane(props: {
                             );
                         }}
                     </For>
-                    <Show
-                        when={
-                            props.history?.newerCoverageAvailable &&
-                            !props.history?.cachedNewer &&
-                            range().end === allIds().length
-                        }
-                    >
-                        <button
-                            class="solid-history__older"
-                            type="button"
-                            onClick={showLatest}
-                        >
-                            Show latest messages
-                        </button>
-                    </Show>
                     <Show when={props.history?.retentionLimited}>
                         <p class="solid-history__retention">
                             Retained history limit reached
@@ -711,8 +757,7 @@ export function ConversationPane(props: {
                             element &&
                                 element.scrollTop + element.clientHeight >=
                                     element.scrollHeight - 1 &&
-                                range().end === allIds().length &&
-                                !props.history?.cachedNewer,
+                                atNewest(),
                         );
                         if (followBottom) anchor = undefined;
                         else capture();
