@@ -1,6 +1,6 @@
 # Instant Gram
 
-A lightweight Instagram messaging extension for Chromium.
+A lightweight Instagram messaging client for Chromium.
 Built to feel fast, even when Instagram's API is slow.
 
 An IndexedDB-backed engine keeps loaded conversations close.
