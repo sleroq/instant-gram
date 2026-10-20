@@ -166,8 +166,6 @@ export function createInboxReader(
             {
                 count: 5,
                 cursor,
-                folder: 'INBOX',
-                newerThanTimestampMs: null,
                 mailboxId,
             },
             expected,

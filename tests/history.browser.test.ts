@@ -177,10 +177,24 @@ async function openHistory(
         };
 
         let boundedStart = 1000;
+        const corpus = { ...projection.entities.messagesById };
+        function selectWindowFacts(next: InboxProjection) {
+            const ids = new Set(
+                Object.values(next.histories).flatMap(
+                    (history) => history.orderedIds,
+                ),
+            );
+            for (const thread of Object.values(next.entities.threadsById)) {
+                if (thread.lastMessageId) ids.add(thread.lastMessageId);
+            }
+            next.entities.messagesById = Object.fromEntries(
+                [...ids].map((id) => [id, corpus[id]]),
+            );
+        }
         if (options.bounded) {
             for (let index = 0; index < 1400; index++) {
                 const id = `message-${index}`;
-                projection.entities.messagesById[id] = {
+                corpus[id] = {
                     id,
                     ts: 1_700_000_000_000 + index * 60_000,
                     kind: 'text',
@@ -194,6 +208,7 @@ async function openHistory(
             );
             projection.histories['thread-0'].cachedOlder = true;
             projection.histories['thread-0'].cachedNewer = false;
+            selectWindowFacts(projection);
         }
 
         const authorized = structuredClone(projection);
@@ -280,6 +295,7 @@ async function openHistory(
                                     );
                                     history.cachedOlder = boundedStart > 0;
                                     history.cachedNewer = boundedStart < 1000;
+                                    selectWindowFacts(next);
                                     queueMicrotask(() =>
                                         window.historyTest.send(
                                             next,
@@ -1148,6 +1164,15 @@ test('bounded worker windows traverse exhausted cached history without cursor or
             }
 
             assert.ok((await page.locator('[data-message-id]').count()) <= 80);
+            assert.equal(
+                await page.evaluate(
+                    () =>
+                        Object.keys(
+                            window.historyTest.current.entities.messagesById,
+                        ).length,
+                ),
+                401,
+            );
             assert.equal(
                 await page.evaluate(
                     () =>

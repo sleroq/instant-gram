@@ -21,18 +21,7 @@ export interface InboxClientPort {
     disconnect(): void;
 }
 
-export function registerInboxClientPorts(
-    port: InboxClientPort,
-    engine: InboxEngine,
-) {
-    const own = new URL(browser.runtime.getURL('/'));
-    if (port.name !== INBOX_CLIENT_PORT || !port.sender?.url) return;
-    const sender = new URL(port.sender.url);
-    if (sender.origin !== own.origin || sender.pathname !== '/ui.html') {
-        port.disconnect();
-        return;
-    }
-
+function bindInboxClientPort(port: InboxClientPort, engine: InboxEngine) {
     let sequence = 0;
     let unsubscribe: (() => void) | undefined;
     let selectedListener: ((projection: InboxProjection) => void) | undefined;
@@ -89,19 +78,21 @@ export function registerInboxClientPorts(
             handle(engine.loadNewerHistory(command.threadId, selectedListener));
     }
 
-    port.onMessage.addListener(receive);
-    port.onDisconnect.addListener(() => {
-        closed = true;
-        unsubscribe?.();
-        unsubscribe = undefined;
-        selectedListener = undefined;
-    });
+    return {
+        receive,
+        disconnect() {
+            closed = true;
+            unsubscribe?.();
+            unsubscribe = undefined;
+            selectedListener = undefined;
+        },
+    };
 }
 
 /** Installs the MV3 host listener before runtime initialization can yield. */
 export function prepareInboxClientPort(port: InboxClientPort) {
     const buffered: PortMessage[] = [];
-    let receive: ((message: PortMessage) => void) | undefined;
+    let receiver: ReturnType<typeof bindInboxClientPort> | undefined;
     let closed = false;
     const own = new URL(browser.runtime.getURL('/'));
     const sender = port.sender?.url ? new URL(port.sender.url) : undefined;
@@ -116,30 +107,18 @@ export function prepareInboxClientPort(port: InboxClientPort) {
 
     port.onMessage.addListener((message) => {
         if (closed) return;
-        if (receive) receive(message);
+        if (receiver) receiver.receive(message);
         else buffered.push(message);
     });
     port.onDisconnect.addListener(() => {
         closed = true;
         buffered.length = 0;
+        receiver?.disconnect();
     });
 
     return (engine: InboxEngine) => {
         if (closed) return;
-        const adapter: InboxClientPort = {
-            name: port.name,
-            sender: port.sender,
-            onMessage: {
-                addListener(listener: (message: PortMessage) => void) {
-                    receive = listener;
-                },
-            },
-            onDisconnect: port.onDisconnect,
-            postMessage: (message) => port.postMessage(message),
-            disconnect: () => port.disconnect(),
-        };
-        registerInboxClientPorts(adapter, engine);
-        if (!receive) return;
-        for (const message of buffered.splice(0)) receive(message);
+        receiver = bindInboxClientPort(port, engine);
+        for (const message of buffered.splice(0)) receiver.receive(message);
     };
 }

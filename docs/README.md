@@ -19,7 +19,6 @@
   drift; verify fresh evidence before extending the production capability surface.
 - [Motion requirements](telegram-animation-research.md) retain clean-room R5
   requirements without the retired runtime's implementation plan.
-- [Unicode license](unicode-license.md) accompanies the retained emoji generator.
 
 ## Captures and privacy
 

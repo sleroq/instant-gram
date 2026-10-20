@@ -1,7 +1,6 @@
-import { Context, Deferred, Effect, Exit, Layer, Result, Schema } from 'effect';
+import { Context, Deferred, Effect, Exit, Layer, Schema } from 'effect';
 import type { Page, Thread, ThreadMessages } from '../domain.ts';
 import type { JsonValue } from '../json.ts';
-import type { InboxProvider } from '../engine/inbox.ts';
 import { InboxError } from '../engine/resources.ts';
 import {
     PROVIDER_PORT,
@@ -551,39 +550,4 @@ export function inboxProviderLive(options: {
             InboxProviderService.of,
         ),
     );
-}
-
-/** Compatibility boundary for the Promise-based engine and its existing tests. */
-export function inboxProviderPromiseFacade(
-    provider: InboxProviderEffects,
-    runPromise: <A>(effect: Effect.Effect<A>) => Promise<A> = Effect.runPromise,
-): InboxProvider & { accept(port: ProviderPort): void } {
-    async function run<A>(effect: Effect.Effect<A, InboxProviderError>) {
-        const result = await runPromise(Effect.result(effect));
-        if (Result.isFailure(result)) throw result.failure;
-        return result.success;
-    }
-    return {
-        accept: provider.accept,
-        account: () => run(provider.account),
-        inbox: (account, cursor) => run(provider.inbox(account, cursor)),
-        history: (account, thread, cursor) =>
-            run(provider.history(account, thread, cursor)),
-    };
-}
-
-export function createInboxProvider(options: {
-    ensureAnchor(
-        hasReadyConnection: (tabId: number) => boolean,
-    ): Promise<number>;
-    extensionId: string;
-}): InboxProvider & {
-    accept(port: ProviderPort): void;
-    dispose(): void;
-} {
-    const provider = makeInboxProvider(options);
-    return {
-        ...inboxProviderPromiseFacade(provider),
-        dispose: provider.dispose,
-    };
 }

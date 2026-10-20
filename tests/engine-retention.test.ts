@@ -1,8 +1,8 @@
+import { createInboxEngine } from './engine-fixture.ts';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { IDBFactory } from 'fake-indexeddb';
 import { createInboxRepository } from '../lib/engine/db.ts';
-import { createInboxEngine } from '../lib/engine/inbox.ts';
 import type { InboxProjection } from '../lib/engine/resources.ts';
 import type { Message, Thread, ThreadMessages } from '../lib/domain.ts';
 
@@ -38,7 +38,7 @@ function ready() {
 
 test('different active threads retain complete window facts across bounded commits', async (t) => {
     const repository = createInboxRepository(new IDBFactory());
-    const engine = createInboxEngine(repository, {
+    const engine = await createInboxEngine(repository, {
         account: async () => 'account',
         inbox: async () => ({
             items: ['a', 'b'].map((key) => ({ ...conversation, key })),
@@ -88,7 +88,7 @@ test('different active threads retain complete window facts across bounded commi
 test('replacement owners receive one window and root credit without renewing healthy identity', async (t) => {
     const repository = createInboxRepository(new IDBFactory());
     let accounts = 0;
-    const engine = createInboxEngine(repository, {
+    const engine = await createInboxEngine(repository, {
         account: async () => {
             accounts++;
             return 'account';
@@ -182,7 +182,7 @@ test('complete 30-page history survives restart with independent bounded cached 
         },
     };
     const repository = createInboxRepository(factory);
-    const engine = createInboxEngine(repository, provider);
+    const engine = await createInboxEngine(repository, provider);
     t.after(engine.dispose);
     const initial = ready();
     const stop = engine.subscribe((value) => {
@@ -207,7 +207,7 @@ test('complete 30-page history survives restart with independent bounded cached 
     await repository.close();
 
     const reopened = createInboxRepository(factory);
-    const restarted = createInboxEngine(reopened, provider);
+    const restarted = await createInboxEngine(reopened, provider);
     t.after(async () => {
         await restarted.dispose();
         await reopened.close();
@@ -248,7 +248,7 @@ test('complete 30-page history survives restart with independent bounded cached 
 test('only 20 granted windows contribute detail interest and rejected listeners can retry a released slot', async (t) => {
     const repository = createInboxRepository(new IDBFactory());
     let requests = 0;
-    const engine = createInboxEngine(repository, {
+    const engine = await createInboxEngine(repository, {
         account: async () => 'window-account',
         inbox: async () => ({ items: [conversation], hasNextPage: false }),
         history: async () => {
@@ -313,7 +313,7 @@ test('older in-flight facts cannot replace newer durable facts after their runti
     const pending = new Promise<ThreadMessages>((resolve) => {
         complete = resolve;
     });
-    const engine = createInboxEngine(repository, {
+    const engine = await createInboxEngine(repository, {
         account: async () => 'account',
         inbox: async () => ({
             items: ['a', 'b', 'c', 'd', 'e'].map((key) => ({
@@ -413,7 +413,7 @@ test('changed heads preserve independent previous coverage and use its own older
                   };
         },
     };
-    const engine = createInboxEngine(repository, provider);
+    const engine = await createInboxEngine(repository, provider);
     t.after(async () => {
         await engine.dispose();
         await repository.close();

@@ -18,11 +18,6 @@ import {
 import { createHistoryViewportController } from './history-viewport';
 import { MessageRow, dateLabel } from './MessageRow';
 
-function failedOperation(history: HistoryProjection | undefined) {
-    if (history && 'failedOperation' in history) return history.failedOperation;
-    return undefined;
-}
-
 export function ConversationPane(props: {
     threadId: string;
     facts: EntityFacts;
@@ -139,7 +134,7 @@ export function ConversationPane(props: {
     }
 
     function retryHistoryError() {
-        if (failedOperation(props.history) === 'continuation') retryOlder();
+        if (props.history?.failedOperation === 'continuation') retryOlder();
         else refreshHistory();
     }
 
@@ -343,7 +338,7 @@ export function ConversationPane(props: {
                                     !props.history?.retentionLimited)) &&
                             (props.history?.cachedOlder ||
                                 !props.history?.error ||
-                                failedOperation(props.history) ===
+                                props.history?.failedOperation ===
                                     'continuation')
                         }
                     >

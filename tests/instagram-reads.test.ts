@@ -78,10 +78,7 @@ test('live reader uses exact captured descriptors, opaque cursors, and account-s
         calls[1].variables,
         INSTAGRAM_GRAPHQL_OPERATIONS.IGDThreadListOffMsysPaginationQuery.buildVariables(
             {
-                count: 5,
                 cursor: 'opaque:page/==',
-                folder: 'INBOX',
-                newerThanTimestampMs: null,
                 mailboxId: 'mailbox-account-1',
             },
             tokens,

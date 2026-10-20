@@ -1,14 +1,12 @@
-import type { Message, Page, Thread, ThreadMessages } from '../domain.ts';
+import type { Message, Page, Thread } from '../domain.ts';
 import {
     Clock,
     Context,
     Deferred,
     Effect,
-    Exit,
     Fiber,
     FiberSet,
     Layer,
-    Scope,
     Semaphore,
 } from 'effect';
 import type { InboxRepositoryEffects } from './db.ts';
@@ -46,16 +44,6 @@ export type {
     ResourceProjection,
     ThreadFact,
 };
-
-export interface InboxProvider {
-    account(): Promise<string>;
-    inbox(expectedAccountId: string, cursor?: string): Promise<Page<Thread>>;
-    history(
-        expectedAccountId: string,
-        threadKey: string,
-        cursor?: string,
-    ): Promise<ThreadMessages>;
-}
 
 export type InboxEngine = {
     subscribe(
@@ -2048,98 +2036,3 @@ export const inboxEngineLive = Layer.effect(
         );
     }),
 );
-
-/** Promise compatibility boundary for legacy callers and engine tests. */
-export function createInboxEngine(
-    repository: InboxRepository,
-    provider: InboxProvider,
-): InboxEngine & { dispose(): Promise<void> } {
-    const scope = Scope.makeUnsafe();
-
-    const repositoryEffects: InboxRepositoryEffects = {
-        readHistoryWindow: (accountId, threadId, request) =>
-            Effect.tryPromise({
-                try: () =>
-                    repository.readHistoryWindow(accountId, threadId, request),
-                catch: () => new InboxError('storage'),
-            }),
-        touchHistory: (accountId, threadId, accessedAt) =>
-            Effect.tryPromise({
-                try: () =>
-                    repository.touchHistory(accountId, threadId, accessedAt),
-                catch: () => new InboxError('storage'),
-            }),
-        readHistoryInventory: (accountId, limit) =>
-            Effect.tryPromise({
-                try: () => repository.readHistoryInventory(accountId, limit),
-                catch: () => new InboxError('storage'),
-            }),
-        readResources: (accountId, keys) =>
-            Effect.tryPromise({
-                try: () => repository.readResources(accountId, keys),
-                catch: (cause) =>
-                    cause instanceof InboxError
-                        ? cause
-                        : new InboxError('storage'),
-            }),
-        commitResources: (accountId, update) =>
-            Effect.tryPromise({
-                try: () => repository.commitResources(accountId, update),
-                catch: (cause) =>
-                    cause instanceof InboxError
-                        ? cause
-                        : new InboxError('storage'),
-            }),
-        close: Effect.tryPromise({
-            try: () => repository.close(),
-            catch: (cause) =>
-                cause instanceof InboxError ? cause : new InboxError('storage'),
-        }),
-    };
-    const providerEffects: InboxProviderEffects = {
-        accept: () => undefined,
-        account: Effect.tryPromise({
-            try: () => provider.account(),
-            catch: (cause) =>
-                cause instanceof InboxError
-                    ? cause
-                    : new InboxError('provider_unavailable'),
-        }),
-        inbox: (accountId, cursor) =>
-            Effect.tryPromise({
-                try: () => provider.inbox(accountId, cursor),
-                catch: (cause) =>
-                    cause instanceof InboxError
-                        ? cause
-                        : new InboxError('protocol'),
-            }),
-        history: (accountId, threadId, cursor) =>
-            Effect.tryPromise({
-                try: () => provider.history(accountId, threadId, cursor),
-                catch: (cause) =>
-                    cause instanceof InboxError
-                        ? cause
-                        : new InboxError('protocol'),
-            }),
-    };
-    const engine = Effect.runSync(
-        Scope.provide(scope)(
-            makeInboxEngine(repositoryEffects, providerEffects),
-        ),
-    );
-    return {
-        ...engine,
-        dispose: () => Effect.runPromise(Scope.close(scope, Exit.void)),
-        refresh: () =>
-            Effect.runPromise(Effect.andThen(engine.refresh, Effect.yieldNow)),
-        loadMoreInbox: () => Effect.runPromise(engine.loadMoreInbox),
-        refreshHistory: (threadId, listener, anchorId) =>
-            Effect.runPromise(
-                engine.refreshHistory(threadId, listener, anchorId),
-            ),
-        loadOlderHistory: (threadId, listener) =>
-            Effect.runPromise(engine.loadOlderHistory(threadId, listener)),
-        loadNewerHistory: (threadId, listener) =>
-            Effect.runPromise(engine.loadNewerHistory(threadId, listener)),
-    };
-}

@@ -5,6 +5,23 @@ R0, R1, and complete-history retention are completed; R2 is unblocked and not ye
 started. This is user acceptance, not an additional agent-run test or new
 per-scenario measurement.
 
+## Cleanup verification
+
+After removing dormant API implementations and compatibility adapters, fresh
+local checks passed: 138 tests, lint, TypeScript, production build,
+`git diff --check`, and the shared ast-grep scan with no findings.
+
+A temporary installation of the rebuilt production extension in the existing
+authenticated browser loaded 15 inbox rows and 20 history rows. Loading older
+messages produced 40 rows; explicit history refresh settled without alerts or
+console warnings/errors. The compiled MAIN-world probe was also invoked against
+the live page modules and supplied all required fields without HTML/script
+scraping or diagnostic source metadata. Only field presence and counts were
+recorded, not credentials or private content. The temporary extension and test
+window were removed; the two previously installed copies were left untouched.
+This does not extend the account-switch, offline, or pressure-eviction evidence
+below, nor establish a new packaged release or performance benchmark.
+
 ## Recorded evidence
 
 - Recorded quality checks passed: tests, lint, TypeScript, production build, and

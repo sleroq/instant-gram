@@ -1,3 +1,4 @@
+import { createInboxEngine } from './engine-fixture.ts';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { IDBFactory } from 'fake-indexeddb';
@@ -9,7 +10,6 @@ import type {
 } from '../lib/engine/resources.ts';
 import type { Message, Page, Thread } from '../lib/domain.ts';
 import {
-    createInboxEngine,
     InboxError,
     normalizeMessages,
     normalizePage,
@@ -279,7 +279,7 @@ test('native repository detail hydration preserves other inbox facts during a de
     });
 
     const network = deferred<Page<Thread>>();
-    const engine = createInboxEngine(
+    const engine = await createInboxEngine(
         repository,
         provider({ inbox: () => network.promise }),
     );
@@ -312,7 +312,7 @@ test('new subscribers cannot observe retained facts while renewed identity is pe
     const repository = new MemoryRepository();
     const identity = deferred<string>();
     let recheck = false;
-    const engine = createInboxEngine(
+    const engine = await createInboxEngine(
         repository,
         provider({
             account: () =>
@@ -365,7 +365,7 @@ test('hydrates cached inbox and history before one deferred background inbox ref
     const networkStarted = deferred<void>();
     let inboxCalls = 0;
     let historyCalls = 0;
-    const engine = createInboxEngine(
+    const engine = await createInboxEngine(
         repository,
         provider({
             inbox: async () => {
@@ -403,7 +403,7 @@ test('a failed commit retains canonical data and never publishes fresh network d
     repository.entities = cached.entities;
     repository.revision = 1;
     repository.fail = true;
-    const engine = createInboxEngine(
+    const engine = await createInboxEngine(
         repository,
         provider({ inbox: async () => page(thread('unsafe')) }),
     );
@@ -417,7 +417,7 @@ test('a failed commit retains canonical data and never publishes fresh network d
 test('continuation rejects nonempty duplicates and explicit retry can advance', async (t) => {
     const repository = new MemoryRepository();
     let continuation = false;
-    const engine = createInboxEngine(
+    const engine = await createInboxEngine(
         repository,
         provider({
             inbox: async (_account, cursor) => {
@@ -464,7 +464,7 @@ test('partial detail hydration keeps inbox facts and runtime data', async (t) =>
         viewerId: 'viewer',
     });
     const inboxFlight = deferred<Page<Thread>>();
-    const engine = createInboxEngine(
+    const engine = await createInboxEngine(
         repository,
         provider({ inbox: async () => inboxFlight.promise }),
     );
@@ -489,7 +489,7 @@ test('deferred inbox refresh does not block a missing cached detail fetch', asyn
     repository.entities = cached.entities;
     const inboxFlight = deferred<Page<Thread>>();
     const historyStarted = deferred<void>();
-    const engine = createInboxEngine(
+    const engine = await createInboxEngine(
         repository,
         provider({
             inbox: async () => inboxFlight.promise,
@@ -534,7 +534,7 @@ test('reselecting a detail drops its old generation and sends a new request', as
     const oldStarted = deferred<void>();
     const newStarted = deferred<void>();
     let calls = 0;
-    const engine = createInboxEngine(
+    const engine = await createInboxEngine(
         repository,
         provider({
             inbox: async () => page(thread('thread')),
@@ -591,7 +591,7 @@ test('a second listener keeps a queued shared detail flight alive', async (t) =>
     );
     const started = threads.map(() => deferred<void>());
     const calls = threads.map(() => 0);
-    const engine = createInboxEngine(
+    const engine = await createInboxEngine(
         repository,
         provider({
             inbox: async () => page(...threads),
@@ -630,7 +630,7 @@ test('a second listener keeps a queued shared detail flight alive', async (t) =>
 test('an exhausted duplicate continuation succeeds without a no-progress error', async (t) => {
     const repository = new MemoryRepository();
     let continuation = false;
-    const engine = createInboxEngine(
+    const engine = await createInboxEngine(
         repository,
         provider({
             inbox: async (_account, cursor) => {
@@ -659,7 +659,7 @@ test('committing history does not clear an unrelated inbox error', async (t) => 
     repository.resources.set('inbox:primary', record('inbox:primary', cached));
     repository.entities = cached.entities;
     let inboxCalls = 0;
-    const engine = createInboxEngine(
+    const engine = await createInboxEngine(
         repository,
         provider({
             inbox: async () => {
@@ -692,7 +692,7 @@ test('history retention persists complete 501 rows while projecting at most 400 
         record('inbox:primary', normalized),
     );
     repository.entities = normalized.entities;
-    const engine = createInboxEngine(
+    const engine = await createInboxEngine(
         repository,
         provider({
             inbox: async () => page(...threads),
@@ -738,7 +738,7 @@ test('evicting inactive histories removes their runtime projections as well as d
     const threads = Array.from({ length: 25 }, (_, index) =>
         thread(`visited-${index}`),
     );
-    const engine = createInboxEngine(
+    const engine = await createInboxEngine(
         repository,
         provider({ inbox: async () => page(...threads) }),
     );
@@ -770,7 +770,7 @@ test('evicting inactive histories removes their runtime projections as well as d
 
 test('head refresh preserves a failed continuation until that cursor chain changes', async (t) => {
     let cursor = 'older-a';
-    const engine = createInboxEngine(
+    const engine = await createInboxEngine(
         new MemoryRepository(),
         provider({
             history: async (
@@ -811,7 +811,7 @@ test('head refresh preserves a failed continuation until that cursor chain chang
 test('a fresh client verifies the provider account before receiving existing facts', async (t) => {
     const renewal = deferred<string>();
     let renew = false;
-    const engine = createInboxEngine(
+    const engine = await createInboxEngine(
         new MemoryRepository(),
         provider({
             account: () =>
@@ -845,7 +845,7 @@ test('a fresh client verifies the provider account before receiving existing fac
 
 test('provider identity unavailability retains authorized cache but authentication failure clears it', async (t) => {
     let failure: 'provider_unavailable' | 'auth' | undefined;
-    const engine = createInboxEngine(
+    const engine = await createInboxEngine(
         new MemoryRepository(),
         provider({
             account: async () => {

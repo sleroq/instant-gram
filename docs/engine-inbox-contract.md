@@ -19,11 +19,10 @@ are removed only by their producer. Host commands use the worker runtime's
 scope cleanup fails local pending/readiness operations, removes listeners, and
 disconnects Ports; startup captures disconnect before runtime activation and
 cleans up if initialization fails or is interrupted.
-Repository Promises
-are wrapped once at the IndexedDB boundary, while Port callbacks/Promises and
-the Promise engine facade are browser-host or test compatibility boundaries,
-not a second orchestration model. Plain domain reducers and UI state do not
-depend on Effect. IndexedDB commits plus account/worker epochs remain the
+Repository Promises are wrapped at the IndexedDB boundary; Port callbacks and
+Promise commands enter through the worker runtime. Engine tests use the same
+runtime assembly with substituted services, not a second engine constructor.
+Plain domain reducers and UI state do not depend on Effect. IndexedDB commits plus account/worker epochs remain the
 durable restart contract.
 
 ## Storage and projection
@@ -71,7 +70,12 @@ established by initial detail. Cookie evidence cannot prove that every external
 account switch is observable. Unknown-account offline reopening remains excluded.
 
 The production provider exposes only account, inbox/page, and history/older reads.
-Captured descriptors and response parsing live under `lib/instagram-api`.
+The four captured read descriptors and their response parsing live under
+`lib/instagram-api`; future mutations and media capabilities remain documentation,
+not dormant handler implementations. Authentication requests a fresh MAIN-world
+probe for page-module tokens and reads cookies in the content script. It does not
+scan HTML or script payloads, substitute the storage account for the message
+viewer, or retain diagnostic token-source metadata.
 Malformed successful HTTP/GraphQL envelopes are errors, not empty inbox/history
 success. Anchor readiness remains owned by the reverse content-script Port.
 Complete existing Instagram tabs without a live provider Port receive the compiled

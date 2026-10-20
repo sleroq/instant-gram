@@ -150,10 +150,6 @@ async function get<T>(
     return (await result(store.get(key))) as T | undefined;
 }
 
-function historyId(resource: PersistedResource): string | undefined {
-    return resource.threadId;
-}
-
 function revision(value: JsonValue | undefined): number {
     if (value === undefined) return 0;
     if (!isNumber(value) || !Number.isFinite(value) || value < 0)
@@ -291,7 +287,7 @@ class Work {
         resource: PersistedResource,
         delta: number,
     ): Promise<void> {
-        const threadId = historyId(resource);
+        const threadId = resource.threadId;
         if (!threadId) return;
         const inventory = await this.inventory(threadId);
         let messageDelta = 0;
@@ -348,7 +344,7 @@ class Work {
         delete stored.activeGeneration;
         delete stored.chunkCount;
 
-        if (historyId(resource)) {
+        if (resource.threadId) {
             const ids = stored.orderedIds;
             const directMessages = stored.refs.messageIds;
             stored.orderedIds = ids.slice(0, HISTORY_WINDOW_LIMIT);
@@ -653,7 +649,7 @@ class Work {
         this.store('historyPrevious').delete([this.accountId, threadId]);
     }
     async activate(resource: PersistedResource): Promise<void> {
-        const threadId = historyId(resource);
+        const threadId = resource.threadId;
         if (!threadId) return;
 
         const inventory = await this.inventory(threadId);

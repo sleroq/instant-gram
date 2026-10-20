@@ -9,13 +9,6 @@ import {
 import type { EntityFacts, ResourceProjection } from '../../lib/engine/inbox';
 import { computeChatWindow, type ListAnchor } from './virtual-list';
 
-function isContinuationFailure(resource: ResourceProjection) {
-    return (
-        'failedOperation' in resource &&
-        resource.failedOperation === 'continuation'
-    );
-}
-
 function preview(facts: EntityFacts, id: string) {
     const thread = facts.threadsById[id];
     const message = thread?.lastMessageId
@@ -91,8 +84,8 @@ export function InboxList(props: {
         ].find((item) => item.getBoundingClientRect().bottom > boundary);
         if (!row) return;
         props.onPosition?.({
-            id: row?.dataset.threadId,
-            offset: row ? row.getBoundingClientRect().top - boundary : 0,
+            id: row.dataset.threadId,
+            offset: row.getBoundingClientRect().top - boundary,
             focusId:
                 focusId ||
                 (document.activeElement instanceof HTMLElement
@@ -101,7 +94,8 @@ export function InboxList(props: {
         });
     };
     const retryResource = () => {
-        if (isContinuationFailure(props.resource)) props.onLoadMore();
+        if (props.resource.failedOperation === 'continuation')
+            props.onLoadMore();
         else props.onRefresh();
     };
     onCleanup(savePosition);
@@ -116,13 +110,11 @@ export function InboxList(props: {
                 const element = viewport;
                 if (!element || !allowRestore) return;
                 allowRestore = false;
-                if (index >= 0) {
-                    element.scrollTop = Math.max(
-                        0,
-                        index * 72 - (restore.offset || 0),
-                    );
-                    setScrollTop(element.scrollTop);
-                }
+                element.scrollTop = Math.max(
+                    0,
+                    index * 72 - (restore.offset || 0),
+                );
+                setScrollTop(element.scrollTop);
                 const focusId = restore.focusId || id;
                 queueMicrotask(() =>
                     element

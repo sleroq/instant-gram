@@ -1,4 +1,4 @@
-import { createEffect, createSignal, onCleanup } from 'solid-js';
+import { createSignal, onCleanup } from 'solid-js';
 
 export type Route = { threadId?: string };
 
@@ -17,10 +17,8 @@ export function threadHash(threadId: string): string {
     return `#/thread/${encodeURIComponent(threadId)}`;
 }
 
-export function createRouteController(onInbox?: () => void) {
-    const initialRoute = readRoute();
-    const [route, setRoute] = createSignal<Route>(initialRoute);
-    let previousThread: string | undefined = initialRoute.threadId;
+export function createRouteController() {
+    const [route, setRoute] = createSignal<Route>(readRoute());
 
     function update() {
         setRoute(readRoute());
@@ -31,13 +29,6 @@ export function createRouteController(onInbox?: () => void) {
         window.removeEventListener('hashchange', update);
         window.removeEventListener('popstate', update);
     });
-    createEffect(
-        () => route().threadId,
-        (threadId) => {
-            if (previousThread && !threadId) onInbox?.();
-            previousThread = threadId;
-        },
-    );
 
     return {
         route,

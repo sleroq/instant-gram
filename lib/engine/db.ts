@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Result } from 'effect';
+import { Context, Effect, Layer } from 'effect';
 import { migrateHistoryStorage, storageRepository } from './history-storage.ts';
 import type { Message, User } from '../domain.ts';
 import {
@@ -11,7 +11,6 @@ import {
 } from '../json.ts';
 import {
     InboxError,
-    type HistoryInventory,
     type HistoryWindowRequest,
     type HistoryWindowRead,
     type EntityFacts,
@@ -677,10 +676,6 @@ export interface InboxRepositoryEffects {
         threadId: string,
         accessedAt: number,
     ) => Effect.Effect<void, InboxError>;
-    readonly readHistoryInventory: (
-        accountId: string,
-        limit?: number,
-    ) => Effect.Effect<HistoryInventory[], InboxError>;
     readonly readResources: (
         accountId: string,
         keys: string[],
@@ -718,11 +713,6 @@ export function makeInboxRepository(
                     repository.touchHistory(accountId, threadId, accessedAt),
                 catch: storageError,
             }),
-        readHistoryInventory: (accountId, limit) =>
-            Effect.tryPromise({
-                try: () => repository.readHistoryInventory(accountId, limit),
-                catch: storageError,
-            }),
         readResources: (accountId, keys) =>
             Effect.tryPromise({
                 try: () => repository.readResources(accountId, keys),
@@ -750,33 +740,4 @@ export function inboxRepositoryLive(
             (repository) => Effect.orDie(repository.close),
         ),
     );
-}
-
-/**
- * Compatibility boundary for the Promise-based engine and repository tests.
- * Worker suspension can skip scoped finalizers; committed IDB transactions,
- * rather than `close`, remain the durability boundary.
- */
-export function inboxRepositoryPromiseFacade(
-    repository: InboxRepositoryEffects,
-    runPromise: <A>(effect: Effect.Effect<A>) => Promise<A> = Effect.runPromise,
-): InboxRepository {
-    async function run<A>(effect: Effect.Effect<A, InboxError>) {
-        const result = await runPromise(Effect.result(effect));
-        if (Result.isFailure(result)) throw result.failure;
-        return result.success;
-    }
-    return {
-        readHistoryWindow: (accountId, threadId, request) =>
-            run(repository.readHistoryWindow(accountId, threadId, request)),
-        touchHistory: (accountId, threadId, accessedAt) =>
-            run(repository.touchHistory(accountId, threadId, accessedAt)),
-        readHistoryInventory: (accountId, limit) =>
-            run(repository.readHistoryInventory(accountId, limit)),
-        readResources: (accountId, keys) =>
-            run(repository.readResources(accountId, keys)),
-        commitResources: (accountId, update) =>
-            run(repository.commitResources(accountId, update)),
-        close: () => run(repository.close),
-    };
 }

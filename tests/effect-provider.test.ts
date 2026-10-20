@@ -51,7 +51,6 @@ test('InboxRepositoryService is independently substitutable', async () => {
         readResources: () => Effect.succeed(expected),
         readHistoryWindow: () => Effect.die('unexpected history read'),
         touchHistory: () => Effect.die('unexpected history access'),
-        readHistoryInventory: () => Effect.succeed([]),
         commitResources: () => Effect.succeed(expected),
         close: Effect.void,
     };
@@ -102,7 +101,6 @@ test('worker layer composes one substitutable engine from provider and repositor
             }),
         readHistoryWindow: () => Effect.die('unexpected history read'),
         touchHistory: () => Effect.die('unexpected history access'),
-        readHistoryInventory: () => Effect.succeed([]),
         commitResources: (_account, update) =>
             Effect.succeed({
                 resources: update.resources,

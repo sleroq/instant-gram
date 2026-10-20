@@ -32,7 +32,7 @@ export function createHistoryViewportController(onResize: () => void) {
         observeRows();
     }
 
-    function capture(id?: string): HistoryAnchor | undefined {
+    function capture(): HistoryAnchor | undefined {
         if (!viewport?.isConnected) return undefined;
         const boundary = viewport.getBoundingClientRect().top;
         const row = [
@@ -41,22 +41,20 @@ export function createHistoryViewportController(onResize: () => void) {
             .map((item) => ({ item, rect: item.getBoundingClientRect() }))
             .find(({ rect }) => rect.bottom > boundary);
         if (!row) return undefined;
-        const anchor = captureHistoryAnchor(
+        return captureHistoryAnchor(
             viewport,
             row.item,
-            id || row.item.dataset.messageId!,
+            row.item.dataset.messageId!,
         );
-        return anchor;
     }
 
     function correct(anchor: HistoryAnchor) {
-        if (!viewport?.isConnected) return false;
+        if (!viewport?.isConnected) return;
         const row = [
             ...viewport.querySelectorAll<HTMLElement>('[data-message-id]'),
         ].find((item) => item.dataset.messageId === anchor.id);
-        if (!row) return false;
+        if (!row) return;
         viewport.scrollTop = correctionForAnchor(viewport, row, anchor);
-        return true;
     }
 
     function dispose() {

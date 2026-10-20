@@ -1,6 +1,5 @@
 import browser from 'webextension-polyfill';
 import { defineContentScript } from 'wxt/utils/define-content-script';
-import { startAuthProbeListener } from '../lib/ig-auth';
 import { createInboxReader } from '../lib/instagram-api/inbox';
 import { registerInboxProvider } from '../lib/provider/inbox-content';
 
@@ -21,14 +20,12 @@ export default defineContentScript({
         const previous = host.__instantGramAnchor;
         if (previous?.runtime === runtime && !previous.signal.aborted) return;
         previous?.dispose();
-        const stopAuth = startAuthProbeListener();
         const reads = createInboxReader();
         const stopProvider = registerInboxProvider(browser.runtime, reads);
         let disposed = false;
         function dispose() {
             if (disposed) return;
             disposed = true;
-            stopAuth();
             stopProvider();
             removeInvalidated();
             if (host.__instantGramAnchor?.dispose === dispose)

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createInboxProvider } from '../lib/provider/inbox.ts';
+import { Effect, Result } from 'effect';
+import { makeInboxProvider } from '../lib/provider/inbox.ts';
 import { executeInboxProviderRequest } from '../lib/provider/inbox-content.ts';
 import {
     PROVIDER_PORT,
@@ -59,12 +60,12 @@ function fakePort(tabId: number) {
 
 test('provider waits for the selected tab and ignores unrelated tab disconnects', async (t) => {
     let selected = 1;
-    const provider = createInboxProvider({
+    const provider = makeInboxProvider({
         ensureAnchor: async () => selected,
         extensionId: 'extension',
     });
     t.after(() => provider.dispose());
-    const account = provider.account();
+    const account = Effect.runPromise(provider.account);
     const unrelated = fakePort(2);
     provider.accept(unrelated.value);
     unrelated.value.disconnect();
@@ -84,7 +85,7 @@ test('provider waits for the selected tab and ignores unrelated tab disconnects'
     selected = 2;
     const secondPort = fakePort(2);
     provider.accept(secondPort.value);
-    const inbox = provider.inbox('20');
+    const inbox = Effect.runPromise(provider.inbox('20'));
     await new Promise((resolve) => setImmediate(resolve));
     const inboxRequest = secondPort.sent[0];
     assert.equal(inboxRequest.method, 'inbox');
@@ -99,22 +100,21 @@ test('provider waits for the selected tab and ignores unrelated tab disconnects'
 });
 
 test('replacement retires pending requests and stale responses cannot affect the replacement', async (t) => {
-    const provider = createInboxProvider({
+    const provider = makeInboxProvider({
         ensureAnchor: async () => 1,
         extensionId: 'extension',
     });
     t.after(() => provider.dispose());
     const oldPort = fakePort(1);
     provider.accept(oldPort.value);
-    const oldRequest = provider.account();
+    const oldRequest = Effect.runPromise(Effect.result(provider.account));
     await new Promise((resolve) => setImmediate(resolve));
     const replacement = fakePort(1);
     provider.accept(replacement.value);
-    await assert.rejects(oldRequest, {
-        name: 'Error',
-        message: 'Instagram provider is unavailable.',
-    });
-    const nextRequest = provider.account();
+    const retired = await oldRequest;
+    assert(Result.isFailure(retired));
+    assert.equal(retired.failure.kind, 'provider_unavailable');
+    const nextRequest = Effect.runPromise(provider.account);
     await new Promise((resolve) => setImmediate(resolve));
     oldPort.reply({
         kind: 'response',
@@ -133,7 +133,7 @@ test('replacement retires pending requests and stale responses cannot affect the
 });
 
 test('synchronous post failure rejects immediately as provider unavailable', async (t) => {
-    const provider = createInboxProvider({
+    const provider = makeInboxProvider({
         ensureAnchor: async () => 1,
         extensionId: 'extension',
     });
@@ -143,10 +143,9 @@ test('synchronous post failure rejects immediately as provider unavailable', asy
         throw new Error('closed');
     };
     provider.accept(port.value);
-    await assert.rejects(provider.account(), {
-        name: 'Error',
-        message: 'Instagram provider is unavailable.',
-    });
+    const failed = await Effect.runPromise(Effect.result(provider.account));
+    assert(Result.isFailure(failed));
+    assert.equal(failed.failure.kind, 'provider_unavailable');
 });
 
 test('content execution preserves the account identity boundary', async () => {

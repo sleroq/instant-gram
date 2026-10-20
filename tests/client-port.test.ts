@@ -116,7 +116,7 @@ test('real client Port forwards detail interest, keeps sequence across routes, a
         onMessage,
         onDisconnect,
         postMessage(message) {
-            // SAFETY: registerInboxClientPorts posts only the closed snapshot envelope.
+            // SAFETY: the client Port posts only the closed snapshot envelope.
             sent.push(message as SnapshotMessage);
         },
         disconnect() {
@@ -129,6 +129,8 @@ test('real client Port forwards detail interest, keeps sequence across routes, a
         listener({ kind: 'subscribe', threadId: 'first' }, port);
     // Simulate delayed ManagedRuntime layer initialization.
     activate(engine);
+    assert.equal(onMessage.listeners.size, 1);
+    assert.equal(onDisconnect.listeners.size, 1);
     for (const listener of onMessage.listeners)
         listener(
             {
