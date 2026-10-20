@@ -1,35 +1,32 @@
 # Repository guidance
 
-Before frontend work, read the stable
-[`docs/application-architecture.md`](docs/application-architecture.md) contract,
-then [`docs/frontend-architecture.md`](docs/frontend-architecture.md),
-[`docs/solid-2-guide.md`](docs/solid-2-guide.md), and
-[`docs/engine-inbox-contract.md`](docs/engine-inbox-contract.md) for the current
-implemented slice.
+- Read [application ownership](docs/application-architecture.md) before changing boundaries.
+- Follow scoped `AGENTS.md` files for engine, provider, worker, and UI rules.
+- Use TypeScript/TSX and SCSS with the pinned dependencies. Do not add another UI runtime.
+- Keep entrypoints as composition. Put protocol, persistence, and state changes in their owning modules.
+- Keep changes local. Do not commit, push, or publish without approval.
 
-The sole production UI is the Solid 2 `ui.html` Messages client with locally implemented R2 core messaging. Keep
-entities normalized, fixed 72px inbox rows bounded to at most 31 mounted rows,
-history windows bounded to 80 rows, stable domain keys, logical scroll/focus
-restoration, explicit refresh/retry, and worker-owned RPC, identity, persistence,
-single-flight, and stale-generation behavior. Resource retention is not proof of
-contiguous cursor coverage. Message previews do not imply a media player.
-R2 durable send/reply, pin/read commands, and visible-interest polling are worker-owned;
-Solid owns per-window drafts and projection only. Keep operation snapshots bounded
-(200 active commands plus 200 settled send aliases); immutable persisted dedup
-tombstones have no expiry policy. Unknown sends are never blindly retried; mark
-only the latest actually seen message read. R0–R2 are complete by user acceptance;
-independent evidence limits remain documented. R3 is next: reactions/edit/forward. R4
-media-info/player/comments, and R5 settings remain future, never UI-owned adapters.
+## Work planning
 
-Use TypeScript/TSX and SCSS with the pinned Solid 2 stack. Keep Instagram protocol
-knowledge outside components. Documentation and sanitized captures under `docs`
-remain protocol references for future rebuilding.
+- [Roadmap](docs/roadmap.md) summarizes current and future scope.
+- Beans own task requirements and dependencies. Check existing tasks before creating new work.
+- Current UI polish (`icr-i2ye`) precedes R3. Do not pull future capabilities into polish.
+- Parsers and protocol captures are evidence, not proof of a working feature.
 
-You can verify UI and UX behaviour by testing the extension via chrome mcp skill yourself if the task requires it.
+## Verification
 
-Verify frontend changes with `bun run lint`, `bun run test`, `bun run check`,
-`bun run build`, `git diff --check`, and the shared repository scan:
+Run from the repository root after code changes:
 
 ```sh
+bun run lint
+bun run test
+bun run check
+bun run build
+git diff --check
 ast-grep scan --config "$HOME/sgconfig.yml" --no-ignore hidden .
 ```
+
+For documentation-only changes, check links and diffs and run the shared scan.
+Run `beans check` when tasks change. Read scan findings and fix real issues;
+do not add cosmetic rewrites or suppressions.
+See [development](docs/development.md) for setup and performance targets.

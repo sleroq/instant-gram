@@ -10,7 +10,7 @@ tags:
     - ux
     - solid-restoration
 created_at: 2026-07-04T16:40:02Z
-updated_at: 2026-09-13T12:04:44Z
+updated_at: 2026-10-20T19:48:02Z
 parent: icr-0tpu
 ---
 
@@ -24,6 +24,6 @@ Checklist:
 - [ ] Show current volume and speed values in the UI.
 - [ ] Verify scroll interaction does not accidentally scroll the modal/page.
 
-## Solid restoration handoff (2026-09-13)
+## Delivery constraints
 
-This is optional R5.5, not part of baseline R4 player restoration. Ship only with a discoverable opt-in or explicit control target that cannot hijack page scroll; otherwise scrap the gesture proposal.
+This is optional R5 work, not part of baseline R4 player restoration. Ship only with a discoverable opt-in or explicit control target that cannot hijack page scroll; otherwise scrap the gesture proposal.

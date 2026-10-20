@@ -8,32 +8,18 @@ tags:
     - first-priority
     - solid-restoration
 created_at: 2026-09-13T12:03:24Z
-updated_at: 2026-09-13T12:04:58Z
+updated_at: 2026-10-20T19:51:41Z
 ---
 
-Restore the retired Instagram client behavior on the sole Solid 2 UI and worker-owned local-first engine. This is the first-priority product program and the parent for delivery milestones R0–R5.
+Deliver the Solid 2 Messages product on the worker-owned local-first engine. Architecture: `docs/application-architecture.md`. Product roadmap: `docs/roadmap.md`.
 
-Source of truth: `docs/application-architecture.md`. Delivery scope and exact checklist IDs: `docs/solid-restoration-checklist.md`. Current implemented boundary: `docs/engine-inbox-contract.md`.
+## Delivery order and owners
 
-Do not restore Teact, its UI-owned store, direct component RPC, or parallel cache/mutation authority. Features ship only through account-partitioned IndexedDB resources, worker-owned synchronization/outbox contracts, and bounded Solid projections.
+- icr-i2ye: current messaging polish, folding, shared settings/motion, automatic-first read recovery, genuine-bottom latest adoption and newest navigation. Complete before R3.
+- icr-jce7: reactions, editing, forwarding, reply navigation, menus, keyboard/clipboard and actionable feedback.
+- icr-iwr9: normalized media resources, player, comments and durable engagement. Existing-preview styling belongs to polish, not this prerequisite chain.
+- icr-kj7d: selected cross-cutting preferences, diagnostics and evidence-gated research after their consuming surfaces exist.
 
-Program exit:
+Features use account-partitioned IndexedDB resources, worker-owned synchronization/outbox and bounded Solid projections. Every slice must pass the repository quality gate.
 
-- R0 release evidence is recorded;
-- R1 cached conversations/history and responsive layout ship;
-- R2 durable core messaging ships;
-- R3 full message interactions ship;
-- R4 media/player/comments/engagement ship;
-- R5 selected cross-cutting backlog and preferences ship or receive explicit product decisions;
-- every slice passes the repository quality gate and updates current architecture documentation.
-
-## Delivery beans (2026-09-13)
-
-- `icr-siiy` — R1, completed with user-confirmed manual acceptance.
-- `icr-xgh3` — R0 evidence, completed with user-confirmed manual acceptance.
-- `icr-uizd` — R2, next unblocked implementation milestone (not started).
-- `icr-jce7` — R3, blocked by R2.
-- `icr-iwr9` — R4, blocked by R2 and may proceed alongside R3.
-- `icr-kj7d` — R5, blocked until prerequisite restoration surfaces exist.
-
-R6 remains optional product scope and is intentionally not a restoration milestone.
+Unread counts/loading (icr-sphm) remain a separate approved expansion after polish/count evidence: prefer unread conversations active within a configurable month, with a configurable first-10-inbox-chats fallback if broad discovery is complex. Physical sidebar sliding (icr-f00w) is approved within fixed-slot virtualization bounds. Configuration choices belong to settings design icr-r54z; speculative cache task icr-li1d is merged there. No durability, mount-bound or anchor guarantees are weakened.

@@ -10,7 +10,7 @@ tags:
     - ux
     - solid-restoration
 created_at: 2026-07-04T16:40:02Z
-updated_at: 2026-09-13T12:04:44Z
+updated_at: 2026-10-20T19:47:50Z
 parent: icr-0tpu
 ---
 
@@ -23,6 +23,6 @@ Checklist:
 - [ ] Preserve keyboard and pointer interactions for play/pause, seek, close, and focus handling.
 - [ ] Verify reel playback still works with existing reel-info loading flow.
 
-## Solid restoration handoff (2026-09-13)
+## Delivery constraints
 
-The old implementation target is gone. Restore the evidenced player behavior only through R4.9–R4.18 and `icr-iwr9`, with media facts in the worker and playback/DOM state local to Solid.
+Deliver player behavior through `icr-iwr9`, with media facts in the worker and playback/DOM state local to Solid.

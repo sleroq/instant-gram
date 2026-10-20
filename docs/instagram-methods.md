@@ -1,114 +1,132 @@
-# Instagram protocol reference: captured operations
+# Instagram protocol reference
 
-**Status: protocol reference, not blanket runtime capability evidence.** The
-[engine contract](engine-inbox-contract.md) now implements closed R2 send/reply,
-pin/unpin, and paired read methods plus worker-owned visible-interest polling.
-Fresh R2 live evidence is not yet recorded; [verification and user acceptance](r2-verification.md)
-remain pending. R3 interactions, R4 media/comments, and R5 passive Iris observation
-remain future scope. These references do not authorize UI-owned protocol adapters.
+Shipped descriptors and variable builders are canonical:
+[`catalog.ts`](../lib/instagram-api/catalog.ts) and
+[`mutations.ts`](../lib/instagram-api/mutations.ts). Private document IDs drift;
+update them from fresh evidence, not fallback guesses. Protocol references do
+not authorize UI-owned adapters. See [application ownership](application-architecture.md).
 
-Tracked reference captures: `examples/www.instagram.com.har`, `examples/www.instagram.com-the-second.har`, and `examples/www.instagram.com-open-reel-from-chat-and-watch.har`. Separately named captures below are local, untracked evidence; only their sanitized descriptions are recorded here. Values omit live auth tokens; replay requires current `fb_dtsg`, `lsd`, `jazoest`, `csrftoken`, `device_id_for_iris_subscription`, and viewer FBID. Read operations below are HAR-backed; conversation pin/unpin uses the dated live evidence recorded below. See `instagram-har-useful-requests.md` for sanitized request examples.
+## Requests and identity
 
-## Common request shape
+- GraphQL uses form-encoded `POST https://www.instagram.com/api/graphql`.
+  Captured common fields: `__d=www`, `__a=1`, `__comet_req=7`, `dpr=2`,
+  `fb_api_caller_class=RelayModern`, `server_timestamps=true`,
+  `fb_api_req_friendly_name`, `doc_id`, JSON `variables`, `fb_dtsg`, `lsd`, `jazoest`.
+- Captured headers: `content-type: application/x-www-form-urlencoded`,
+  `x-ig-app-id: 936619743392459`, `x-asbd-id: 359341`, `x-fb-lsd`,
+  `x-fb-friendly-name`, `x-csrftoken`.
+- [`ig-auth.ts`](../lib/ig-auth.ts) obtains current page tokens, device ID and
+  viewer FBID; `csrftoken` comes from the cookie and `jazoest` is derived from
+  `fb_dtsg`. See [capture handling](README.md#protocol-captures).
+- Keep normalized thread key, operation `thread_fbid`, and large Instagram
+  `thread_id` distinct. Read markers use `thread_id`; pin and send builders use
+  `thread_fbid`, even where the wire field is named `ig_thread_igid`.
 
-- POST form body to `https://www.instagram.com/api/graphql` unless noted.
-- Required body fields: `__d=www`, `__a=1`, `__comet_req=7`, `dpr=2`, `fb_api_caller_class=RelayModern`, `fb_api_req_friendly_name`, `server_timestamps=true`, `variables`, `doc_id`, plus current `fb_dtsg`, `lsd`, `jazoest`.
-- Required headers seen in both HARs: `content-type: application/x-www-form-urlencoded`, `x-ig-app-id: 936619743392459`, `x-asbd-id: 359341`, `x-fb-lsd`, `x-fb-friendly-name`, `x-csrftoken`.
+## Shipped GraphQL operations
 
-## Captured operations
+| Friendly name                              | Document ID         | Purpose                                              |
+| ------------------------------------------ | ------------------- | ---------------------------------------------------- |
+| `PolarisDirectInboxQuery`                  | `27832650746344714` | Newest inbox; device ID and list flags               |
+| `IGDThreadListOffMsysPaginationQuery`      | `28035404249479587` | `count:5`, opaque cursor, `folder:INBOX`, mailbox ID |
+| `IGDThreadDetailQuery`                     | `28053520164245408` | Newest 20 messages by `thread_fbid`                  |
+| `IGDMessageListOffMsysQuery`               | `25255103937520139` | Older 20 via `after:end_cursor`, `id:thread_fbid`    |
+| `IGDirectTextSendMutation`                 | `26911679871773184` | Text/reply with numeric `offline_threading_id`       |
+| `useIGDPinThreadMutation`                  | `26491513390471063` | `{ thread_fbid, pin:true }`                          |
+| `useIGDUnpinThreadMutation`                | `26719492947719993` | `{ thread_fbid, pin:false }`                         |
+| `useIGDMarkThreadAsReadMutation`           | `27356881703909995` | Item-seen marker                                     |
+| `useIGDMarkThreadAsReadValidationMutation` | `35211594988486314` | Paired read validation                               |
 
-| method             |                                                                              friendly name |                                   doc_id | variables                                                                                                                                                                                                                                                                                                                                                                                            | response path                                                                                                     |
-| ------------------ | -----------------------------------------------------------------------------------------: | ---------------------------------------: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `getInbox`         |                                                                  `PolarisDirectInboxQuery` |                      `27262915580045003` | `{ device_id_for_iris_subscription, __relay_internal__pv__IGDIsProfessionalAccountGKrelayprovider:false, __relay_internal__pv__IGDPinnedThreadsRenderEnabledGKrelayprovider:true, __relay_internal__pv__IGDMaxUnreadMessagesCountrelayprovider:5, __relay_internal__pv__PolarisAIGMAccountLabelEnabledrelayprovider:false, __relay_internal__pv__IGDThreadListActionsEnabledGKrelayprovider:false }` | `data.get_slide_mailbox_for_iris_subscription.threads_by_folder`                                                  |
-| `getInboxPage`     |                                                      `IGDThreadListOffMsysPaginationQuery` |                      `27712934271665380` | `{ count:5, cursor, folder:'INBOX', newer_than_timestamp_ms:null, id:viewer_fbid, same GK flags as inbox }`                                                                                                                                                                                                                                                                                          | `data.fetch__SlideMailbox.threads_by_folder`                                                                      |
-| `getThreadHeader`  |                                                               `IGDInboxHeaderOffMsysQuery` |                      `27358538347096449` | `{ thread_fbid, __relay_internal__pv__PolarisAIGMAccountLabelEnabledrelayprovider:false }`                                                                                                                                                                                                                                                                                                           | `data.get_slide_thread_nullable.as_ig_direct_thread`                                                              |
-| `getThread`        |                                                                     `IGDThreadDetailQuery` |                      `27852254574460474` | `{ thread_fbid, __relay_internal__pv__IGDEnableOffMsysChatThemesQErelayprovider:false, __relay_internal__pv__IGDInitialMessagePageCountrelayprovider:20, __relay_internal__pv__PolarisAIGMAccountLabelEnabledrelayprovider:false }`                                                                                                                                                                  | `data.get_slide_thread_nullable.as_ig_direct_thread.slide_messages`                                               |
-| `getOlderMessages` |                                                               `IGDMessageListOffMsysQuery` |                      `25255103937520139` | `{ after:end_cursor, before:null, first:20, last:null, newer_than_message_id:null, older_than_message_id:null, id:thread_fbid, __relay_internal__pv__IGDInitialMessagePageCountrelayprovider:20 }`                                                                                                                                                                                                   | `data.fetch__SlideThread.as_ig_direct_thread.slide_messages`                                                      |
-| `getReelMedia`     |                                                                                       REST |                                        — | `GET /api/v1/media/<numeric-id>/info/`; prefer the validated DM `mediaId`, otherwise decode Instagram's URL-safe-base64 shortcode                                                                                                                                                                                                                                                                    | REST `items[0]`, with ID and shortcode checked                                                                    |
-| `pinThread`        |                                                                  `useIGDPinThreadMutation` |                      `26491513390471063` | `{ thread_fbid, pin:true }`                                                                                                                                                                                                                                                                                                                                                                          | `data.xig_direct_pin_thread.{ is_pin, id }`                                                                       |
-| `unpinThread`      |                                                                `useIGDUnpinThreadMutation` |                      `26719492947719993` | `{ thread_fbid, pin:false }`                                                                                                                                                                                                                                                                                                                                                                         | `data.xig_direct_pin_thread.{ is_pin, id }`                                                                       |
-| `markThreadRead`   | concurrent `useIGDMarkThreadAsReadMutation` and `useIGDMarkThreadAsReadValidationMutation` | `27356881703909995`, `35211594988486314` | item-seen `{ metadata:{ ig_thread_igid:thread_id }, data:{ item_id:'', message_id } }`; validation `{ metadata:{ ig_thread_igid:thread_id }, data:{ message_id, message_timestamp_ms:'<decimal ms>' } }`                                                                                                                                                                                             | item-seen receipt and boolean `data.xig_direct_mark_read_id_validation`                                           |
-| `editText`         |                                                              `IGDirectEditMessageMutation` |                      `32480262318254796` | `{ thread_id, target_item_id:null, body:{ sensitive_string_value:text }, offline_threading_id, target_message_id }`                                                                                                                                                                                                                                                                                  | `data.direct_edit_message_with_slide_messaging_response` matching `message_id`, `id`, and original `timestamp_ms` |
+### Response and receipt semantics
 
-## Parser notes
+- Initial inbox: `data.get_slide_mailbox_for_iris_subscription.threads_by_folder`;
+  pagination: `data.fetch__SlideMailbox.threads_by_folder`.
+  Threads are `edges[].node.as_ig_direct_thread`.
+- Initial history: `data.get_slide_thread_nullable.as_ig_direct_thread.slide_messages`;
+  older history: `data.fetch__SlideThread.as_ig_direct_thread.slide_messages`.
+  Messages are `edges[].node`. Both connections use
+  `page_info.end_cursor/has_next_page`; retained entities alone prove no coverage.
+- Text: `content_type:TEXT`, `content.__typename:SlideMessageText`, `text_body`.
+  Shares: `MESSAGE_INLINE_SHARE` / `SlideMessageXMAContent`; portrait XMA carries
+  reel `target_url` and `preview_image.url`. Standard XMA can be a post;
+  placeholder XMA can be unavailable. `replied_to_message` embeds these shapes.
+- Unread projection uses explicit `marked_as_unread` or a latest incoming message
+  newer than the viewer's `slide_read_receipts[].watermark_timestamp_ms`.
+- Send result `data.xig_direct_text_send_with_slide_messaging_response` must have
+  equal `id`/`message_id` and decimal `timestamp_ms`. It lacks target/author;
+  shipped validation also requires a history echo matching viewer, thread,
+  timestamp, and message identity. Unknown outcomes are not blind retry permission.
+- Pin result `data.xig_direct_pin_thread` supplies matching thread `id` and `is_pin`.
+  Conversation pinning is not message pinning; no server pin-count limit is proven.
+- Both read requests use `metadata:{ ig_thread_igid:thread_id }`.
+  Item-seen data is `{ item_id:'', message_id }`; validation data is
+  `{ message_id, message_timestamp_ms:'<decimal ms>' }`.
+  Item-seen result `xig_direct_item_seen_mutation_with_slide_messaging_response`
+  must be `XFBSlideReadReceipt`, match the current viewer's `participant_fbid`,
+  and have watermark at least the seen timestamp. Paired
+  `xig_direct_mark_read_id_validation` must be boolean; do not infer that only
+  `true` is an accepted receipt. Mark only the latest actually seen message.
 
-- Inbox threads live in `threads_by_folder.edges[].node.as_ig_direct_thread`; use `threads_by_folder.page_info.end_cursor/has_next_page` for inbox pagination.
-- Conversation unread state is normalized from an explicit `marked_as_unread`
-  flag or a latest incoming message newer than the viewer participant's
-  `slide_read_receipts[].watermark_timestamp_ms`. Read mutations use the distinct
-  large `thread_id`, never `thread_key` or the smaller operation `thread_fbid`.
-- Thread messages live in `slide_messages.edges[].node`; use `slide_messages.page_info.end_cursor/has_next_page` for older-message pagination.
-- Text messages are `content_type: 'TEXT'` with `content.__typename: 'SlideMessageText'` and `text_body`.
-- Reel/post shares are `content_type: 'MESSAGE_INLINE_SHARE'` with `content.__typename: 'SlideMessageXMAContent'`; reel shares have `content.xma.__typename: 'SlideMessagePortraitXMA'`, `target_url` like `/reel/<shortcode>/...`, and `preview_image.url` for the thumbnail. Some shares are `SlideMessageStandardXMA` posts or `SlideMessagePlaceholderXMA` unavailable content.
-- Replies are embedded as `replied_to_message`; they can contain the same text/XMA shapes as normal messages.
-- A sanitized review of a user-provided, uncommitted local capture showed
-  Instagram's own two-request reply jump around an opaque message ID:
-  `IGDMessageListAnchorMessageRangeBeforeOffMsysQuery`
-  (`doc_id: 36985093537803608`) requests `last:20`,
-  `newer_than_message_id:<target>`, `include_edge_message:true`, and returns
-  `slide_messages_before` including the target; the paired
-  `IGDMessageListAnchorMessageRangeAfterOffMsysQuery`
-  (`doc_id: 27849792908039983`) requests `first:20`,
-  `older_than_message_id:<target>`, and returns `slide_messages_after` without
-  the target. Both set `is_anchor_message:true`. The capture proves one isolated
-  range on each side, but not continuation requests that reconnect that range to
-  the currently loaded contiguous history. These private documents are therefore
-  recorded capability evidence, not currently exposed RPC methods.
-- `examples/www.instagram.com-open-reel-from-chat-and-watch.har` lines 3126–3139 capture `GET /api/v1/media/<media-id>/info/`; line 3389 returns matching `pk` and Instagram's compound `id` form. Lines 1434–1447 capture the initial comments request for that same numeric media ID with exactly `can_support_threading=true&permalink_enabled=false`. Later captures prove top-level `next_min_id` pagination. `comment-actions.har` additionally proves child-comment pages at `/api/v1/media/<media-id>/comments/<parent-id>/child_comments/`, with `is_chronological=true`, `paging_direction=view_more`, and opaque `next_min_child_cursor` returned unchanged as `min_id`.
-- `comment-actions.har` captures comment creation at `POST /api/v1/web/comments/<media-id>/add/` (`comment_text`, plus `replied_to_comment_id` for replies), the compact returned comment entity, and `PolarisCommentActionsLikeMutation` (`doc_id 27184292767848867`, `{ input:{ comment_id, actor_id, client_mutation_id } }`). It does not capture an unlike persisted query or prove an unlike request.
-- Local `real-loading.har` and `real-loading-3.har` provide media-load evidence
-  without a private shortcode GraphQL document. A successful reel route used
-  shortcode `S`, and its comments used numeric media ID `M`; decoding `S` with
-  Instagram's URL-safe base64 alphabet produced exactly `M`. A separate capture
-  successfully requested `GET /api/v1/media/M/info/` and returned
-  `{ items: [media], status: "ok", ... }` with matching `pk` and `code`.
-  A future media loader can prefer a numeric ID already present on the DM XMA,
-  otherwise use that deterministic decode, and validate both identities in the
-  REST response.
+## Future message interactions
 
-### Sanitized 2026-08 media-loading evidence
+Sanitized local captures establish these shapes, not shipped RPCs:
 
-The raw `real-loading*.har` files remain local evidence and may contain live
-session data; do not commit or quote their headers, tokens, IDs, or CDN URLs.
+- Header: `IGDInboxHeaderOffMsysQuery`, `27358538347096449`,
+  `{ thread_fbid, __relay_internal__pv__PolarisAIGMAccountLabelEnabledrelayprovider:false }`;
+  result `data.get_slide_thread_nullable.as_ig_direct_thread`.
+- Edit: `IGDirectEditMessageMutation`, `32480262318254796`,
+  `{ thread_id:thread_fbid, target_item_id:null, body:{ sensitive_string_value:text },
+offline_threading_id, target_message_id }`. Result
+  `data.direct_edit_message_with_slide_messaging_response` matches `message_id`,
+  `id`, and the original `timestamp_ms`. Evidence covers text only.
+- Reply anchor before: `IGDMessageListAnchorMessageRangeBeforeOffMsysQuery`,
+  `36985093537803608`, `last:20`, `newer_than_message_id:target`,
+  `include_edge_message:true`; `slide_messages_before` includes target.
+  After: `IGDMessageListAnchorMessageRangeAfterOffMsysQuery`,
+  `27849792908039983`, `first:20`, `older_than_message_id:target`;
+  `slide_messages_after` excludes target. Both use `is_anchor_message:true`.
+  Isolated ranges do not prove continuation reconnecting to loaded history.
+- Reaction and transport evidence: [live communication](instagram-live-communication.md).
 
-- `real-loading.har` loaded `/reels/<shortcode>/`, then Instagram's feed/reels
-  UI used `POST /graphql/query`. `PolarisFeedTimelineRootV2Query`
-  (`doc_id 37687185124228442`) sent
-  `{ after:null, before:null, data:{ device_id:<session device ID>, is_async_ads_double_request:"0", is_async_ads_in_headload_enabled:"0", is_async_ads_rti:"0", rti_delivery_backend:"0" }, first:3, last:null, variant:"home", __relay_internal__pv__PolarisShortDramaEnabledrelayprovider:false, __relay_internal__pv__PolarisMultiCaptionCarouselEnabledrelayprovider:false, __relay_internal__pv__PolarisAIGMAccountLabelEnabledrelayprovider:false, __relay_internal__pv__PolarisReelsRecoDebugOverlayEnabledrelayprovider:false }`.
-  `PolarisClipsTabDesktopPaginationQuery` (`doc_id 27590726200579843`)
-  sent `{ after:<cursor>, before:null, data:{ container_module:"clips_tab_desktop_page", seen_reels:<JSON string>, chaining_media_id:<shortcode>, should_refetch_chaining_media:false }, first:10, last:null, __relay_internal__pv__PolarisReelsRecoDebugOverlayEnabledrelayprovider:false, __relay_internal__pv__PolarisShortDramaEnabledrelayprovider:false }`.
-  Their response roots are respectively
-  `data.xdt_api__v1__feed__timeline__connection.edges[].node.media` and
-  `data.xdt_api__v1__clips__home__connection_v2.edges[].node.media`.
-  These are feed pagination calls, not a reliable arbitrary-shortcode loader.
-- The same capture loaded comments through two UI GraphQL queries:
-  `POST /api/graphql` `PolarisPostCommentsContainerQuery`
-  (`doc_id 37622913243966296`, `{ media_id, __relay_internal__pv__PolarisIsLoggedInrelayprovider:true }`)
-  returns `data.xdt_api__v1__media__media_id__comments__connection`, while
-  `PolarisClipsDesktopCommentsPopoverQuery`
-  (`doc_id 26898197033164947`, `{ media_id }`) returns
-  `data.fetch__XDTMediaDict` summary metadata. The smaller captured REST
-  comments request is a separate protocol option.
-- `real-loading-3.har` proves authenticated
-  `GET /api/v1/media/<media-id>/info/` with no query parameters and
-  `GET /api/v1/media/<media-id>/comments/?can_support_threading=true&permalink_enabled=false`.
-  The info response is `items[0]`; comments contain `comments`,
-  `has_more_comments`, and `next_min_id`. This capture had no next-page request;
-  those response fields alone do not prove continuation.
-- Successful video responses contain three `video_versions` entries (types
-  101, 102, and 103); REST video captures under `docs/examples` show the same
-  contract. These are media descriptors, not evidence of a current player or
-  variant selector. The local captures contain a single-image feed post and
-  clips videos; `real-loading-2.har` starts after metadata loading and contains
-  only CDN video transfers, so it does not prove a carousel request shape.
+## Future media and comments
 
-## Live private-protocol evidence
+- `GET /api/v1/media/<numeric-id>/info/` returns `items[0]`.
+  Prefer validated DM media ID; otherwise Instagram URL-safe-base64 shortcode
+  decoding has matched the numeric REST ID. Validate `pk` and `code` before caching;
+  compound `id` can be `<media-id>_<owner-id>`.
+- Videos expose `video_versions` (captured types 101, 102, 103). Metadata and CDN
+  transfers prove neither a player nor carousel loading.
+- Initial comments: `GET /api/v1/media/<media-id>/comments/` with
+  `can_support_threading=true&permalink_enabled=false`. Response has `comments`,
+  `has_more_comments`, `next_min_id`; later captures prove `min_id` continuation.
+- Child comments: `/api/v1/media/<media-id>/comments/<parent-id>/child_comments/`,
+  `is_chronological=true`, `paging_direction=view_more`; return opaque
+  `next_min_child_cursor` unchanged as `min_id`.
+- Create: `POST /api/v1/web/comments/<media-id>/add/`, `comment_text`, optional
+  `replied_to_comment_id`; response contains the created comment.
+- Like: `PolarisCommentActionsLikeMutation`, `27184292767848867`,
+  `{ input:{ comment_id, actor_id, client_mutation_id } }`. Unlike is not captured.
+- Alternative comment queries: `PolarisPostCommentsContainerQuery`,
+  `37622913243966296`, `{ media_id, __relay_internal__pv__PolarisIsLoggedInrelayprovider:true }`
+  returns `data.xdt_api__v1__media__media_id__comments__connection`;
+  `PolarisClipsDesktopCommentsPopoverQuery`, `26898197033164947`, `{ media_id }`
+  returns `data.fetch__XDTMediaDict` summary. Feed/reels pagination is not an
+  arbitrary-shortcode loader.
+- Ranked comments, `top_likers`, and `facepile_top_likers` prove engagement, not
+  following. `PolarisUserHoverCardContentV2Query`, `27756568060663620`,
+  `{ userID }` supplies `friendship_status.following`. Join by numeric user ID,
+  not timing, rank, or username. A followed commenter absent from named likers
+  cannot be inferred from those liker lists.
 
-Conversation pinning was reverified on 2026-08-03 from current Instagram Web
-bundle `https://static.cdninstagram.com/rsrc.php/v4iZaf4/yY/l/en_US-j/mm1DRbFIyVy.js`
-and reversible live traffic. It is distinct from message pinning. The mutation
-identifier is `XFBIGDirectViewerThread.thread_fbid`, which can differ from the
-normalized route/key. These are private persisted-query document IDs and may
-drift when Instagram deploys a new bundle; update catalog fixtures from fresh,
-reversible evidence rather than adding a fallback operation or embedding auth
-data. No server pin-count limit was inferred because the evidence did not prove one.
+## Evidence sources
+
+Tracked captures in [`examples/`](examples/): `www.instagram.com.har`,
+`www.instagram.com-the-second.har`, `www.instagram.com-live-communication.har`,
+and `www.instagram.com-open-reel-from-chat-and-watch.har`. The last contains
+media info and initial comments, not comment continuation.
+
+Sanitized supplemental findings above came from local, untracked
+`message-editing.har`, `comment-actions.har`, `real-loading*.har`,
+`reel-with-following-account-comment.har`, `more-requests.har`, and a reply-jump
+capture. See [capture handling](README.md#protocol-captures).
+These observations are research evidence,
+not guarantees of current server behavior; reverify operations before extending RPCs.

@@ -10,8 +10,8 @@ tags:
     - player
     - reels
 created_at: 2026-07-04T16:39:33Z
-updated_at: 2026-09-13T12:04:44Z
+updated_at: 2026-10-20T19:47:14Z
 parent: icr-iwr9
 ---
 
-Historical umbrella for reel-player behavior. Production Solid currently has no media UI. Restoration is governed by R4.9–R4.18 in `docs/solid-restoration-checklist.md` and milestone `icr-iwr9`; rebuild through worker-owned media resources and Solid-local player state rather than reviving retired UI/store code. Child beans are evidence-bearing slices, not independent scheduling authority.
+Deliver accessible custom reel-player behavior under icr-iwr9, using worker-owned media resources and Solid-local playback/DOM state. Child tasks own custom controls, shared mute preference and optional targeted wheel controls; no parallel media cache or playback authority.

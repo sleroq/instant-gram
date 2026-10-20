@@ -1,35 +1,22 @@
 # Documentation
 
-## Current contracts
+- [Architecture](application-architecture.md): current ownership and data flow.
+- [Development](development.md): setup, debugging, and performance targets.
+- [Roadmap](roadmap.md): delivery order, future scope, and open decisions.
+- [Solid 2](solid-2-guide.md): runtime-specific authoring rules.
+- [Instagram operations](instagram-methods.md): protocol evidence and request shapes.
+- [Live transport](instagram-live-communication.md): evidence needed beyond polling.
+- [Motion](motion.md): accessibility and animation constraints.
 
-- [Application architecture](application-architecture.md): stable ownership,
-  identity, reads, commands, persistence, and bounded rendering.
-- [Frontend architecture](frontend-architecture.md): locally implemented R2 Messages UI.
-- [Engine contract](engine-inbox-contract.md): implemented storage, reads, outbox, and polling.
-- [Solid 2 guide](solid-2-guide.md): pinned runtime and authoring conventions.
-- [Roadmap](solid-restoration-checklist.md): accepted R0–R2 and future R3–R6 scope.
-- [R1 acceptance evidence](r1-verification.md): historical accepted stage.
-- [R2 verification](r2-verification.md): user acceptance, passing local checks,
-  known tradeoffs, and independent evidence limits.
+Coding rules live in the root and scoped `AGENTS.md` files.
+Beans own task acceptance and dependencies; the roadmap does not duplicate their checklists.
 
-## Future implementation references
+## Protocol captures
 
-- [Captured operations](instagram-methods.md), [request examples](instagram-har-useful-requests.md),
-  and [communication protocol](instagram-live-communication.md) describe private
-  Instagram protocol evidence, not shipped UI features. Persisted-query IDs can
-  drift; verify fresh evidence before extending the production capability surface.
-- [Motion requirements](telegram-animation-research.md) retain clean-room R5
-  requirements without the retired runtime's implementation plan.
+`examples/*.har` supports protocol research. These files have redacted credentials,
+but are not fully anonymized. They may contain identities, messages, and media URLs.
+Do not publish them as sanitized fixtures or reuse captured session values.
+Use fresh authenticated evidence before adding private API capabilities.
 
-## Captures and privacy
-
-Tracked `examples/` captures retain protocol evidence; credential fields have
-been redacted. They are **not fully anonymized**: response content, identities,
-media links, and other private data may remain. Do not reuse captured session
-values or publish these files as sanitized fixtures without further review.
-Ignored root-level HARs are local research inputs, may contain session data,
-and are not required documentation or portable test fixtures. They are left
-untouched; useful operation evidence belongs in the Markdown references.
-
-Superseded architecture reviews and audit transcripts are available through Git
-history, not part of the current contract.
+Ignored `docs/*.har` files are local research inputs, not required project files.
+Keep tokens, browser profiles, and private account content out of documentation.
