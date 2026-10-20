@@ -2,7 +2,12 @@ export const HISTORY_SLICE = 40;
 export const HISTORY_MOUNT_LIMIT = 80;
 
 export type HistoryWindow = { start: number; end: number };
-export type HistoryAnchor = { id: string; offset: number };
+export type HistoryAnchor = {
+    id: string;
+    offset: number;
+    /** Preserve bottom intent across remounts only while this same tail remains current. */
+    bottomId?: string;
+};
 
 export function initialHistoryWindow(count: number): HistoryWindow {
     const end = count;

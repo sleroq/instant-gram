@@ -6,13 +6,25 @@ import { preview, type PreviewServer } from 'vite';
 import type { InboxProjection } from '../lib/engine/inbox.ts';
 import type { SnapshotMessage } from '../lib/engine/protocol.ts';
 import type { Message } from '../lib/domain.ts';
+import type {
+    MutationCommand,
+    OperationResult,
+} from '../lib/engine/operations.ts';
 import { buildExtension } from './browser-build.ts';
 
 type TestProjection = InboxProjection;
 type TestSnapshot = SnapshotMessage;
-type TestCommand = { kind: string; threadId?: string; anchorId?: string };
+type TestCommand = {
+    kind: string;
+    threadId?: string;
+    anchorId?: string;
+    command?: MutationCommand;
+};
+type TestServerMessage =
+    | TestSnapshot
+    | { kind: 'operation-result'; result: OperationResult };
 type TestActivePort = {
-    messages: Set<(value: TestSnapshot) => void>;
+    messages: Set<(value: TestServerMessage) => void>;
     disconnects: Set<() => void>;
 };
 
@@ -23,6 +35,7 @@ declare global {
             commands: TestCommand[];
             send(next: TestProjection, sequence: number): void;
             restart(): void;
+            settleSend(ok: boolean): void;
             boundedStart?: number;
         };
     }
@@ -56,7 +69,7 @@ test.after(async () => {
 
 async function openHistory(
     width = 1100,
-    options: { checking?: boolean; bounded?: boolean } = {},
+    options: { checking?: boolean; bounded?: boolean; composer?: boolean } = {},
 ): Promise<Page> {
     const page = await browser.newPage({
         viewport: { width, height: 700 },
@@ -147,6 +160,7 @@ async function openHistory(
                 id,
                 {
                     key: id,
+                    threadFbid: options.composer ? `fbid-${id}` : undefined,
                     title: id === 'thread-0' ? 'Cached conversation' : id,
                     isGroup: false,
                     isMuted: false,
@@ -225,6 +239,32 @@ async function openHistory(
             current: projection,
             commands: [],
             boundedStart,
+            settleSend(ok) {
+                const command = this.commands.findLast(
+                    (item) => item.command?.intent.type === 'send',
+                )?.command;
+                if (!command) throw new Error('Expected a send');
+                active?.messages.forEach((listener) =>
+                    listener({
+                        kind: 'operation-result',
+                        result: ok
+                            ? {
+                                  ok: true,
+                                  operationId: command.operationId,
+                                  revision: 2,
+                              }
+                            : {
+                                  ok: false,
+                                  operationId: command.operationId,
+                                  error: {
+                                      kind: 'storage',
+                                      message:
+                                          'Could not save this message. Please try again when storage is available.',
+                                  },
+                              },
+                    }),
+                );
+            },
             restart() {
                 active?.disconnects.forEach((listener) => listener());
             },
@@ -252,10 +292,14 @@ async function openHistory(
                         return {
                             onMessage: {
                                 addListener: (
-                                    listener: (value: TestSnapshot) => void,
+                                    listener: (
+                                        value: TestServerMessage,
+                                    ) => void,
                                 ) => connection.messages.add(listener),
                                 removeListener: (
-                                    listener: (value: TestSnapshot) => void,
+                                    listener: (
+                                        value: TestServerMessage,
+                                    ) => void,
                                 ) => connection.messages.delete(listener),
                             },
                             onDisconnect: {
@@ -1336,4 +1380,387 @@ test('a previous cached range preserves its boundary and only explicitly jumps t
     assert.equal(await latest.count(), 0);
     assert.ok((await page.locator('[data-message-id]').count()) <= 80);
     await page.close();
+});
+
+async function assertComposerClearance(page: Page) {
+    await page.waitForFunction(() => {
+        const viewport = document.querySelector<HTMLElement>(
+            '.solid-history__viewport',
+        )!;
+        const form = document.querySelector('.solid-composer')!;
+        const last = [...viewport.querySelectorAll('[data-message-id]')].at(
+            -1,
+        )!;
+        return (
+            Math.abs(
+                viewport.scrollHeight -
+                    viewport.clientHeight -
+                    viewport.scrollTop,
+            ) <= 1 &&
+            last.getBoundingClientRect().bottom <=
+                form.getBoundingClientRect().top - 8
+        );
+    });
+    assert.ok((await page.locator('[data-message-id]').count()) <= 80);
+}
+
+async function visibleHistoryAnchor(page: Page) {
+    return page.locator('.solid-history__viewport').evaluate((element) => {
+        const top = element.getBoundingClientRect().top;
+        const row = [
+            ...element.querySelectorAll<HTMLElement>('[data-message-id]'),
+        ].find((item) => item.getBoundingClientRect().bottom > top)!;
+        return {
+            id: row.dataset.messageId!,
+            offset: row.getBoundingClientRect().top - top,
+        };
+    });
+}
+
+async function assertHistoryAnchor(
+    page: Page,
+    anchor: { id: string; offset: number },
+) {
+    await page.waitForFunction(({ id, offset }) => {
+        const viewport = document.querySelector('.solid-history__viewport')!;
+        const row = [
+            ...viewport.querySelectorAll<HTMLElement>('[data-message-id]'),
+        ].find((item) => item.dataset.messageId === id);
+        return (
+            row &&
+            Math.abs(
+                row.getBoundingClientRect().top -
+                    viewport.getBoundingClientRect().top -
+                    offset,
+            ) <= 1
+        );
+    }, anchor);
+    assert.ok((await page.locator('[data-message-id]').count()) <= 80);
+}
+
+test('floating clouds clear the complete multiline, reply and error footprint at bottom', async () => {
+    const page = await openHistory(1100, { composer: true });
+    try {
+        const editor = page.getByRole('textbox', {
+            name: 'Message',
+            exact: true,
+        });
+        const send = page.getByRole('button', { name: 'Send', exact: true });
+        await assertComposerClearance(page);
+        assert.equal(await page.locator('.solid-composer label').count(), 0);
+        assert.equal(await send.isDisabled(), true);
+
+        const initialHeight = (await editor.boundingBox())!.height;
+        await editor.fill('Line one\nLine two\nLine three\nLine four');
+        await assertComposerClearance(page);
+        assert.ok((await editor.boundingBox())!.height > initialHeight);
+        await page
+            .locator('[data-message-id="message-119"]')
+            .getByRole('button', { name: 'Reply', exact: true })
+            .click();
+        await page.getByRole('button', { name: 'Cancel reply' }).waitFor();
+        await assertComposerClearance(page);
+        await editor.focus();
+        await editor.press('Enter');
+        await page.waitForFunction(() =>
+            window.historyTest.commands.some(
+                (item) => item.command?.intent.type === 'send',
+            ),
+        );
+        await page.evaluate(() => window.historyTest.settleSend(false));
+        await page
+            .getByRole('alert')
+            .filter({ hasText: 'Could not save' })
+            .waitFor();
+        await assertComposerClearance(page);
+        assert.equal(
+            await editor.inputValue(),
+            'Line one\nLine two\nLine three\nLine four',
+        );
+        assert.equal(
+            await editor.evaluate(
+                (element) => document.activeElement === element,
+            ),
+            true,
+        );
+
+        await page.setViewportSize({ width: 360, height: 560 });
+        await assertComposerClearance(page);
+        await editor.fill('A wrapped compact draft '.repeat(20));
+        await assertComposerClearance(page);
+        await page.setViewportSize({ width: 320, height: 460 });
+        await assertComposerClearance(page);
+        await editor.press('Enter');
+        await page.evaluate(() => window.historyTest.settleSend(false));
+        await page
+            .getByRole('alert')
+            .filter({ hasText: 'Could not save' })
+            .waitFor();
+        await assertComposerClearance(page);
+        await page.screenshot({
+            path: `${historyOutput}/composer-compact.png`,
+        });
+        const geometry = await page
+            .locator('.solid-composer')
+            .evaluate((element) => {
+                const cloud = element
+                    .querySelector('.solid-composer__cloud')!
+                    .getBoundingClientRect();
+                const button = element
+                    .querySelector('button[type="submit"]')!
+                    .getBoundingClientRect();
+                return {
+                    gap: button.left - cloud.right,
+                    circle: button.width === button.height,
+                    left: cloud.left,
+                    right: button.right,
+                    background: getComputedStyle(element).backgroundColor,
+                    pointerEvents: getComputedStyle(element).pointerEvents,
+                };
+            });
+        assert.ok(geometry.gap >= 8 && geometry.circle);
+        assert.ok(geometry.left >= 0 && geometry.right <= 320);
+        assert.equal(geometry.background, 'rgba(0, 0, 0, 0)');
+        assert.equal(geometry.pointerEvents, 'none');
+
+        await page.getByRole('button', { name: 'Cancel reply' }).click();
+        await assertComposerClearance(page);
+        await editor.fill('accepted draft');
+        await editor.press('Enter');
+        await page.evaluate(() => window.historyTest.settleSend(true));
+        await page.waitForFunction(
+            () => document.querySelector('textarea')!.value === '',
+        );
+        await assertComposerClearance(page);
+
+        await page.evaluate(() => {
+            const next = structuredClone(window.historyTest.current);
+            next.entities.messagesById['bottom-arrival'] = {
+                id: 'bottom-arrival',
+                kind: 'text',
+                text: 'Incoming at bottom',
+                ts: 1_700_100_000_001,
+                senderId: 'peer',
+            };
+            next.histories['thread-0'].orderedIds.push('bottom-arrival');
+            window.historyTest.send(next, 2);
+        });
+        await page.locator('[data-message-id="bottom-arrival"]').waitFor();
+        await assertComposerClearance(page);
+        await page.setViewportSize({ width: 320, height: 360 });
+        await editor.fill('A long multiline draft\n'.repeat(15));
+        await assertComposerClearance(page);
+        await page.screenshot({ path: `${historyOutput}/composer-short.png` });
+    } finally {
+        await page.close();
+    }
+});
+
+test('older readers retain logical anchors through overlay growth, sends, prepends and thread switches', async () => {
+    const page = await openHistory(1100, { composer: true });
+    try {
+        const viewport = page.locator('.solid-history__viewport');
+        const editor = page.getByRole('textbox', {
+            name: 'Message',
+            exact: true,
+        });
+        await viewport.evaluate((element) => {
+            element.scrollTop -= 450;
+            element.dispatchEvent(new Event('scroll'));
+        });
+
+        const anchor = await visibleHistoryAnchor(page);
+        await editor.fill('Older reader draft\nAnother line\nAnd another');
+        await assertHistoryAnchor(page, anchor);
+        await page
+            .locator(`[data-message-id="${anchor.id}"]`)
+            .getByRole('button', { name: 'Reply', exact: true })
+            .click();
+        await assertHistoryAnchor(page, anchor);
+        await editor.press('Enter');
+        await page.evaluate(() => window.historyTest.settleSend(false));
+        await page.getByRole('alert').waitFor();
+        await assertHistoryAnchor(page, anchor);
+
+        await page.evaluate(() => {
+            const next = structuredClone(window.historyTest.current);
+            next.entities.messagesById['incoming'] = {
+                id: 'incoming',
+                kind: 'text',
+                text: 'Incoming fixture',
+                ts: 1_700_100_000_001,
+                senderId: 'peer',
+            };
+            next.histories['thread-0'].orderedIds.push('incoming');
+            const older = Array.from(
+                { length: 20 },
+                (_, index) => `older-overlay-${index}`,
+            );
+            for (const id of older)
+                next.entities.messagesById[id] = {
+                    id,
+                    kind: 'text',
+                    text: id,
+                    ts: 1_699_000_000_000,
+                    senderId: 'peer',
+                };
+            next.histories['thread-0'].orderedIds.unshift(...older);
+            window.historyTest.send(next, 2);
+        });
+        await assertHistoryAnchor(page, anchor);
+        await page.setViewportSize({ width: 1000, height: 520 });
+        await assertHistoryAnchor(page, anchor);
+        // An older row occupies the same vertical band as the floating controls.
+        assert.equal(
+            await viewport.evaluate((element) => {
+                const form = document
+                    .querySelector('.solid-composer')!
+                    .getBoundingClientRect();
+                return [...element.querySelectorAll('[data-message-id]')].some(
+                    (row) => {
+                        const rect = row.getBoundingClientRect();
+                        return rect.top < form.bottom && rect.bottom > form.top;
+                    },
+                );
+            }),
+            true,
+        );
+
+        await page.setViewportSize({ width: 600, height: 520 });
+        await assertHistoryAnchor(page, anchor);
+        await page.setViewportSize({ width: 1100, height: 700 });
+        await assertHistoryAnchor(page, anchor);
+        await page.locator('[data-thread-id="thread-1"]').click();
+        await page.getByRole('heading', { name: 'thread-1' }).waitFor();
+        await page.locator('[data-thread-id="thread-0"]').click();
+        await assertHistoryAnchor(page, anchor);
+        assert.equal(
+            await editor.inputValue(),
+            'Older reader draft\nAnother line\nAnd another',
+        );
+
+        await page.getByRole('button', { name: 'Cancel reply' }).click();
+        await assertHistoryAnchor(page, anchor);
+        await editor.fill('accepted while reading older');
+        await editor.press('Enter');
+        await page.evaluate(() => window.historyTest.settleSend(true));
+        await page.waitForFunction(
+            () => document.querySelector('textarea')!.value === '',
+        );
+        await assertHistoryAnchor(page, anchor);
+    } finally {
+        await page.close();
+    }
+});
+
+test('keyboard traversal keeps focused history actions above the floating clouds', async () => {
+    const page = await openHistory(1100, { composer: true });
+    try {
+        await page
+            .getByRole('textbox', { name: 'Message', exact: true })
+            .fill('Multiline draft\nSecond line\nThird line');
+        const viewport = page.locator('.solid-history__viewport');
+        await viewport.evaluate((element) => {
+            element.scrollTop -= 450;
+            element.dispatchEvent(new Event('scroll'));
+        });
+        await viewport.focus();
+
+        for (let index = 0; index < 20; index++) {
+            await page.keyboard.press('Tab');
+            await page.evaluate(
+                () =>
+                    new Promise((resolve) =>
+                        requestAnimationFrame(() =>
+                            requestAnimationFrame(resolve),
+                        ),
+                    ),
+            );
+            const focused = await page.evaluate(() => {
+                const element = document.activeElement;
+                if (!(element instanceof HTMLElement))
+                    throw new Error('Expected a focused history action');
+                const rect = element.getBoundingClientRect();
+                const hit = document.elementFromPoint(
+                    rect.left + rect.width / 2,
+                    rect.top + rect.height / 2,
+                );
+                return {
+                    reply: element.textContent === 'Reply',
+                    visible: element === hit || element.contains(hit),
+                };
+            });
+            assert.equal(focused.reply, true);
+            assert.equal(
+                focused.visible,
+                true,
+                `Tab ${index + 1} focused an obscured Reply action`,
+            );
+            assert.ok((await page.locator('[data-message-id]').count()) <= 80);
+        }
+    } finally {
+        await page.close();
+    }
+});
+
+test('responsive remount preserves genuine bottom intent with long draft, reply and rejection', async () => {
+    const page = await openHistory(1100, { composer: true });
+    try {
+        const editor = page.getByRole('textbox', {
+            name: 'Message',
+            exact: true,
+        });
+        await assertComposerClearance(page);
+        await page
+            .locator('[data-message-id="message-119"]')
+            .getByRole('button', { name: 'Reply', exact: true })
+            .click();
+        await editor.fill('A long line\n'.repeat(20));
+        await editor.press('Enter');
+        await page.evaluate(() => window.historyTest.settleSend(false));
+        await page.getByRole('alert').waitFor();
+        await assertComposerClearance(page);
+
+        for (const size of [
+            { width: 320, height: 360 },
+            { width: 320, height: 300 },
+            { width: 1100, height: 700 },
+        ]) {
+            await page.setViewportSize(size);
+            await assertComposerClearance(page);
+        }
+        assert.equal(await editor.inputValue(), 'A long line\n'.repeat(20));
+        await page.getByRole('button', { name: 'Cancel reply' }).waitFor();
+    } finally {
+        await page.close();
+    }
+});
+
+test('saved bottom intent does not jump to arrivals received while another thread is selected', async () => {
+    const page = await openHistory(1100, { composer: true });
+    try {
+        await assertComposerClearance(page);
+        const anchor = await visibleHistoryAnchor(page);
+        await page.locator('[data-thread-id="thread-1"]').click();
+        await page.getByRole('heading', { name: 'thread-1' }).waitFor();
+        await page.evaluate(() => {
+            const next = structuredClone(window.historyTest.current);
+            for (let index = 0; index < 10; index++) {
+                const id = `inactive-arrival-${index}`;
+                next.entities.messagesById[id] = {
+                    id,
+                    kind: 'text',
+                    text: 'Incoming while another thread is selected',
+                    ts: 1_700_100_000_001 + index,
+                    senderId: 'peer',
+                };
+                next.histories['thread-0'].orderedIds.push(id);
+            }
+            window.historyTest.send(next, 2);
+        });
+        await page.locator('[data-thread-id="thread-0"]').click();
+        await assertHistoryAnchor(page, anchor);
+    } finally {
+        await page.close();
+    }
 });

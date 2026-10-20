@@ -51,7 +51,7 @@ export function ConversationPane(props: {
         return allIds().slice(current.start, current.end);
     });
     const viewport = createHistoryViewportController(() => {
-        if (anchor) controller.correct(anchor);
+        correctGeometry();
         const element = controller.element();
         if (element && element.scrollHeight <= element.clientHeight + 1) {
             requestOlderIfNeeded();
@@ -63,6 +63,30 @@ export function ConversationPane(props: {
     let firstRender = true;
     let localMovePending = false;
     let followBottom = false;
+    let geometryFollowsBottom = true;
+    let surface: HTMLDivElement | undefined;
+    let viewportWidth = 0;
+    let viewportHeight = 0;
+
+    function correctGeometry() {
+        const element = controller.element();
+        if (!element) return;
+        viewportWidth = element.clientWidth;
+        viewportHeight = element.clientHeight;
+        if (
+            geometryFollowsBottom &&
+            range().end === allIds().length &&
+            !props.history?.cachedNewer
+        ) {
+            element.scrollTop = element.scrollHeight;
+        } else if (anchor) controller.correct(anchor);
+    }
+
+    function resizeComposer(height: number) {
+        // The form includes reply/error content; CSS adds the inset and breathing room.
+        surface?.style.setProperty('--composer-height', `${height}px`);
+        correctGeometry();
+    }
 
     const messageFor = (id: string) => props.facts.messagesById[id];
     const userFor = (id: string) => {
@@ -84,8 +108,24 @@ export function ConversationPane(props: {
     function capture() {
         const next = controller.capture();
         if (next) {
-            anchor = next;
-            props.saveAnchor(next);
+            const element = controller.element()!;
+            const resized =
+                element.clientWidth !== viewportWidth ||
+                element.clientHeight !== viewportHeight;
+            const atBottom = resized
+                ? geometryFollowsBottom
+                : element.scrollTop + element.clientHeight >=
+                  element.scrollHeight - 1;
+            anchor = {
+                ...next,
+                bottomId:
+                    atBottom &&
+                    range().end === allIds().length &&
+                    !props.history?.cachedNewer
+                        ? allIds().at(-1)
+                        : undefined,
+            };
+            props.saveAnchor(anchor);
         }
     }
 
@@ -303,11 +343,19 @@ export function ConversationPane(props: {
     function handleScroll(event: Event) {
         const element = controller.element();
         if (!element || event.currentTarget !== element) return;
+        // Resize can dispatch scroll before ResizeObserver. Restore the previous
+        // reading intent before treating that layout-induced event as navigation.
+        if (
+            element.clientWidth !== viewportWidth ||
+            element.clientHeight !== viewportHeight
+        )
+            correctGeometry();
         capture();
         markSeen();
         const atBottom =
             element.scrollTop + element.clientHeight >=
             element.scrollHeight - 1;
+        geometryFollowsBottom = atBottom;
         followBottom =
             atBottom &&
             range().end === allIds().length &&
@@ -344,11 +392,14 @@ export function ConversationPane(props: {
             const threadChanged = threadId !== previous?.[0];
 
             if (threadChanged) {
-                const savedIndex = savedAnchor
-                    ? ids.indexOf(savedAnchor.id)
-                    : -1;
-                anchor = savedAnchor;
+                const restoreBottom = Boolean(
+                    savedAnchor?.bottomId &&
+                        savedAnchor.bottomId === ids.at(-1),
+                );
+                anchor = restoreBottom ? undefined : savedAnchor;
+                const savedIndex = anchor ? ids.indexOf(anchor.id) : -1;
                 if (ids.length > 0 && savedIndex < 0) anchor = undefined;
+                geometryFollowsBottom = !anchor;
                 setRange(
                     savedIndex >= 0
                         ? windowContaining(ids.length, savedIndex)
@@ -517,194 +568,208 @@ export function ConversationPane(props: {
                     </button>
                 </p>
             </Show>
-            <Show
-                when={
-                    props.history?.availability === 'present' &&
-                    allIds().length > 0
-                }
-                fallback={
-                    <div class="solid-conversation__empty">
+            <div
+                class="solid-conversation__surface"
+                ref={(element) => {
+                    surface = element;
+                }}
+            >
+                <Show
+                    when={
+                        props.history?.availability === 'present' &&
+                        allIds().length > 0
+                    }
+                    fallback={
+                        <div class="solid-conversation__empty">
+                            <Show
+                                when={
+                                    props.history?.synchronization === 'error'
+                                }
+                                fallback={
+                                    <p>
+                                        {!props.history
+                                            ? 'Loading history…'
+                                            : props.history.synchronization ===
+                                                'refreshing'
+                                              ? 'Checking history…'
+                                              : props.history.retentionLimited
+                                                ? 'Retained history limit reached'
+                                                : 'No retained messages.'}
+                                    </p>
+                                }
+                            >
+                                <p role="alert">History could not be loaded.</p>
+                                <button
+                                    type="button"
+                                    onClick={retryHistoryError}
+                                >
+                                    Retry history
+                                </button>
+                            </Show>
+                        </div>
+                    }
+                >
+                    <div
+                        class="solid-history__viewport"
+                        ref={(element) => controller.attach(element)}
+                        onScroll={handleScroll}
+                        tabindex={0}
+                        aria-label="Messages"
+                    >
                         <Show
-                            when={props.history?.synchronization === 'error'}
-                            fallback={
-                                <p>
-                                    {!props.history
-                                        ? 'Loading history…'
-                                        : props.history.synchronization ===
-                                            'refreshing'
-                                          ? 'Checking history…'
-                                          : props.history.retentionLimited
-                                            ? 'Retained history limit reached'
-                                            : 'No retained messages.'}
-                                </p>
+                            when={
+                                range().start === 0 &&
+                                (props.history?.cachedOlder ||
+                                    (props.history?.hasNextPage &&
+                                        !props.history?.retentionLimited)) &&
+                                (props.history?.cachedOlder ||
+                                    !props.history?.error ||
+                                    props.history?.failedOperation ===
+                                        'continuation')
                             }
                         >
-                            <p role="alert">History could not be loaded.</p>
-                            <button type="button" onClick={retryHistoryError}>
-                                Retry history
+                            <button
+                                class="solid-history__older"
+                                type="button"
+                                onClick={retryOlder}
+                            >
+                                {props.history?.synchronization === 'error'
+                                    ? 'Retry older messages'
+                                    : 'Load older messages'}
                             </button>
                         </Show>
-                    </div>
-                }
-            >
-                <div
-                    class="solid-history__viewport"
-                    ref={(element) => controller.attach(element)}
-                    onScroll={handleScroll}
-                    tabindex={0}
-                    aria-label="Messages"
-                >
-                    <Show
-                        when={
-                            range().start === 0 &&
-                            (props.history?.cachedOlder ||
-                                (props.history?.hasNextPage &&
-                                    !props.history?.retentionLimited)) &&
-                            (props.history?.cachedOlder ||
-                                !props.history?.error ||
-                                props.history?.failedOperation ===
-                                    'continuation')
-                        }
-                    >
-                        <button
-                            class="solid-history__older"
-                            type="button"
-                            onClick={retryOlder}
-                        >
-                            {props.history?.synchronization === 'error'
-                                ? 'Retry older messages'
-                                : 'Load older messages'}
-                        </button>
-                    </Show>
-                    <For each={visibleIds()}>
-                        {(id, index) => {
-                            const message = () => messageFor(id);
-                            const prior = () =>
-                                messageFor(
-                                    allIds()[range().start + index() - 1],
-                                );
-                            const newDate = () => {
-                                const current = message();
-                                const previous = prior();
-                                return Boolean(
-                                    current &&
-                                        (!previous ||
-                                            dateLabel(current.ts) !==
-                                                dateLabel(previous.ts)),
-                                );
-                            };
-                            const showSender = () => {
-                                const current = message();
-                                const previous = prior();
-                                return Boolean(
-                                    current &&
-                                        'senderId' in current &&
-                                        (!previous ||
-                                            !('senderId' in previous) ||
-                                            current.senderId !==
-                                                previous.senderId),
-                                );
-                            };
+                        <For each={visibleIds()}>
+                            {(id, index) => {
+                                const message = () => messageFor(id);
+                                const prior = () =>
+                                    messageFor(
+                                        allIds()[range().start + index() - 1],
+                                    );
+                                const newDate = () => {
+                                    const current = message();
+                                    const previous = prior();
+                                    return Boolean(
+                                        current &&
+                                            (!previous ||
+                                                dateLabel(current.ts) !==
+                                                    dateLabel(previous.ts)),
+                                    );
+                                };
+                                const showSender = () => {
+                                    const current = message();
+                                    const previous = prior();
+                                    return Boolean(
+                                        current &&
+                                            'senderId' in current &&
+                                            (!previous ||
+                                                !('senderId' in previous) ||
+                                                current.senderId !==
+                                                    previous.senderId),
+                                    );
+                                };
 
-                            return (
-                                <>
-                                    <Show when={newDate()}>
-                                        <div
-                                            class="solid-history__date"
-                                            aria-label={dateLabel(
-                                                message()!.ts,
+                                return (
+                                    <>
+                                        <Show when={newDate()}>
+                                            <div
+                                                class="solid-history__date"
+                                                aria-label={dateLabel(
+                                                    message()!.ts,
+                                                )}
+                                            >
+                                                {dateLabel(message()!.ts)}
+                                            </div>
+                                        </Show>
+                                        <Show when={message()}>
+                                            {(resolved) => (
+                                                <MessageRow
+                                                    message={resolved()}
+                                                    onReply={() =>
+                                                        props.updateDraft({
+                                                            ...props.draft,
+                                                            replyTo:
+                                                                resolved()
+                                                                    .serverId ??
+                                                                resolved().id,
+                                                            version:
+                                                                props.draft
+                                                                    .version +
+                                                                1,
+                                                        })
+                                                    }
+                                                    onRetry={(id) =>
+                                                        void changeOperation(id)
+                                                    }
+                                                    onRemove={(id) =>
+                                                        void changeOperation(
+                                                            id,
+                                                            true,
+                                                        )
+                                                    }
+                                                    user={userFor(id)}
+                                                    outgoing={outgoing(id)}
+                                                    showSender={showSender()}
+                                                />
                                             )}
-                                        >
-                                            {dateLabel(message()!.ts)}
-                                        </div>
-                                    </Show>
-                                    <Show when={message()}>
-                                        {(resolved) => (
-                                            <MessageRow
-                                                message={resolved()}
-                                                onReply={() =>
-                                                    props.updateDraft({
-                                                        ...props.draft,
-                                                        replyTo:
-                                                            resolved()
-                                                                .serverId ??
-                                                            resolved().id,
-                                                        version:
-                                                            props.draft
-                                                                .version + 1,
-                                                    })
-                                                }
-                                                onRetry={(id) =>
-                                                    void changeOperation(id)
-                                                }
-                                                onRemove={(id) =>
-                                                    void changeOperation(
-                                                        id,
-                                                        true,
-                                                    )
-                                                }
-                                                user={userFor(id)}
-                                                outgoing={outgoing(id)}
-                                                showSender={showSender()}
-                                            />
-                                        )}
-                                    </Show>
-                                </>
-                            );
-                        }}
-                    </For>
-                    <Show
-                        when={
-                            props.history?.newerCoverageAvailable &&
-                            !props.history?.cachedNewer &&
-                            range().end === allIds().length
-                        }
-                    >
-                        <button
-                            class="solid-history__older"
-                            type="button"
-                            onClick={showLatest}
+                                        </Show>
+                                    </>
+                                );
+                            }}
+                        </For>
+                        <Show
+                            when={
+                                props.history?.newerCoverageAvailable &&
+                                !props.history?.cachedNewer &&
+                                range().end === allIds().length
+                            }
                         >
-                            Show latest messages
-                        </button>
-                    </Show>
-                    <Show when={props.history?.retentionLimited}>
-                        <p class="solid-history__retention">
-                            Retained history limit reached
-                        </p>
-                    </Show>
-                </div>
-            </Show>
-            <Show
-                when={
-                    props.facts.threadsById[props.threadId]?.threadFbid &&
-                    props.history?.viewerId
-                }
-            >
-                <Composer
-                    threadId={props.threadId}
-                    draft={props.draft}
-                    update={props.updateDraft}
-                    reply={
-                        props.draft.replyTo
-                            ? messageFor(props.draft.replyTo)
-                            : undefined
+                            <button
+                                class="solid-history__older"
+                                type="button"
+                                onClick={showLatest}
+                            >
+                                Show latest messages
+                            </button>
+                        </Show>
+                        <Show when={props.history?.retentionLimited}>
+                            <p class="solid-history__retention">
+                                Retained history limit reached
+                            </p>
+                        </Show>
+                    </div>
+                </Show>
+                <Show
+                    when={
+                        props.facts.threadsById[props.threadId]?.threadFbid &&
+                        props.history?.viewerId
                     }
-                    mutate={props.mutate}
-                    beforeSend={() => {
-                        const element = controller.element();
-                        followBottom = Boolean(
-                            element &&
-                                element.scrollTop + element.clientHeight >=
-                                    element.scrollHeight - 1 &&
-                                range().end === allIds().length &&
-                                !props.history?.cachedNewer,
-                        );
-                        if (followBottom) anchor = undefined;
-                        else capture();
-                    }}
-                />
-            </Show>
+                >
+                    <Composer
+                        threadId={props.threadId}
+                        draft={props.draft}
+                        update={props.updateDraft}
+                        reply={
+                            props.draft.replyTo
+                                ? messageFor(props.draft.replyTo)
+                                : undefined
+                        }
+                        mutate={props.mutate}
+                        onResize={resizeComposer}
+                        beforeSend={() => {
+                            const element = controller.element();
+                            followBottom = Boolean(
+                                element &&
+                                    element.scrollTop + element.clientHeight >=
+                                        element.scrollHeight - 1 &&
+                                    range().end === allIds().length &&
+                                    !props.history?.cachedNewer,
+                            );
+                            if (followBottom) anchor = undefined;
+                            else capture();
+                        }}
+                    />
+                </Show>
+            </div>
         </section>
     );
 }
