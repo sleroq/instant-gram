@@ -22,7 +22,7 @@ export function createPreferences() {
         () => savedAnimations() ?? !osReduced(),
     );
     let disposed = false;
-    let changedDuringRead = false;
+    let storageRevision = 0;
     function onSystem(event: MediaQueryListEvent) {
         setOsReduced(event.matches);
     }
@@ -31,7 +31,7 @@ export function createPreferences() {
         area: string,
     ) {
         if (area !== 'local' || !(MOTION_KEY in changes)) return;
-        changedDuringRead = true;
+        storageRevision++;
         setSavedAnimations(parseAnimations(changes[MOTION_KEY].newValue));
     }
     media.addEventListener('change', onSystem);
@@ -39,7 +39,7 @@ export function createPreferences() {
     void browser.storage.local.get(MOTION_KEY).then(
         (stored) => {
             if (disposed) return;
-            if (!changedDuringRead)
+            if (storageRevision === 0)
                 setSavedAnimations(parseAnimations(stored[MOTION_KEY]));
             setReady(true);
         },
@@ -63,10 +63,14 @@ export function createPreferences() {
         error,
         saving: () => pendingWrites() > 0,
         async chooseAnimations(enabled: boolean) {
+            const revision = storageRevision;
             setPendingWrites((count) => count + 1);
             setError('');
             try {
                 await browser.storage.local.set({ [MOTION_KEY]: enabled });
+                // Unchanged writes need no event; newer events remain authoritative.
+                if (!disposed && storageRevision === revision)
+                    setSavedAnimations(enabled);
             } catch {
                 if (!disposed)
                     setError(

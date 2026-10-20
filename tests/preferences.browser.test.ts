@@ -50,7 +50,12 @@ test.after(async () => {
 });
 
 async function fixture(
-    options: { value?: unknown; holdRead?: boolean; failRead?: boolean } = {},
+    options: {
+        value?: unknown;
+        holdRead?: boolean;
+        failRead?: boolean;
+        holdWrite?: boolean;
+    } = {},
 ) {
     const context = await browser.newContext({ reducedMotion: 'reduce' });
     context.setDefaultTimeout(5_000);
@@ -63,6 +68,12 @@ async function fixture(
               releaseRead = resolve;
           })
         : Promise.resolve();
+    let releaseWrite: (() => void) | undefined;
+    const writeGate = options.holdWrite
+        ? new Promise<void>((resolve) => {
+              releaseWrite = resolve;
+          })
+        : Promise.resolve();
     await context.exposeBinding('readPreference', async () => {
         const snapshot = { motion: value };
         await gate;
@@ -73,8 +84,11 @@ async function fixture(
         'writePreference',
         async (_source, values: StoredPreferences) => {
             if (failWrite) throw new Error('Storage unavailable');
-            value = values.motion;
-            await publish(context, value);
+            if (value !== values.motion) {
+                value = values.motion;
+                await publish(context, value);
+            }
+            await writeGate;
         },
     );
     await context.addInitScript(() => {
@@ -161,6 +175,7 @@ async function fixture(
         context,
         open,
         releaseRead: () => releaseRead?.(),
+        releaseWrite: () => releaseWrite?.(),
         failWrites: () => {
             failWrite = true;
         },
@@ -309,6 +324,44 @@ test('storage failures are honest and preserve the committed On/Off choice', asy
             .waitFor();
         await active(page, false);
     } finally {
+        await context.close();
+    }
+});
+
+test('an unchanged successful save recovers the animation choice after a failed read', async () => {
+    const { context, open } = await fixture({ value: true, failRead: true });
+    try {
+        const page = await open();
+        await active(page, false);
+        await page.getByRole('alert').waitFor();
+        await page.getByRole('switch', { name: 'Animations' }).click();
+        await active(page, true);
+        assert.equal(await page.getByRole('alert').count(), 0);
+        await page.emulateMedia({ reducedMotion: 'no-preference' });
+        await page.emulateMedia({ reducedMotion: 'reduce' });
+        await active(page, true);
+    } finally {
+        await context.close();
+    }
+});
+
+test('a newer storage event wins over an earlier successful write completion', async () => {
+    const { context, open, releaseWrite } = await fixture({
+        value: true,
+        failRead: true,
+        holdWrite: true,
+    });
+    try {
+        const page = await open();
+        await active(page, false);
+        await page.getByRole('switch', { name: 'Animations' }).click();
+        await page.getByRole('status').filter({ hasText: 'Saving' }).waitFor();
+        await publish(context, false);
+        releaseWrite();
+        await page.getByRole('status').waitFor({ state: 'detached' });
+        await active(page, false);
+    } finally {
+        releaseWrite();
         await context.close();
     }
 });
