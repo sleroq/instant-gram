@@ -1,9 +1,54 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import {
+    mkdtempSync,
+    readFileSync,
+    realpathSync,
+    rmSync,
+    writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
-import { openDevUi } from '../lib/dev-browser.ts';
+import { openDevUi, prepareDevChromiumProfile } from '../lib/dev-browser.ts';
 
 const endpoint = 'http://127.0.0.1:9223';
 const url = 'chrome-extension://dev-id/ui.html';
+
+test('worktrees reuse the original checkout profile without changing its data', (t) => {
+    const directory = realpathSync(mkdtempSync(join(tmpdir(), 'dev browser ')));
+    t.after(() => rmSync(directory, { recursive: true, force: true }));
+    const repository = join(directory, 'original');
+    const worktree = join(directory, 'paseo', 'workspace');
+    execFileSync('git', ['init', repository]);
+    execFileSync(
+        'git',
+        [
+            '-c',
+            'user.name=Test',
+            '-c',
+            'user.email=test@example.com',
+            '-c',
+            'core.hooksPath=/dev/null',
+            'commit',
+            '--allow-empty',
+            '--no-gpg-sign',
+            '-m',
+            'fixture',
+        ],
+        { cwd: repository },
+    );
+    execFileSync('git', ['worktree', 'add', '--detach', worktree], {
+        cwd: repository,
+    });
+
+    const profile = prepareDevChromiumProfile(repository);
+    assert.equal(profile, join(repository, '.dev', 'chromium-profile'));
+    const session = join(profile, 'session-fixture');
+    writeFileSync(session, 'existing session');
+    assert.equal(prepareDevChromiumProfile(worktree), profile);
+    assert.equal(readFileSync(session, 'utf8'), 'existing session');
+});
 
 function browserFixture(
     t: TestContext,
