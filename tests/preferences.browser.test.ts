@@ -355,10 +355,10 @@ test('a newer storage event wins over an earlier successful write completion', a
         const page = await open();
         await active(page, false);
         await page.getByRole('switch', { name: 'Animations' }).click();
-        await page.getByRole('status').filter({ hasText: 'Saving' }).waitFor();
+        await page.locator('[aria-busy="true"]').waitFor();
         await publish(context, false);
         releaseWrite();
-        await page.getByRole('status').waitFor({ state: 'detached' });
+        await page.locator('[aria-busy="false"]').waitFor();
         await active(page, false);
     } finally {
         releaseWrite();

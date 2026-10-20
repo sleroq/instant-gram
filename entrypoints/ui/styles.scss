@@ -522,15 +522,9 @@ a:focus-visible {
         }
     }
 }
-.solid-settings__status,
 .solid-settings__error {
     margin: 12px 0 0;
     font-size: 13px;
-}
-.solid-settings__status {
-    color: var(--settings-text-muted);
-}
-.solid-settings__error {
     color: #ffb6b5;
 }
 

@@ -30,11 +30,6 @@ export function SettingsPage(props: { preferences: Preferences }) {
                     </span>
                 </button>
             </div>
-            <Show when={props.preferences.saving()}>
-                <p class="solid-settings__status" role="status">
-                    Saving…
-                </p>
-            </Show>
             <Show when={props.preferences.error()}>
                 <p class="solid-settings__error" role="alert">
                     {props.preferences.error()}
