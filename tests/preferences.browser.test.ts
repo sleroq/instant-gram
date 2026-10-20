@@ -404,6 +404,16 @@ test('Chats is the default tab and Settings uses the persistent keyboard-accessi
         );
 
         await settings.press('Tab');
+        const sync = page.getByRole('button', { name: /^Sync status:/ });
+        assert.equal(
+            await sync.evaluate(
+                (element) => element === document.activeElement,
+            ),
+            true,
+        );
+        await page.getByRole('tooltip').waitFor();
+        await sync.press('Tab');
+        assert.equal(await page.getByRole('tooltip').count(), 0);
         assert.equal(
             await page
                 .getByRole('tabpanel', { name: 'Settings', exact: true })

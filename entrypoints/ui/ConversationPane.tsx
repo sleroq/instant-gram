@@ -23,7 +23,6 @@ import type {
     OperationResult,
 } from '../../lib/engine/operations';
 import { MessageRow, dateLabel } from './MessageRow';
-import { SyncOrb } from './SyncOrb';
 
 export function ConversationPane(props: {
     threadId: string;
@@ -418,18 +417,11 @@ export function ConversationPane(props: {
                         Back
                     </button>
                 </Show>
-                <div class="sync-heading">
+                <div>
                     <h2>
                         {props.facts.threadsById[props.threadId]?.title ||
                             'Conversation'}
                     </h2>
-                    <SyncOrb
-                        scope="History"
-                        resource={props.history}
-                        newerCoverageAvailable={
-                            props.history?.newerCoverageAvailable
-                        }
-                    />
                 </div>
                 <button
                     type="button"

@@ -8,7 +8,6 @@ import {
 } from 'solid-js';
 import type { EntityFacts, ResourceProjection } from '../../lib/engine/inbox';
 import { computeChatWindow, type ListAnchor } from './virtual-list';
-import { SyncOrb } from './SyncOrb';
 
 function preview(facts: EntityFacts, id: string) {
     const thread = facts.threadsById[id];
@@ -135,10 +134,7 @@ export function InboxList(props: {
             <div class="solid-inbox__list-heading">
                 <div>
                     <p class="solid-inbox__eyebrow">Read-only inbox</p>
-                    <div class="sync-heading">
-                        <h1>Messages</h1>
-                        <SyncOrb scope="Inbox" resource={props.resource} />
-                    </div>
+                    <h1>Messages</h1>
                 </div>
                 <button
                     type="button"

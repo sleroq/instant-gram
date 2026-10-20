@@ -3,101 +3,117 @@ import {
     createMemo,
     createSignal,
     createUniqueId,
+    For,
     Show,
 } from 'solid-js';
-import type { ResourceProjection } from '../../lib/engine/inbox';
+import type {
+    HistoryProjection,
+    ResourceProjection,
+} from '../../lib/engine/inbox';
 
-/** Presentation only: each caller supplies its own worker resource. */
+const priority = {
+    failed: 0,
+    unavailable: 1,
+    loading: 2,
+    refreshing: 3,
+    retained: 4,
+    fresh: 5,
+};
+type SyncState = { kind: keyof typeof priority; label: string; detail: string };
+
+function describeResource(
+    resource: ResourceProjection | undefined,
+    history = false,
+    newerCoverageAvailable = false,
+): SyncState {
+    if (resource?.error || resource?.synchronization === 'error')
+        return {
+            kind: 'failed',
+            label: 'Sync failed',
+            detail:
+                resource?.availability === 'present'
+                    ? 'Loaded content remains available. See the error and recovery controls in Chats.'
+                    : 'Content is unavailable. See the error and recovery controls in Chats.',
+        };
+
+    if (
+        !resource ||
+        (resource.availability === 'absent' &&
+            resource.synchronization === 'refreshing')
+    )
+        return {
+            kind: 'loading',
+            label: 'Loading',
+            detail: 'Waiting for initial content. The worker request may be queued or in progress.',
+        };
+
+    if (resource.availability === 'absent')
+        return {
+            kind: 'unavailable',
+            label: 'Unavailable',
+            detail: 'No content is currently available.',
+        };
+
+    if (resource.synchronization === 'refreshing')
+        return {
+            kind: 'refreshing',
+            label: 'Refreshing',
+            detail: 'Loaded content remains available while the worker checks for updates. The request may be queued or in progress.',
+        };
+
+    if (resource.freshness === 'stale' || newerCoverageAvailable)
+        return {
+            kind: 'retained',
+            label: 'Retained content',
+            detail: history
+                ? 'Showing retained history. It does not establish current or complete coverage. Newer messages may be available.'
+                : 'Showing cached conversations. Updates have not been confirmed.',
+        };
+
+    return {
+        kind: 'fresh',
+        label: 'Fresh',
+        detail: history
+            ? 'Loaded history is fresh. More messages may exist outside this window.'
+            : 'Loaded conversations are up to date.',
+    };
+}
+
+/** One presentation of the existing inbox and selected-history resources. */
 export function SyncOrb(props: {
-    resource?: ResourceProjection;
-    scope: 'Inbox' | 'History';
-    newerCoverageAvailable?: boolean;
+    inbox: ResourceProjection;
+    selectedThreadId?: string;
+    history?: HistoryProjection;
 }) {
     const descriptionId = createUniqueId();
     const [open, setOpen] = createSignal(false);
-    let target: HTMLButtonElement | undefined;
-    let description: HTMLSpanElement | undefined;
     createEffect(open, (visible) => {
         if (!visible) return;
-        function placeDescription() {
-            if (!target || !description?.isConnected) return;
-            const left = target.getBoundingClientRect().left;
-            description.style.left = `${Math.min(0, window.innerWidth - 12 - left - description.offsetWidth)}px`;
-        }
         function dismiss(event: KeyboardEvent) {
             if (event.key === 'Escape') setOpen(false);
         }
-        queueMicrotask(placeDescription);
-        window.addEventListener('resize', placeDescription);
         document.addEventListener('keydown', dismiss);
-        return () => {
-            window.removeEventListener('resize', placeDescription);
-            document.removeEventListener('keydown', dismiss);
-        };
+        return () => document.removeEventListener('keydown', dismiss);
     });
 
-    const state = createMemo(() => {
-        const resource = props.resource;
-        if (resource?.error || resource?.synchronization === 'error')
-            return {
-                kind: 'failed',
-                label: 'Sync failed',
-                symbol: '!',
-                detail:
-                    resource?.availability === 'present'
-                        ? 'Loaded content remains available. See the error and recovery controls.'
-                        : 'Content is unavailable. See the error and recovery controls.',
-            };
-
-        if (
-            !resource ||
-            (resource.availability === 'absent' &&
-                resource.synchronization === 'refreshing')
-        )
-            return {
-                kind: 'loading',
-                label: 'Loading',
-                symbol: '…',
-                detail: 'Waiting for initial content. The worker request may be queued or in progress.',
-            };
-
-        if (resource.synchronization === 'refreshing')
-            return {
-                kind: 'refreshing',
-                label: 'Refreshing',
-                symbol: '↻',
-                detail: 'Loaded content remains available while the worker checks for updates. The request may be queued or in progress.',
-            };
-
-        if (resource.availability === 'absent')
-            return {
-                kind: 'unavailable',
-                label: 'Unavailable',
-                symbol: '−',
-                detail: 'No content is currently available.',
-            };
-
-        if (resource.freshness === 'stale' || props.newerCoverageAvailable)
-            return {
-                kind: 'retained',
-                label: 'Retained content',
-                symbol: '◷',
-                detail:
-                    props.scope === 'History'
-                        ? 'Showing retained history. It does not establish current or complete coverage. Newer messages may be available.'
-                        : 'Showing cached conversations. Updates have not been confirmed.',
-            };
-
-        return {
-            kind: 'fresh',
-            label: 'Fresh',
-            symbol: '✓',
-            detail:
-                props.scope === 'History'
-                    ? 'Loaded history is fresh. More messages may exist outside this window.'
-                    : 'Loaded conversations are up to date.',
-        };
+    const resources = createMemo(() => {
+        const states = [{ scope: 'Inbox', ...describeResource(props.inbox) }];
+        if (props.selectedThreadId)
+            states.push({
+                scope: 'Selected history',
+                ...describeResource(
+                    props.history,
+                    true,
+                    props.history?.newerCoverageAvailable,
+                ),
+            });
+        return states;
     });
+    const state = createMemo(() =>
+        resources().reduce((current, next) =>
+            priority[next.kind] < priority[current.kind] ? next : current,
+        ),
+    );
 
     return (
         <span
@@ -110,9 +126,8 @@ export function SyncOrb(props: {
         >
             <button
                 class="sync-orb__target"
-                ref={(element) => (target = element)}
                 type="button"
-                aria-label={`${props.scope} sync: ${state().label}`}
+                aria-label={`Sync status: ${state().label}`}
                 aria-describedby={open() ? descriptionId : undefined}
                 onFocus={() => setOpen(true)}
                 onBlur={() => setOpen(false)}
@@ -122,21 +137,24 @@ export function SyncOrb(props: {
                     class="sync-orb__mark"
                     data-state={state().kind}
                     aria-hidden="true"
-                >
-                    {state().symbol}
-                </span>
+                />
             </button>
             <Show when={open()}>
                 <span
                     class="sync-orb__description"
-                    ref={(element) => (description = element)}
                     id={descriptionId}
                     role="tooltip"
                 >
-                    <strong>
-                        {props.scope}: {state().label}
-                    </strong>
-                    <span>{state().detail}</span>
+                    <For each={resources()}>
+                        {(resource) => (
+                            <span>
+                                <strong>
+                                    {resource.scope}: {resource.label}
+                                </strong>
+                                <span>{resource.detail}</span>
+                            </span>
+                        )}
+                    </For>
                 </span>
             </Show>
         </span>

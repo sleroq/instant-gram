@@ -99,27 +99,17 @@ a:focus-visible {
     color: #f4f5f7;
     padding: 7px 10px;
 }
-.sync-heading {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    min-width: 0;
-}
 .sync-orb {
     position: relative;
     display: inline-flex;
     flex: 0 0 auto;
-    --sync-pending: #a7c6ff;
-    --sync-fresh: #a3dfb5;
-    --sync-retained: #e3c484;
-    --sync-failed: #ffb6b5;
-    --sync-unavailable: #afb7c5;
+    margin-block: auto 12px;
 }
-button.sync-orb__target {
+.sync-orb__target {
     display: grid;
     place-items: center;
-    width: 28px;
-    height: 28px;
+    width: 44px;
+    height: 44px;
     padding: 0;
     border: 0;
     border-radius: 50%;
@@ -127,55 +117,98 @@ button.sync-orb__target {
     color: inherit;
 }
 .sync-orb__mark {
-    display: grid;
-    place-items: center;
-    width: 18px;
-    height: 18px;
-    border: 1px solid currentcolor;
-    border-radius: 50%;
-    font-size: 12px;
-    line-height: 1;
-    color: var(--sync-unavailable);
-    background: #20242b;
+    --sync-depth: #183e45;
+    --sync-light: #8aeacb;
+    --sync-bloom: #729bff;
+    --sync-drift-duration: 18s;
 
+    position: relative;
+    width: 24px;
+    height: 24px;
+    overflow: hidden;
+    isolation: isolate;
+    border-radius: 50%;
+    background: var(--sync-depth);
+    box-shadow:
+        inset 0 -3px 6px #0005,
+        0 0 12px #91d4ff18;
+
+    &::before,
+    &::after {
+        position: absolute;
+        inset: -35%;
+        content: '';
+        filter: blur(2px);
+    }
+    &::before {
+        background:
+            radial-gradient(
+                ellipse at 30% 30%,
+                var(--sync-light),
+                transparent 55%
+            ),
+            radial-gradient(
+                ellipse at 70% 75%,
+                var(--sync-bloom),
+                transparent 60%
+            );
+        transform: translate(-6%, 3%) rotate(-12deg);
+    }
+    &::after {
+        background:
+            radial-gradient(ellipse at 70% 25%, #ffffff70, transparent 35%),
+            radial-gradient(
+                ellipse at 35% 70%,
+                var(--sync-light),
+                transparent 50%
+            );
+        opacity: 0.65;
+        transform: translate(6%, -3%) rotate(24deg);
+    }
     &[data-state='loading'],
     &[data-state='refreshing'] {
-        color: var(--sync-pending);
-    }
-    &[data-state='fresh'] {
-        color: var(--sync-fresh);
+        --sync-depth: #263b65;
+        --sync-light: #8dc9ff;
+        --sync-bloom: #c299ff;
+        --sync-drift-duration: 10s;
     }
     &[data-state='retained'] {
-        color: var(--sync-retained);
+        --sync-depth: #514025;
+        --sync-light: #f2d29b;
+        --sync-bloom: #bc8aaf;
     }
     &[data-state='failed'] {
-        color: var(--sync-failed);
+        --sync-depth: #612a3b;
+        --sync-light: #ffbcaa;
+        --sync-bloom: #de81bc;
+    }
+    &[data-state='unavailable'] {
+        --sync-depth: #343b49;
+        --sync-light: #bbc6d5;
+        --sync-bloom: #7b8da9;
     }
 }
 :root[data-motion='on'] .sync-orb__mark {
-    &[data-state='loading'] {
-        animation: sync-breathe 1.6s ease-in-out infinite;
+    &::before {
+        animation: sync-drift var(--sync-drift-duration) ease-in-out infinite
+            alternate;
     }
-    &[data-state='refreshing'] {
-        animation: sync-turn 2s linear infinite;
-    }
-}
-@keyframes sync-breathe {
-    50% {
-        opacity: 0.45;
+    &::after {
+        animation: sync-drift calc(var(--sync-drift-duration) * 1.3) ease-in-out
+            infinite alternate-reverse;
     }
 }
-@keyframes sync-turn {
+@keyframes sync-drift {
     to {
-        transform: rotate(360deg);
+        transform: translate(8%, -6%) rotate(65deg) scale(1.1);
     }
 }
 .sync-orb__description {
     position: absolute;
     z-index: 5;
-    inset-block-start: 100%;
-    inset-inline-start: 0;
-    width: min(260px, calc(100vw - 100px));
+    inset-block-end: 0;
+    inset-inline-start: 100%;
+    width: min(280px, calc(100vw - 76px));
     padding: 10px 12px;
     border: 1px solid #414753;
     border-radius: 8px;
@@ -188,6 +221,9 @@ button.sync-orb__target {
     strong,
     span {
         display: block;
+    }
+    > span + span {
+        margin-block-start: 10px;
     }
 }
 .solid-inbox__error {
@@ -498,23 +534,29 @@ button.sync-orb__target {
 .solid-shell__content {
     min-width: 0;
 }
-.solid-app-nav {
+.solid-app-rail {
     --navigation-surface: #15171c;
     --navigation-hover: #252a33;
     --navigation-border: #292d35;
     --navigation-icon: #b9d2ff;
 
     position: sticky;
+    z-index: 2;
     top: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
     align-self: start;
-    gap: 8px;
     height: 100dvh;
-    padding-block: 12px;
     border-inline-end: 1px solid var(--navigation-border);
     background: var(--navigation-surface);
+}
+.solid-app-nav {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding-block: 12px;
 
     button {
         display: grid;
