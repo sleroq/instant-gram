@@ -32,6 +32,7 @@ declare global {
         historyTest: {
             current: TestProjection;
             commands: TestCommand[];
+            sequence: number;
             send(next: TestProjection, sequence: number): void;
             restart(): void;
             settleSend(ok: boolean): void;
@@ -68,7 +69,12 @@ test.after(async () => {
 
 async function openHistory(
     width = 1100,
-    options: { checking?: boolean; bounded?: boolean; composer?: boolean } = {},
+    options: {
+        checking?: boolean;
+        bounded?: boolean;
+        composer?: boolean;
+        previousCoverage?: boolean;
+    } = {},
 ): Promise<Page> {
     const page = await browser.newPage({
         viewport: { width, height: 700 },
@@ -228,6 +234,11 @@ async function openHistory(
             selectWindowFacts(projection);
         }
 
+        if (options.previousCoverage) {
+            projection.histories['thread-0'].coverageGeneration = 1;
+            projection.histories['thread-0'].newerCoverageAvailable = true;
+        }
+
         const authorized = structuredClone(projection);
         if (options.checking) {
             projection.accountId = null;
@@ -241,6 +252,7 @@ async function openHistory(
         window.historyTest = {
             current: projection,
             commands: [],
+            sequence,
             boundedStart,
             restart() {
                 active?.disconnects.forEach((listener) => listener());
@@ -272,6 +284,7 @@ async function openHistory(
             send(next, nextSequence) {
                 this.current = next;
                 sequence = nextSequence;
+                this.sequence = nextSequence;
                 active?.messages.forEach((listener) =>
                     listener({ kind: 'snapshot', sequence, projection: next }),
                 );
@@ -320,7 +333,46 @@ async function openHistory(
                             },
                             postMessage: (command: TestCommand) => {
                                 window.historyTest.commands.push(command);
+                                const currentHistory =
+                                    window.historyTest.current.histories[
+                                        'thread-0'
+                                    ];
                                 if (
+                                    command.kind === 'load-newer-history' &&
+                                    currentHistory.newerCoverageAvailable &&
+                                    !currentHistory.cachedNewer
+                                ) {
+                                    const next = structuredClone(
+                                        window.historyTest.current,
+                                    );
+                                    const history = next.histories['thread-0'];
+                                    const generation =
+                                        (history.coverageGeneration ?? 1) + 1;
+                                    history.coverageGeneration = generation;
+                                    history.newerCoverageAvailable = false;
+                                    history.cachedOlder = false;
+                                    history.freshness = 'fresh';
+                                    history.orderedIds = Array.from(
+                                        { length: 40 },
+                                        (_, index) => {
+                                            const id = `head-${generation}-${index}`;
+                                            next.entities.messagesById[id] = {
+                                                id,
+                                                kind: 'text',
+                                                text: `Current message ${generation} ${index}`,
+                                                senderId: 'peer',
+                                                ts: 1_700_200_000_000 + index,
+                                            };
+                                            return id;
+                                        },
+                                    );
+                                    queueMicrotask(() =>
+                                        window.historyTest.send(
+                                            next,
+                                            ++sequence,
+                                        ),
+                                    );
+                                } else if (
                                     options.bounded &&
                                     (command.kind === 'load-older-history' ||
                                         command.kind === 'load-newer-history')
@@ -2077,43 +2129,388 @@ test('bounded history reselection carries the saved logical anchor to the worker
     await page.close();
 });
 
-test('a previous cached range only jumps to latest on request', async () => {
-    const page = await openHistory();
-    await page.evaluate(() => {
-        const current = structuredClone(window.historyTest.current);
-        current.histories['thread-0'].coverageGeneration = 1;
-        current.histories['thread-0'].newerCoverageAvailable = true;
-        current.histories['thread-0'].cachedNewer = false;
-        current.histories['thread-0'].freshness = 'stale';
-        window.historyTest.send(current, 2);
+async function publishDetachedHead(page: Page, unread = false) {
+    await page.evaluate((unread) => {
+        const next = structuredClone(window.historyTest.current);
+        const history = next.histories['thread-0'];
+        history.coverageGeneration ??= 1;
+        history.newerCoverageAvailable = true;
+        history.freshness = 'stale';
+        history.fetchedAt++;
+        if (unread) {
+            next.entities.threadsById['thread-0'].threadIgId = 'igid-0';
+            next.entities.threadsById['thread-0'].isUnread = true;
+        }
+        next.commitRevision++;
+        window.historyTest.send(next, window.historyTest.sequence + 1);
+    }, unread);
+}
+
+async function newerRequests(page: Page) {
+    return page.evaluate(
+        () =>
+            window.historyTest.commands.filter(
+                (command) => command.kind === 'load-newer-history',
+            ).length,
+    );
+}
+
+async function scrollForward(page: Page) {
+    await page.getByLabel('Messages', { exact: true }).evaluate((element) => {
+        element.scrollTop = element.scrollHeight;
+        element.dispatchEvent(new Event('scroll'));
+    });
+    await layoutSettled(page);
+}
+
+for (const width of [600, 1100]) {
+    test(`genuine newest following automatically adopts disjoint heads and subsequent arrivals at ${width}`, async () => {
+        const page = await openHistory(width, { composer: true });
+        await layoutSettled(page);
+        await publishDetachedHead(page, true);
+        await messageRow(page, 'head-2-39').waitFor();
+        await layoutSettled(page);
+        assert.equal(await newerRequests(page), 1);
+        assert.equal(
+            await page.locator('[data-message-id^="message-"]').count(),
+            0,
+        );
+        await page.waitForFunction(() =>
+            window.historyTest.commands.some(
+                ({ command }) =>
+                    command?.intent.type === 'read' &&
+                    command.intent.messageId === 'head-2-39',
+            ),
+        );
+
+        await page.setViewportSize({
+            width: width === 1100 ? 390 : 1100,
+            height: 700,
+        });
+        await layoutSettled(page);
+        await publishDetachedHead(page);
+        await messageRow(page, 'head-3-39').waitFor();
+        await layoutSettled(page);
+        assert.equal(await newerRequests(page), 2);
+        assert.equal(
+            await page.locator('[data-message-id^="head-2-"]').count(),
+            0,
+        );
+        assert.ok((await page.locator('[data-message-id]').count()) <= 80);
+        await page.close();
     });
 
-    const latest = page.getByRole('button', { name: 'Show latest messages' });
-    await latest.waitFor();
+    test(`older reader keeps identity and focus through incoming heads, then deliberately traverses forward at ${width}`, async () => {
+        const page = await openHistory(width, { composer: true });
+        const viewport = page.getByLabel('Messages', { exact: true });
+        await viewport.evaluate((element) => {
+            element.scrollTop = element.scrollHeight / 2;
+            element.dispatchEvent(new Event('scroll'));
+        });
+        await layoutSettled(page);
+        const anchorId = (await visibleMessage(page))!;
+        const reply = messageRow(page, anchorId).getByRole('button', {
+            name: 'Reply',
+            exact: true,
+        });
+        await reply.evaluate((element: HTMLElement) =>
+            element.focus({ preventScroll: true }),
+        );
+        const row = await messageRow(page, anchorId).elementHandle();
+
+        for (let update = 0; update < 2; update++) {
+            await publishDetachedHead(page, true);
+            await layoutSettled(page);
+            assert.equal(await visibleMessage(page), anchorId);
+            assert.equal(
+                await row!.evaluate((element) => element.isConnected),
+                true,
+            );
+            assert.equal(
+                await reply.evaluate(
+                    (element) => element === document.activeElement,
+                ),
+                true,
+            );
+            assert.equal(await newerRequests(page), 0);
+        }
+        assert.equal(
+            await page.evaluate(() =>
+                window.historyTest.commands.some(
+                    ({ command }) => command?.intent.type === 'read',
+                ),
+            ),
+            false,
+        );
+
+        for (let step = 0; step < 5 && !(await newerRequests(page)); step++) {
+            await scrollForward(page);
+        }
+        await messageRow(page, 'head-2-39').waitFor();
+        assert.equal(
+            await page.locator('[data-message-id^="message-"]').count(),
+            0,
+        );
+        assert.ok((await page.locator('[data-message-id]').count()) <= 80);
+        await page.close();
+    });
+}
+
+test('returning from Settings restores newest-follow intent without treating hidden arrivals as seen', async () => {
+    const page = await openHistory(600, { composer: true });
+    await layoutSettled(page);
+    await page.getByRole('tab', { name: 'Settings', exact: true }).click();
+    await page
+        .getByRole('heading', { name: 'Settings', exact: true })
+        .waitFor();
+    await publishDetachedHead(page, true);
+    await layoutSettled(page);
+    assert.equal(await newerRequests(page), 0);
     assert.equal(
         await page.evaluate(() =>
             window.historyTest.commands.some(
-                (c) => c.kind === 'load-newer-history',
+                ({ command }) => command?.intent.type === 'read',
             ),
         ),
         false,
     );
 
-    await latest.click();
-    assert.deepEqual(
-        await page.evaluate(() => window.historyTest.commands.at(-1)),
-        { kind: 'load-newer-history', threadId: 'thread-0' },
+    await page.getByRole('tab', { name: 'Chats', exact: true }).click();
+    await messageRow(page, 'head-2-39').waitFor();
+    assert.equal(await newerRequests(page), 1);
+    assert.equal(
+        await page.locator('[data-message-id^="message-"]').count(),
+        0,
     );
+    await page.close();
+});
+
+test('a newest follower consumes linked cached newer coverage before adopting the detached current head', async () => {
+    const page = await openHistory();
+    await layoutSettled(page);
     await page.evaluate(() => {
-        const current = structuredClone(window.historyTest.current);
-        current.histories['thread-0'].coverageGeneration = 2;
-        current.histories['thread-0'].newerCoverageAvailable = false;
-        current.histories['thread-0'].orderedIds = ['thread-1-message'];
-        current.histories['thread-0'].freshness = 'fresh';
-        window.historyTest.send(current, 3);
+        const next = structuredClone(window.historyTest.current);
+        next.histories['thread-0'].cachedNewer = true;
+        next.histories['thread-0'].newerCoverageAvailable = true;
+        window.historyTest.send(next, window.historyTest.sequence + 1);
     });
-    await page.locator('[data-message-id="thread-1-message"]').waitFor();
-    assert.equal(await latest.count(), 0);
+    await page.waitForFunction(() =>
+        window.historyTest.commands.some(
+            (command) => command.kind === 'load-newer-history',
+        ),
+    );
+    assert.equal(await messageRow(page, 'head-2-39').count(), 0);
+
+    // The worker first returns a linked retained window, not the detached head.
+    await page.evaluate(() => {
+        const next = structuredClone(window.historyTest.current);
+        const history = next.histories['thread-0'];
+        for (let index = 120; index < 160; index++) {
+            const id = `message-${index}`;
+            history.orderedIds.push(id);
+            next.entities.messagesById[id] = {
+                id,
+                kind: 'text',
+                senderId: 'peer',
+                text: `Message ${index}`,
+                ts: 1_700_000_000_000 + index * 60_000,
+            };
+        }
+        history.cachedNewer = false;
+        window.historyTest.send(next, window.historyTest.sequence + 1);
+    });
+    await messageRow(page, 'head-2-39').waitFor();
+    assert.equal(await newerRequests(page), 2);
+    assert.equal(
+        await page.locator('[data-message-id^="message-"]').count(),
+        0,
+    );
     assert.ok((await page.locator('[data-message-id]').count()) <= 80);
+    await page.close();
+});
+
+test('previous coverage at DOM bottom is not newest intent, including short-viewport fill', async () => {
+    const page = await openHistory(1100, {
+        previousCoverage: true,
+        composer: true,
+    });
+    await layoutSettled(page);
+    assert.equal(await newerRequests(page), 0);
+    await page.evaluate(() => {
+        const next = structuredClone(window.historyTest.current);
+        next.histories['thread-0'].orderedIds = ['message-119'];
+        window.historyTest.send(next, ++next.commitRevision);
+    });
+    await layoutSettled(page);
+    assert.equal(await newerRequests(page), 0);
+    await page
+        .getByRole('textbox', { name: 'Message', exact: true })
+        .fill('Retain draft while filling');
+    await layoutSettled(page);
+    assert.equal(await newerRequests(page), 0);
+    const viewport = page.getByLabel('Messages', { exact: true });
+    await viewport.focus();
+    await viewport.press('End');
+    await messageRow(page, 'head-2-39').waitFor();
+    assert.equal(await newerRequests(page), 1);
+    assert.equal(
+        await page
+            .getByRole('textbox', { name: 'Message', exact: true })
+            .inputValue(),
+        'Retain draft while filling',
+    );
+    await page.close();
+});
+
+for (const input of ['wheel', 'touch'] as const) {
+    test(`${input} zoom preserves previous coverage while deliberate forward input reaches newest`, async () => {
+        const page = await openHistory(600, { previousCoverage: true });
+        await page.evaluate(() => {
+            const next = structuredClone(window.historyTest.current);
+            next.histories['thread-0'].orderedIds = ['message-119'];
+            window.historyTest.send(next, window.historyTest.sequence + 1);
+        });
+        await layoutSettled(page);
+        const viewport = page.getByLabel('Messages', { exact: true });
+        const row = await messageRow(page, 'message-119').elementHandle();
+        await viewport.focus();
+
+        if (input === 'wheel') {
+            await viewport.hover();
+            await page.keyboard.down('Control');
+            await page.mouse.wheel(0, 100);
+            await page.keyboard.up('Control');
+        } else {
+            await viewport.evaluate((element) => {
+                const touches = [400, 300].map(
+                    (clientY, identifier) =>
+                        new Touch({ identifier, target: element, clientY }),
+                );
+                element.dispatchEvent(
+                    new TouchEvent('touchstart', { touches, bubbles: true }),
+                );
+                const moved = [380, 320].map(
+                    (clientY, identifier) =>
+                        new Touch({ identifier, target: element, clientY }),
+                );
+                element.dispatchEvent(
+                    new TouchEvent('touchmove', {
+                        touches: moved,
+                        bubbles: true,
+                        cancelable: true,
+                    }),
+                );
+            });
+        }
+        await layoutSettled(page);
+        assert.equal(await newerRequests(page), 0);
+        assert.equal(
+            await row!.evaluate((element) => element.isConnected),
+            true,
+        );
+        assert.equal(
+            await viewport.evaluate(
+                (element) => element === document.activeElement,
+            ),
+            true,
+        );
+
+        if (input === 'wheel') {
+            await page.mouse.wheel(0, 100);
+        } else {
+            await viewport.evaluate((element) => {
+                const touches = [
+                    new Touch({ identifier: 1, target: element, clientY: 400 }),
+                ];
+                element.dispatchEvent(
+                    new TouchEvent('touchstart', { touches, bubbles: true }),
+                );
+                const moved = [
+                    new Touch({ identifier: 1, target: element, clientY: 380 }),
+                ];
+                element.dispatchEvent(
+                    new TouchEvent('touchmove', {
+                        touches: moved,
+                        bubbles: true,
+                        cancelable: true,
+                    }),
+                );
+            });
+        }
+        await messageRow(page, 'head-2-39').waitFor();
+        assert.equal(await newerRequests(page), 1);
+        assert.equal(
+            await row!.evaluate((element) => element.isConnected),
+            false,
+        );
+        assert.equal(
+            await viewport.evaluate(
+                (element) => element === document.activeElement,
+            ),
+            true,
+        );
+        await page.close();
+    });
+}
+
+test('forward traversal consumes cached projection windows before adopting a detached current head', async () => {
+    const page = await openHistory(1100, {
+        bounded: true,
+        previousCoverage: true,
+    });
+    const viewport = page.getByLabel('Messages', { exact: true });
+
+    // Leave the old head and move into an earlier 400-ID worker projection.
+    for (let step = 0; step < 20; step++) {
+        if (
+            (await page.evaluate(() => window.historyTest.boundedStart))! < 1000
+        )
+            break;
+        await viewport.evaluate((element) => {
+            element.scrollTop = 0;
+            element.dispatchEvent(new Event('scroll'));
+        });
+        await layoutSettled(page);
+    }
+    assert.ok(
+        (await page.evaluate(() => window.historyTest.boundedStart))! < 1000,
+    );
+
+    await publishDetachedHead(page, true);
+    await layoutSettled(page);
+    assert.equal(await newerRequests(page), 0);
+
+    for (let step = 0; step < 30; step++) {
+        if (await messageRow(page, 'head-2-39').count()) break;
+        await scrollForward(page);
+        assert.ok((await page.locator('[data-message-id]').count()) <= 80);
+        if (
+            (await page.evaluate(() => window.historyTest.boundedStart))! < 1000
+        ) {
+            assert.equal(
+                await page.locator('[data-message-id^="head-"]').count(),
+                0,
+            );
+            assert.equal(
+                await page.evaluate(() =>
+                    window.historyTest.commands.some(
+                        ({ command }) => command?.intent.type === 'read',
+                    ),
+                ),
+                false,
+            );
+        }
+    }
+
+    await messageRow(page, 'head-2-39').waitFor();
+    assert.equal(
+        await page.evaluate(() => window.historyTest.boundedStart),
+        1000,
+    );
+    assert.equal(await newerRequests(page), 2);
+    assert.equal(
+        await page.locator('[data-message-id^="message-"]').count(),
+        0,
+    );
     await page.close();
 });
