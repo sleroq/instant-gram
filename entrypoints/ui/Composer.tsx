@@ -114,22 +114,22 @@ export function Composer(props: {
                         }
                     }}
                 />
+                <button
+                    class="solid-composer__send"
+                    type="submit"
+                    aria-label="Send"
+                    disabled={!props.draft.text.trim()}
+                >
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="m5 12 7-7 7 7M12 5v14" />
+                    </svg>
+                </button>
                 <Show when={error()}>
                     <p class="solid-composer__error" role="alert">
                         {error()}
                     </p>
                 </Show>
             </div>
-            <button
-                class="solid-composer__send"
-                type="submit"
-                aria-label="Send"
-                disabled={!props.draft.text.trim()}
-            >
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                    <path d="m5 12 7-7 7 7M12 5v14" />
-                </svg>
-            </button>
         </form>
     );
 }
