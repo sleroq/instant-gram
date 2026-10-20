@@ -1,9 +1,17 @@
 # Motion requirements
 
-The shared motion preference and animation lifecycle remain planned.
-The [application contract](application-architecture.md) and
-[roadmap](roadmap.md) own delivery and state
-boundaries. The current UI honors system reduced-motion.
+Settings (`#/settings`) provides System (default), Reduced, and Full motion.
+`entrypoints/ui/preferences.ts` is the single global presentation preference
+owner: it validates the `motion` key in `storage.local`, listens for other windows
+and live OS changes, and gates the shell until the initial read resolves.
+Storage failures are reported without pretending the choice was saved.
+The shell exposes the effective mode for CSS and future consuming surfaces;
+Reduced never delays route unmounting or focus restoration.
+
+Animation consumers and retained exit lifecycles remain future work. The
+[application contract](application-architecture.md) and [roadmap](roadmap.md)
+own delivery and state boundaries. Preferences do not change fetching, retention,
+canonical Instagram persistence, or autoplay.
 
 ## Required behavior
 

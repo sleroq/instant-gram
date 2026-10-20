@@ -279,6 +279,19 @@ async function openHistory(
         };
         Object.assign(globalThis, {
             chrome: {
+                storage: {
+                    local: {
+                        get: (
+                            _key: string,
+                            callback: (value: { motion?: string }) => void,
+                        ) => callback({}),
+                        set: (
+                            _value: { motion: string },
+                            callback: () => void,
+                        ) => callback(),
+                    },
+                    onChanged: { addListener() {}, removeListener() {} },
+                },
                 runtime: {
                     id: 'test',
                     lastError: undefined,
@@ -1263,6 +1276,100 @@ test('group history retains logical anchors and rows through content growth and 
     await page.close();
 });
 
+for (const width of [600, 1100]) {
+    test(`Settings Back restores selected thread, draft and logical reading position at ${width}`, async () => {
+        const page = await openHistory(width);
+        await page.evaluate(() => {
+            const next = structuredClone(window.historyTest.current);
+            next.entities.threadsById['thread-0'].threadFbid = 'fbid-0';
+            window.historyTest.send(next, 2);
+        });
+
+        const viewport = page.locator('.solid-history__viewport');
+        await viewport.evaluate((element) => {
+            element.scrollTop = element.scrollHeight / 2;
+            element.dispatchEvent(new Event('scroll'));
+        });
+        function visibleId() {
+            return viewport.evaluate((element) => {
+                const top = element.getBoundingClientRect().top;
+                return [
+                    ...element.querySelectorAll<HTMLElement>(
+                        '[data-message-id]',
+                    ),
+                ].find((row) => row.getBoundingClientRect().bottom > top)
+                    ?.dataset.messageId;
+            });
+        }
+        const id = await visibleId();
+        const editor = page.getByRole('textbox', {
+            name: 'Message',
+            exact: true,
+        });
+        await editor.fill('Keep this draft');
+
+        await page.getByRole('link', { name: 'Settings', exact: true }).click();
+        await page
+            .getByRole('heading', { name: 'Settings', exact: true })
+            .waitFor();
+        assert.equal(await page.locator('[data-message-id]').count(), 0);
+        await page.goBack();
+        await editor.waitFor();
+        assert.equal(await editor.inputValue(), 'Keep this draft');
+        assert.equal(
+            await page.evaluate(() => location.hash),
+            '#/thread/thread-0',
+        );
+        assert.equal(await visibleId(), id);
+        assert.ok((await page.locator('[data-message-id]').count()) <= 80);
+        await page.waitForFunction(
+            () => document.activeElement?.getAttribute('href') === '#/settings',
+        );
+        await page.close();
+    });
+}
+
+for (const width of [600, 1100]) {
+    test(`Settings Back restores the logical inbox position at ${width}`, async () => {
+        const page = await openHistory(width);
+        await page.evaluate(() => {
+            location.hash = '#/';
+        });
+        const inbox = page.getByRole('region', { name: 'Primary inbox' });
+        await inbox.waitFor();
+        await inbox.evaluate((element) => {
+            element.scrollTop = 40 * 72;
+            element.dispatchEvent(new Event('scroll'));
+        });
+        await page.locator('[data-thread-id="thread-40"]').waitFor();
+        function visibleThread() {
+            return inbox.evaluate((element) => {
+                const top = element.getBoundingClientRect().top;
+                return [
+                    ...element.querySelectorAll<HTMLElement>(
+                        '[data-thread-id]',
+                    ),
+                ].find((row) => row.getBoundingClientRect().bottom > top)
+                    ?.dataset.threadId;
+            });
+        }
+        const before = await visibleThread();
+
+        await page.getByRole('link', { name: 'Settings', exact: true }).click();
+        await page
+            .getByRole('heading', { name: 'Settings', exact: true })
+            .waitFor();
+        await page.goBack();
+        await page.locator('[data-thread-id="thread-40"]').waitFor();
+        assert.equal(await visibleThread(), before);
+        assert.ok((await page.locator('[data-thread-id]').count()) <= 31);
+        await page.waitForFunction(
+            () => document.activeElement?.getAttribute('href') === '#/settings',
+        );
+        await page.close();
+    });
+}
+
 test('cached history stays bounded and local traversal sends no older request', async () => {
     const page = await openHistory();
     assert.ok((await page.locator('[data-message-id]').count()) <= 80);
@@ -1642,6 +1749,19 @@ test('a direct compact route has a safe in-app Back destination', async () => {
     await page.addInitScript(() => {
         Object.assign(globalThis, {
             chrome: {
+                storage: {
+                    local: {
+                        get: (
+                            _key: string,
+                            callback: (value: { motion?: string }) => void,
+                        ) => callback({}),
+                        set: (
+                            _value: { motion: string },
+                            callback: () => void,
+                        ) => callback(),
+                    },
+                    onChanged: { addListener() {}, removeListener() {} },
+                },
                 runtime: {
                     id: 'test',
                     lastError: undefined,
@@ -1650,6 +1770,7 @@ test('a direct compact route has a safe in-app Back destination', async () => {
                             (value: TestSnapshot) => void
                         >();
                         const disconnects = new Set<() => void>();
+
                         return {
                             onMessage: {
                                 addListener: (

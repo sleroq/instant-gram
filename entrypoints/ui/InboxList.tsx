@@ -52,6 +52,7 @@ export function InboxList(props: {
     onRefresh(): void;
     onLoadMore(): void;
     restore?: ListAnchor;
+    restoreFocus?: boolean;
     onPosition?(anchor: ListAnchor): void;
 }) {
     const [scrollTop, setScrollTop] = createSignal(0);
@@ -115,6 +116,7 @@ export function InboxList(props: {
                     index * 72 - (restore.offset || 0),
                 );
                 setScrollTop(element.scrollTop);
+                if (props.restoreFocus === false) return;
                 const focusId = restore.focusId || id;
                 queueMicrotask(() =>
                     element

@@ -37,7 +37,7 @@ test.before(async () => {
     const manifest = JSON.parse(
         await readFile(`${output}/manifest.json`, 'utf8'),
     );
-    assert.deepEqual(manifest.permissions, ['tabs', 'scripting']);
+    assert.deepEqual(manifest.permissions, ['tabs', 'scripting', 'storage']);
     assert.deepEqual(manifest.host_permissions, [
         'https://www.instagram.com/*',
     ]);
@@ -153,6 +153,19 @@ async function openInbox(): Promise<{ page: Page; errors: string[] }> {
 
         Object.assign(globalThis, {
             chrome: {
+                storage: {
+                    local: {
+                        get: (
+                            _key: string,
+                            callback: (value: { motion?: string }) => void,
+                        ) => callback({}),
+                        set: (
+                            _value: { motion: string },
+                            callback: () => void,
+                        ) => callback(),
+                    },
+                    onChanged: { addListener() {}, removeListener() {} },
+                },
                 runtime: {
                     id: 'test',
                     lastError: undefined,
