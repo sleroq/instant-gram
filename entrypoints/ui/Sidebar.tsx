@@ -14,10 +14,10 @@ export function Sidebar(props: {
     let dragging = false;
     let pointerId = 0;
 
-    const maximum = () =>
-        Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, windowWidth() - 320 - 8));
-    const clamp = (value: number) =>
-        Math.max(MIN_WIDTH, Math.min(maximum(), value));
+    const maximum = (viewportWidth = windowWidth()) =>
+        Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, viewportWidth - 320));
+    const clamp = (value: number, viewportWidth = windowWidth()) =>
+        Math.max(MIN_WIDTH, Math.min(maximum(viewportWidth), value));
     const move = (event: PointerEvent) => {
         if (dragging) setWidth(clamp(event.clientX));
     };
@@ -54,7 +54,7 @@ export function Sidebar(props: {
     };
     const resize = () => {
         setWindowWidth(window.innerWidth);
-        setWidth((value) => clamp(value));
+        setWidth((value) => clamp(value, window.innerWidth));
     };
     onSettled(() => window.addEventListener('resize', resize));
     onCleanup(() => window.removeEventListener('resize', resize));

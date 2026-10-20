@@ -36,7 +36,7 @@ a:focus-visible {
 }
 .solid-layout {
     display: grid;
-    grid-template-columns: var(--sidebar-width) 8px minmax(320px, 1fr);
+    grid-template-columns: var(--sidebar-width) 0 minmax(320px, 1fr);
     min-height: 100vh;
 }
 .solid-sidebar {
@@ -48,16 +48,15 @@ a:focus-visible {
     background: #101216;
 }
 .solid-inbox__separator {
+    position: relative;
+    z-index: 1;
     width: 8px;
+    margin-inline: -4px;
     padding: 0;
     border: 0;
-    border-left: 1px solid #2d323b;
-    border-right: 1px solid #2d323b;
-    background: #1b1e24;
+    background: transparent;
     cursor: col-resize;
-}
-.solid-inbox__separator:focus-visible {
-    cursor: col-resize;
+    touch-action: none;
 }
 
 .solid-inbox__list-panel {
