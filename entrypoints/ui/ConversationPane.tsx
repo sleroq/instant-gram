@@ -51,8 +51,9 @@ export function ConversationPane(props: {
         return allIds().slice(current.start, current.end);
     });
     const viewport = createHistoryViewportController(() => {
-        if (anchor) controller.correct(anchor);
         const element = controller.element();
+        if (element && followBottom) element.scrollTop = element.scrollHeight;
+        else if (anchor) controller.correct(anchor);
         if (element && element.scrollHeight <= element.clientHeight + 1) {
             requestOlderIfNeeded();
             requestNewerIfNeeded();
@@ -377,14 +378,14 @@ export function ConversationPane(props: {
                 const element = controller.element();
                 if (!element) return;
                 if (firstRender) {
+                    followBottom = !anchor && !history?.cachedNewer;
                     if (anchor) controller.correct(anchor);
                     else element.scrollTop = element.scrollHeight;
                     firstRender = false;
-                } else if (anchor) {
-                    controller.correct(anchor);
                 } else if (followBottom) {
                     element.scrollTop = element.scrollHeight;
-                    followBottom = false;
+                } else if (anchor) {
+                    controller.correct(anchor);
                 }
                 if (localMovePending) {
                     localMovePending = false;
@@ -691,6 +692,7 @@ export function ConversationPane(props: {
                             : undefined
                     }
                     mutate={props.mutate}
+                    onResize={controller.setBottomClearance}
                     beforeSend={() => {
                         const element = controller.element();
                         followBottom = Boolean(

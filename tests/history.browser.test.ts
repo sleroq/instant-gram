@@ -6,11 +6,22 @@ import { preview, type PreviewServer } from 'vite';
 import type { InboxProjection } from '../lib/engine/inbox.ts';
 import type { SnapshotMessage } from '../lib/engine/protocol.ts';
 import type { Message } from '../lib/domain.ts';
+import type {
+    MutationCommand,
+    OperationResult,
+} from '../lib/engine/operations';
 import { buildExtension } from './browser-build.ts';
 
 type TestProjection = InboxProjection;
-type TestSnapshot = SnapshotMessage;
-type TestCommand = { kind: string; threadId?: string; anchorId?: string };
+type TestSnapshot =
+    | SnapshotMessage
+    | { kind: 'operation-result'; result: OperationResult };
+type TestCommand = {
+    kind: string;
+    threadId?: string;
+    anchorId?: string;
+    command?: MutationCommand;
+};
 type TestActivePort = {
     messages: Set<(value: TestSnapshot) => void>;
     disconnects: Set<() => void>;
@@ -23,6 +34,7 @@ declare global {
             commands: TestCommand[];
             send(next: TestProjection, sequence: number): void;
             restart(): void;
+            settleSend(ok: boolean): void;
             boundedStart?: number;
         };
     }
@@ -56,7 +68,7 @@ test.after(async () => {
 
 async function openHistory(
     width = 1100,
-    options: { checking?: boolean; bounded?: boolean } = {},
+    options: { checking?: boolean; bounded?: boolean; composer?: boolean } = {},
 ): Promise<Page> {
     const page = await browser.newPage({
         viewport: { width, height: 700 },
@@ -176,6 +188,11 @@ async function openHistory(
             viewerId: 'viewer',
         };
 
+        if (options.composer) {
+            projection.entities.threadsById['thread-0'].threadFbid = 'fbid-0';
+            projection.entities.threadsById['thread-1'].threadFbid = 'fbid-1';
+        }
+
         let boundedStart = 1000;
         const corpus = { ...projection.entities.messagesById };
         function selectWindowFacts(next: InboxProjection) {
@@ -227,6 +244,30 @@ async function openHistory(
             boundedStart,
             restart() {
                 active?.disconnects.forEach((listener) => listener());
+            },
+            settleSend(ok) {
+                const command = this.commands.findLast(
+                    (command) => command.kind === 'mutate',
+                )!.command!;
+                active?.messages.forEach((listener) =>
+                    listener({
+                        kind: 'operation-result',
+                        result: ok
+                            ? {
+                                  ok: true,
+                                  operationId: command.operationId,
+                                  revision: 2,
+                              }
+                            : {
+                                  ok: false,
+                                  operationId: command.operationId,
+                                  error: {
+                                      kind: 'storage',
+                                      message: 'Could not save',
+                                  },
+                              },
+                    }),
+                );
             },
             send(next, nextSequence) {
                 this.current = next;
@@ -642,6 +683,197 @@ test('resizing preserves logical history and inbox focus within mounted-row budg
     );
     await page.close();
 });
+
+// Geometry identifies a domain message, never an expected position or clearance.
+async function visibleMessage(page: Page, edge: 'first' | 'last' = 'first') {
+    return page
+        .getByLabel('Messages', { exact: true })
+        .evaluate((element, edge) => {
+            const boundary = element.getBoundingClientRect();
+            const rows = [
+                ...element.querySelectorAll<HTMLElement>('[data-message-id]'),
+            ].filter((row) => {
+                const rect = row.getBoundingClientRect();
+                return rect.bottom > boundary.top && rect.top < boundary.bottom;
+            });
+            return (edge === 'first' ? rows[0] : rows.at(-1))?.dataset
+                .messageId;
+        }, edge);
+}
+
+async function layoutSettled(page: Page) {
+    await page.evaluate(
+        () =>
+            new Promise<void>((resolve) =>
+                requestAnimationFrame(() =>
+                    requestAnimationFrame(() => resolve()),
+                ),
+            ),
+    );
+}
+
+test('floating composer keeps older message identity through edits, sends, arrivals and prepends', async () => {
+    const page = await openHistory(1100, { composer: true });
+    const viewport = page.getByLabel('Messages', { exact: true });
+    const editor = page.getByRole('textbox', { name: 'Message', exact: true });
+
+    await viewport.evaluate((element) => {
+        element.scrollTop = element.scrollHeight / 2;
+        element.dispatchEvent(new Event('scroll'));
+    });
+    await layoutSettled(page);
+    const before = await visibleMessage(page);
+    assert.ok(before);
+
+    // Draft growth and reply context must not adopt the tail for an older reader.
+    await editor.fill('A multiline draft\nwith another line\nand a third');
+    await layoutSettled(page);
+    assert.equal(await visibleMessage(page), before);
+    await page
+        .locator(`[data-message-id="${before}"]`)
+        .getByRole('button', { name: 'Reply', exact: true })
+        .click();
+    await page.getByRole('button', { name: 'Cancel reply' }).waitFor();
+    await layoutSettled(page);
+    assert.equal(await visibleMessage(page), before);
+
+    await editor.press('Enter');
+    await page.waitForFunction(() =>
+        window.historyTest.commands.some(
+            (command) => command.kind === 'mutate',
+        ),
+    );
+    await page.evaluate(() => window.historyTest.settleSend(false));
+    await page
+        .getByRole('alert')
+        .filter({ hasText: 'Could not save' })
+        .waitFor();
+    await layoutSettled(page);
+    assert.equal(await visibleMessage(page), before);
+    assert.equal(
+        await editor.inputValue(),
+        'A multiline draft\nwith another line\nand a third',
+    );
+    await page.getByRole('button', { name: 'Cancel reply' }).click();
+
+    // Both ends can change without replacing the reader's logical anchor.
+    await page.evaluate(() => {
+        const next = structuredClone(window.historyTest.current);
+        next.entities.messagesById.arrival = {
+            id: 'arrival',
+            kind: 'text',
+            text: 'Incoming tail',
+            senderId: 'peer',
+            ts: 1_800_000_000_000,
+        };
+        next.histories['thread-0'].orderedIds.push('arrival');
+        next.entities.messagesById.prepend = {
+            id: 'prepend',
+            kind: 'text',
+            text: 'Earlier history',
+            senderId: 'peer',
+            ts: 1,
+        };
+        next.histories['thread-0'].orderedIds.unshift('prepend');
+        window.historyTest.send(next, 2);
+    });
+    await layoutSettled(page);
+    assert.equal(await visibleMessage(page), before);
+
+    await page.setViewportSize({ width: 900, height: 560 });
+    await layoutSettled(page);
+    assert.equal(await visibleMessage(page), before);
+    await page.locator('[data-thread-id="thread-1"]').click();
+    await page.getByText('Second conversation message').waitFor();
+    await page.locator('[data-thread-id="thread-0"]').click();
+    await editor.waitFor();
+    await layoutSettled(page);
+    assert.equal(await visibleMessage(page), before);
+    assert.equal(
+        await editor.inputValue(),
+        'A multiline draft\nwith another line\nand a third',
+    );
+    assert.ok((await page.locator('[data-message-id]').count()) <= 80);
+    await page.close();
+});
+
+for (const width of [1100, 390]) {
+    test(`composer preserves newest identity and accepted draft clearing at ${width}`, async () => {
+        const page = await openHistory(width, { composer: true });
+        const editor = page.getByRole('textbox', {
+            name: 'Message',
+            exact: true,
+        });
+
+        await editor.fill('First line\nSecond line\nThird line');
+        await layoutSettled(page);
+        assert.equal(await visibleMessage(page, 'last'), 'message-119');
+        await page
+            .locator('[data-message-id="message-119"]')
+            .getByRole('button', { name: 'Reply', exact: true })
+            .click();
+        await layoutSettled(page);
+        assert.equal(await visibleMessage(page, 'last'), 'message-119');
+
+        await page.setViewportSize({ width, height: 550 });
+        await layoutSettled(page);
+        await page.evaluate(() => {
+            const next = structuredClone(window.historyTest.current);
+            next.entities.messagesById.arrival = {
+                id: 'arrival',
+                kind: 'text',
+                text: 'Newest arrival',
+                senderId: 'peer',
+                ts: 1_800_000_000_000,
+            };
+            next.histories['thread-0'].orderedIds.push('arrival');
+            window.historyTest.send(next, 2);
+        });
+        await page.getByText('Newest arrival', { exact: true }).waitFor();
+        await layoutSettled(page);
+        assert.equal(await visibleMessage(page, 'last'), 'arrival');
+
+        await editor.press('Enter');
+        await page.waitForFunction(() =>
+            window.historyTest.commands.some(
+                (command) => command.kind === 'mutate',
+            ),
+        );
+        const sent = await page.evaluate(
+            () =>
+                window.historyTest.commands.findLast(
+                    (command) => command.kind === 'mutate',
+                )!.command!,
+        );
+        assert.deepEqual(sent.intent, {
+            type: 'send',
+            threadId: 'thread-0',
+            text: 'First line\nSecond line\nThird line',
+            replyTo: 'message-119',
+        });
+
+        await page.evaluate(() => window.historyTest.settleSend(true));
+        await page.waitForFunction(
+            () => document.querySelector('textarea')?.value === '',
+        );
+        await page
+            .getByRole('button', { name: 'Cancel reply' })
+            .waitFor({ state: 'detached' });
+        await layoutSettled(page);
+        assert.equal(
+            await visibleMessage(page, 'last'),
+            `operation:${sent.operationId}`,
+        );
+        assert.equal(
+            await editor.evaluate(
+                (element) => element === document.activeElement,
+            ),
+            true,
+        );
+        assert.ok((await page.locator('[data-message-id]').count()) <= 80);
+        await page.close();
+    });
+}
 
 test('cached history stays bounded and local traversal sends no older request', async () => {
     const page = await openHistory();
