@@ -1,4 +1,20 @@
+import { execFileSync } from 'node:child_process';
+import { mkdirSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 // Dev-only browser lifecycle; never imported by the extension runtime.
+export function prepareDevChromiumProfile(repositoryRoot: string) {
+    const gitDirectory = execFileSync(
+        'git',
+        ['rev-parse', '--path-format=absolute', '--git-common-dir'],
+        { cwd: repositoryRoot, encoding: 'utf8' },
+    ).trim();
+    // All worktrees reuse the original checkout's existing authenticated profile.
+    const profile = resolve(gitDirectory, '../.dev/chromium-profile');
+    mkdirSync(profile, { recursive: true });
+    return profile;
+}
+
 export async function openDevUi(endpoint: string, url: string) {
     const pages: Array<{ id: string; type: string; url: string }> = await fetch(
         `${endpoint}/json/list`,

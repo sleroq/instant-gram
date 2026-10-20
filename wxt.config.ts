@@ -1,14 +1,12 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import solid from '@solidjs/vite-plugin';
 import { defineConfig } from 'wxt';
-import { openDevUi } from './lib/dev-browser';
+import { openDevUi, prepareDevChromiumProfile } from './lib/dev-browser';
 
-const chromiumProfile = fileURLToPath(
-    new URL('./.dev/chromium-profile/', import.meta.url),
+const chromiumProfile = prepareDevChromiumProfile(
+    fileURLToPath(new URL('.', import.meta.url)),
 );
-mkdirSync(chromiumProfile, { recursive: true });
 // Shared with opencode.json so MCP attaches to the dev browser.
 const devPort = 9223;
 

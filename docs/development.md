@@ -9,12 +9,16 @@ bun install --frozen-lockfile
 bun run dev
 ```
 
-- WXT opens a persistent Chromium profile at `.dev/chromium-profile`.
+- WXT opens a persistent Chromium profile at `.dev/chromium-profile` in the
+  original Git checkout (next to the shared `.git` directory). Linked worktrees,
+  including Paseo workspaces, reuse this profile and its Instagram login.
 - Log into Instagram there and keep an Instagram tab open.
 - Use **Instagram DM Client (Dev)**. Disable other installed copies to avoid testing the wrong build.
 - The Messages page opens automatically. Existing conversation tabs are reused.
-- Close the dev browser before restarting. Do not share its profile between processes.
-- To reset the session, close Chromium and delete `.dev/chromium-profile`.
+- Close the dev browser before restarting or switching workspaces. Run only one
+  dev browser at a time; worktrees share its profile and debugging port.
+- To reset the session, close Chromium and delete `.dev/chromium-profile` in the
+  original checkout, not in a worktree.
   This directory contains private session data. Never share it.
 
 ## Unpacked build
