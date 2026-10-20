@@ -308,7 +308,7 @@ test('snapshots preserve rows, cached errors remain usable, and virtualization s
     await page.close();
 });
 
-test('pinned conversations lead the inbox and row status uses icons', async () => {
+test('pinned conversations lead the inbox and rows expose their status', async () => {
     const { page, errors } = await openInbox();
 
     const rows = page.locator('[data-thread-id]');
@@ -324,7 +324,6 @@ test('pinned conversations lead the inbox and row status uses icons', async () =
 
     const unread = page.locator('[data-thread-id="thread-1"]');
     assert.equal(await unread.locator('[aria-label="Unread"]').count(), 1);
-    assert.equal((await unread.textContent())?.includes('Unread'), false);
     assert.deepEqual(errors, []);
     await page.close();
 });

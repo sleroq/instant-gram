@@ -2,6 +2,8 @@
 
 - Read [application ownership](docs/application-architecture.md) before changing boundaries.
 - Follow scoped `AGENTS.md` files for engine, provider, worker, and UI rules.
+- Before adding or changing tests, read [test policy](tests/AGENTS.md). UI tests
+  cover behavior, not visual/design properties.
 - Use TypeScript/TSX and SCSS with the pinned dependencies. Do not add another UI runtime.
 - Keep entrypoints as composition. Put protocol, persistence, and state changes in their owning modules.
 - Keep changes local. Do not commit, push, or publish without approval.

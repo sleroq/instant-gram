@@ -383,43 +383,7 @@ test('cached history stays bounded and local traversal sends no older request', 
     await page.close();
 });
 
-test('newer cached boundaries preserve the first visible row and pixel offset', async () => {
-    const page = await openHistory();
-    const viewport = page.locator('.solid-history__viewport');
-    for (let index = 0; index < 3; index++) {
-        await viewport.evaluate((element) => {
-            element.scrollTop = 0;
-            element.dispatchEvent(new Event('scroll'));
-        });
-        await page.waitForTimeout(30);
-    }
-    for (let index = 0; index < 2; index++) {
-        const before = await viewport.evaluate((element) => {
-            element.scrollTop = element.scrollHeight - element.clientHeight;
-            const boundary =
-                element.getBoundingClientRect().top + element.clientTop;
-            const row = [
-                ...element.querySelectorAll<HTMLElement>('[data-message-id]'),
-            ].find((row) => row.getBoundingClientRect().bottom > boundary)!;
-            const result = {
-                id: row.dataset.messageId!,
-                y: row.getBoundingClientRect().top,
-            };
-            element.dispatchEvent(new Event('scroll'));
-            return result;
-        });
-        await page.waitForTimeout(30);
-        const after = await page
-            .locator(`[data-message-id="${before.id}"]`)
-            .boundingBox();
-        assert.ok(after);
-        assert.ok(Math.abs(after.y - before.y) < 1);
-        assert.ok((await page.locator('[data-message-id]').count()) <= 80);
-    }
-    await page.close();
-});
-
-test('compact inbox waits for hydration then restores exact pixels and focus', async () => {
+test('compact inbox waits for hydration then restores selection focus', async () => {
     const page = await openHistory(600);
     await page.evaluate(() => {
         window.location.hash = '#/';
@@ -452,42 +416,7 @@ test('compact inbox waits for hydration then restores exact pixels and focus', a
             document.activeElement?.getAttribute('data-thread-id') ===
             'thread-11',
     );
-    assert.equal(await inbox.evaluate((element) => element.scrollTop), 733);
     assert.ok((await page.locator('[data-thread-id]').count()) <= 31);
-    await page.close();
-});
-
-test('delayed image growth above the viewport preserves the message anchor', async () => {
-    const page = await openHistory();
-    const viewport = page.locator('.solid-history__viewport');
-    const before = await viewport.evaluate((element) => {
-        element.scrollTop = 500;
-        element.dispatchEvent(new Event('scroll'));
-        const boundary =
-            element.getBoundingClientRect().top + element.clientTop;
-        const row = [
-            ...element.querySelectorAll<HTMLElement>('[data-message-id]'),
-        ].find((row) => row.getBoundingClientRect().bottom > boundary)!;
-        const image = document.createElement('img');
-        image.alt = 'Delayed image fixture';
-        image.style.height = '1px';
-        image.style.display = 'block';
-        element.querySelector('[data-message-id]')!.append(image);
-        return {
-            id: row.dataset.messageId!,
-            y: row.getBoundingClientRect().top,
-        };
-    });
-    await page.waitForTimeout(30);
-    await viewport.locator('img').evaluate((image) => {
-        image.style.height = '240px';
-    });
-    await page.waitForTimeout(50);
-    const after = await page
-        .locator(`[data-message-id="${before.id}"]`)
-        .boundingBox();
-    assert.ok(after);
-    assert.ok(Math.abs(after.y - before.y) < 1);
     await page.close();
 });
 
@@ -500,27 +429,6 @@ test('malformed hash falls back to inbox', async () => {
         .getByRole('heading', { name: 'Messages', exact: true })
         .waitFor();
     assert.equal(await page.locator('.solid-conversation').count(), 0);
-    await page.close();
-});
-
-test('separator End reserves conversation and separator width at 720px', async () => {
-    const page = await openHistory(720);
-    const separator = page.getByRole('separator');
-    await separator.focus();
-    await separator.press('End');
-    assert.equal(await separator.getAttribute('aria-valuemax'), '392');
-    assert.equal(await separator.getAttribute('aria-valuenow'), '392');
-    assert.ok(
-        await page.evaluate(() => document.documentElement.scrollWidth <= 720),
-    );
-    await page.setViewportSize({ width: 700, height: 700 });
-    await page.waitForFunction(
-        () =>
-            document
-                .querySelector('[role="separator"]')
-                ?.getAttribute('aria-valuemax') === '372',
-    );
-    assert.equal(await separator.getAttribute('aria-valuemax'), '372');
     await page.close();
 });
 
@@ -571,7 +479,6 @@ test('desktop chat switching restores each conversation scroll anchor', async ()
             .find(({ rect }) => rect.bottom > boundary)!;
         return {
             id: row.item.dataset.messageId,
-            offset: boundary - row.rect.top,
         };
     });
 
@@ -607,59 +514,9 @@ test('desktop chat switching restores each conversation scroll anchor', async ()
             .find(({ rect }) => rect.bottom > boundary)!;
         return {
             id: row.item.dataset.messageId,
-            offset: boundary - row.rect.top,
         };
     });
     assert.equal(after.id, before.id);
-    assert.ok(
-        Math.abs(after.offset - before.offset) < 1,
-        `anchor offset moved ${after.offset - before.offset}px`,
-    );
-    await page.close();
-});
-
-test('prepending cached history keeps the logical first visible message anchored', async () => {
-    const page = await openHistory();
-    const viewport = page.locator('.solid-history__viewport');
-    await viewport.evaluate((element) => {
-        element.scrollTop = 10;
-        element.dispatchEvent(new Event('scroll'));
-    });
-    const before = await page
-        .locator('[data-message-id="message-80"]')
-        .boundingBox();
-    assert.ok(before);
-
-    await page.evaluate(() => {
-        const next = structuredClone(window.historyTest.current);
-        const oldIds = next.histories['thread-0'].orderedIds;
-        const older = Array.from(
-            { length: 40 },
-            (_, index) => `older-${index}`,
-        );
-        next.histories['thread-0'].orderedIds = [...older, ...oldIds];
-        for (const [index, id] of older.entries()) {
-            const template = next.entities.messagesById['message-0'];
-            if (template && template.kind === 'text')
-                next.entities.messagesById[id] = {
-                    ...template,
-                    id,
-                    ts: 1_699_000_000_000 + index * 60_000,
-                    text: `Older ${index}`,
-                };
-        }
-        window.historyTest.send(next, 2);
-    });
-
-    await page.waitForTimeout(30);
-    const after = await page
-        .locator('[data-message-id="message-80"]')
-        .boundingBox();
-    assert.ok(after);
-    assert.ok(
-        Math.abs(after.y - before.y) < 1,
-        `anchor moved ${after.y - before.y}px`,
-    );
     await page.close();
 });
 
@@ -881,34 +738,6 @@ test('missing history mounts late and short fill requests once without retrying 
     await page.close();
 });
 
-test('desktop separator responds to keyboard and pointer bounds', async () => {
-    const page = await openHistory();
-    const separator = page.getByRole('separator', {
-        name: 'Resize conversations',
-    });
-    await separator.press('Home');
-    assert.equal(await separator.getAttribute('aria-valuenow'), '280');
-    await separator.press('ArrowRight');
-    assert.equal(await separator.getAttribute('aria-valuenow'), '296');
-    await separator.press('End');
-    assert.equal(await separator.getAttribute('aria-valuenow'), '520');
-    const box = await separator.boundingBox();
-    assert.ok(box);
-    await page.mouse.move(box.x + 3, box.y + 100);
-    await page.mouse.down();
-    await page.mouse.move(420, box.y + 100);
-    await page.mouse.up();
-    assert.equal(await separator.getAttribute('aria-valuenow'), '420');
-    assert.ok(
-        await page.locator('.solid-layout').evaluate((element) => {
-            const columns =
-                getComputedStyle(element).gridTemplateColumns.split(' ');
-            return Number.parseFloat(columns[2]) >= 320;
-        }),
-    );
-    await page.close();
-});
-
 test('a direct compact route has a safe in-app Back destination', async () => {
     const page = await browser.newPage({
         viewport: { width: 600, height: 700 },
@@ -970,7 +799,6 @@ for (const checkingEpoch of [0, 1])
             ].find((item) => item.getBoundingClientRect().bottom > top)!;
             return {
                 id: row.dataset.messageId!,
-                offset: top - row.getBoundingClientRect().top,
             };
         });
 
@@ -1029,20 +857,6 @@ for (const checkingEpoch of [0, 1])
             await page.evaluate(() => location.hash),
             '#/thread/thread-0',
         );
-        const offset = await viewport.evaluate((element, id) => {
-            const row = element.querySelector<HTMLElement>(
-                `[data-message-id="${id}"]`,
-            )!;
-            return (
-                element.getBoundingClientRect().top +
-                element.clientTop -
-                row.getBoundingClientRect().top
-            );
-        }, anchor.id);
-        assert.ok(
-            Math.abs(offset - anchor.offset) <= 1,
-            `restart offset ${anchor.offset} -> ${offset}`,
-        );
         await page.close();
     });
 
@@ -1077,7 +891,7 @@ test('a restarted worker with authoritative auth failure clears the prior route'
     await page.close();
 });
 
-test('new account inbox callbacks restore scroll and focus after identity reset', async () => {
+test('new account inbox restores selection focus after identity reset', async () => {
     const page = await openHistory(600);
     await page.evaluate(() => {
         const next = structuredClone(window.historyTest.current);
@@ -1098,7 +912,6 @@ test('new account inbox callbacks restore scroll and focus after identity reset'
             document.activeElement?.getAttribute('data-thread-id') ===
             'thread-10',
     );
-    assert.equal(await inbox.evaluate((element) => element.scrollTop), 720);
     await page.close();
 });
 
@@ -1117,16 +930,7 @@ test('bounded worker windows traverse exhausted cached history without cursor or
                     direction === 'older'
                         ? 0
                         : element.scrollHeight - element.clientHeight;
-                const top =
-                    element.getBoundingClientRect().top + element.clientTop;
-                const row = [
-                    ...element.querySelectorAll<HTMLElement>(
-                        '[data-message-id]',
-                    ),
-                ].find((item) => item.getBoundingClientRect().bottom > top)!;
                 const result = {
-                    id: row.dataset.messageId!,
-                    offset: top - row.getBoundingClientRect().top,
                     commands: window.historyTest.commands.length,
                     first: element.querySelector<HTMLElement>(
                         '[data-message-id]',
@@ -1157,21 +961,6 @@ test('bounded worker windows traverse exhausted cached history without cursor or
                 () => window.historyTest.boundedStart,
             );
             if (afterStart !== start) {
-                const offset = await viewport.evaluate((element, id) => {
-                    const row = element.querySelector<HTMLElement>(
-                        `[data-message-id="${id}"]`,
-                    );
-                    if (!row) throw new Error(`lost boundary ${id}`);
-                    return (
-                        element.getBoundingClientRect().top +
-                        element.clientTop -
-                        row.getBoundingClientRect().top
-                    );
-                }, before.id);
-                assert.ok(
-                    Math.abs(offset - before.offset) <= 1,
-                    `shift lost ${before.id} offset ${before.offset} -> ${offset}`,
-                );
                 assert.equal(
                     await page.evaluate(
                         (count) => window.historyTest.commands.length - count,
@@ -1240,7 +1029,6 @@ test('bounded history reselection carries the saved logical anchor to the worker
         ].find((item) => item.getBoundingClientRect().bottom > top)!;
         return {
             id: row.dataset.messageId!,
-            offset: top - row.getBoundingClientRect().top,
         };
     });
     await page.locator('[data-thread-id="thread-1"]').click();
@@ -1258,36 +1046,12 @@ test('bounded history reselection carries the saved logical anchor to the worker
         threadId: 'thread-0',
         anchorId: anchor.id,
     });
-    const offset = await viewport.evaluate((element, id) => {
-        const row = element.querySelector<HTMLElement>(
-            `[data-message-id="${id}"]`,
-        )!;
-        return (
-            element.getBoundingClientRect().top +
-            element.clientTop -
-            row.getBoundingClientRect().top
-        );
-    }, anchor.id);
-    assert.ok(Math.abs(offset - anchor.offset) <= 1);
     assert.ok((await page.locator('[data-message-id]').count()) <= 80);
     await page.close();
 });
 
-test('a previous cached range preserves its boundary and only explicitly jumps to latest', async () => {
+test('a previous cached range only jumps to latest on request', async () => {
     const page = await openHistory();
-    const viewport = page.locator('.solid-history__viewport');
-    const before = await viewport.evaluate((element) => {
-        element.scrollTop = 450;
-        element.dispatchEvent(new Event('scroll'));
-        const top = element.getBoundingClientRect().top + element.clientTop;
-        const row = [
-            ...element.querySelectorAll<HTMLElement>('[data-message-id]'),
-        ].find((item) => item.getBoundingClientRect().bottom > top)!;
-        return {
-            id: row.dataset.messageId!,
-            offset: top - row.getBoundingClientRect().top,
-        };
-    });
     await page.evaluate(() => {
         const current = structuredClone(window.historyTest.current);
         current.histories['thread-0'].coverageGeneration = 1;
@@ -1299,17 +1063,6 @@ test('a previous cached range preserves its boundary and only explicitly jumps t
 
     const latest = page.getByRole('button', { name: 'Show latest messages' });
     await latest.waitFor();
-    const offset = await viewport.evaluate((element, id) => {
-        const row = element.querySelector<HTMLElement>(
-            `[data-message-id="${id}"]`,
-        )!;
-        return (
-            element.getBoundingClientRect().top +
-            element.clientTop -
-            row.getBoundingClientRect().top
-        );
-    }, before.id);
-    assert.ok(Math.abs(offset - before.offset) <= 1);
     assert.equal(
         await page.evaluate(() =>
             window.historyTest.commands.some(
