@@ -35,8 +35,9 @@ a:focus-visible {
     min-height: 100vh;
 }
 .solid-layout {
+    position: relative;
     display: grid;
-    grid-template-columns: var(--sidebar-width) 8px minmax(320px, 1fr);
+    grid-template-columns: var(--sidebar-width) minmax(320px, 1fr);
     min-height: 100vh;
 }
 .solid-sidebar {
@@ -48,16 +49,19 @@ a:focus-visible {
     background: #101216;
 }
 .solid-inbox__separator {
-    width: 8px;
+    // Overlap both panes without reserving a grid column.
+    position: absolute;
+    inset: 0 auto 0 calc(var(--sidebar-width) - 8px);
+    z-index: 1;
+    width: 16px;
     padding: 0;
     border: 0;
-    border-left: 1px solid #2d323b;
-    border-right: 1px solid #2d323b;
-    background: #1b1e24;
+    background: transparent;
     cursor: col-resize;
+    touch-action: none;
 }
 .solid-inbox__separator:focus-visible {
-    cursor: col-resize;
+    outline-offset: -2px;
 }
 
 .solid-inbox__list-panel {

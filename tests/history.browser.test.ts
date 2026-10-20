@@ -503,13 +503,13 @@ test('malformed hash falls back to inbox', async () => {
     await page.close();
 });
 
-test('separator End reserves conversation and separator width at 720px', async () => {
+test('separator reserves only conversation width and clamps before compact routing', async () => {
     const page = await openHistory(720);
     const separator = page.getByRole('separator');
     await separator.focus();
     await separator.press('End');
-    assert.equal(await separator.getAttribute('aria-valuemax'), '392');
-    assert.equal(await separator.getAttribute('aria-valuenow'), '392');
+    assert.equal(await separator.getAttribute('aria-valuemax'), '400');
+    assert.equal(await separator.getAttribute('aria-valuenow'), '400');
     assert.ok(
         await page.evaluate(() => document.documentElement.scrollWidth <= 720),
     );
@@ -518,9 +518,22 @@ test('separator End reserves conversation and separator width at 720px', async (
         () =>
             document
                 .querySelector('[role="separator"]')
-                ?.getAttribute('aria-valuemax') === '372',
+                ?.getAttribute('aria-valuemax') === '380',
     );
-    assert.equal(await separator.getAttribute('aria-valuemax'), '372');
+    assert.equal(await separator.getAttribute('aria-valuenow'), '380');
+    const conversation = await page
+        .locator('.solid-layout__conversation')
+        .boundingBox();
+    assert.ok(conversation);
+    assert.equal(conversation.x, 380);
+    assert.equal(conversation.width, 320);
+    await page.setViewportSize({ width: 699, height: 700 });
+    await separator.waitFor({ state: 'detached' });
+    assert.equal(await page.locator('.solid-inbox__list-panel').count(), 0);
+    assert.ok(await page.getByRole('button', { name: 'Back' }).isVisible());
+    assert.ok(
+        await page.evaluate(() => document.documentElement.scrollWidth <= 699),
+    );
     await page.close();
 });
 
@@ -886,26 +899,222 @@ test('desktop separator responds to keyboard and pointer bounds', async () => {
     const separator = page.getByRole('separator', {
         name: 'Resize conversations',
     });
+    assert.equal(await separator.getAttribute('aria-orientation'), 'vertical');
+    assert.equal(await separator.getAttribute('aria-valuemin'), '280');
+
     await separator.press('Home');
     assert.equal(await separator.getAttribute('aria-valuenow'), '280');
     await separator.press('ArrowRight');
     assert.equal(await separator.getAttribute('aria-valuenow'), '296');
+    await separator.press('ArrowLeft');
+    assert.equal(await separator.getAttribute('aria-valuenow'), '280');
+    await separator.press('ArrowLeft');
+    assert.equal(await separator.getAttribute('aria-valuenow'), '280');
     await separator.press('End');
     assert.equal(await separator.getAttribute('aria-valuenow'), '520');
+    await separator.press('ArrowRight');
+    assert.equal(await separator.getAttribute('aria-valuenow'), '520');
+    assert.ok(
+        await separator.evaluate((element) => {
+            const style = getComputedStyle(element);
+            return (
+                element.matches(':focus-visible') &&
+                style.outlineStyle === 'solid' &&
+                Number.parseFloat(style.outlineWidth) >= 2
+            );
+        }),
+    );
+
     const box = await separator.boundingBox();
     assert.ok(box);
-    await page.mouse.move(box.x + 3, box.y + 100);
+    assert.ok(box.width >= 16);
+    assert.ok(
+        await separator.evaluate((element) => {
+            const style = getComputedStyle(element);
+            const sidebar = document.querySelector('.solid-sidebar')!;
+            const conversation = document.querySelector(
+                '.solid-layout__conversation',
+            )!;
+            const edge = sidebar.getBoundingClientRect().right;
+            const target = element.getBoundingClientRect();
+            return (
+                style.backgroundColor === 'rgba(0, 0, 0, 0)' &&
+                style.borderLeftWidth === '0px' &&
+                style.borderRightWidth === '0px' &&
+                style.cursor === 'col-resize' &&
+                edge === conversation.getBoundingClientRect().left &&
+                target.left < edge &&
+                target.right > edge &&
+                document.elementFromPoint(target.left + 1, 100) === element &&
+                document.elementFromPoint(target.right - 1, 100) === element
+            );
+        }),
+    );
+
+    await page.mouse.move(box.x + 1, box.y + 100);
     await page.mouse.down();
+    assert.ok(
+        await separator.evaluate((element) => element.hasPointerCapture(1)),
+    );
+    await page.mouse.move(100, box.y + 100);
+    assert.equal(await separator.getAttribute('aria-valuenow'), '280');
+    await page.mouse.move(1000, box.y + 100);
+    assert.equal(await separator.getAttribute('aria-valuenow'), '520');
     await page.mouse.move(420, box.y + 100);
     await page.mouse.up();
+    assert.equal(await separator.getAttribute('aria-valuenow'), '420');
+    assert.equal(
+        await separator.evaluate((element) => element.hasPointerCapture(1)),
+        false,
+    );
+    await page.mouse.move(460, box.y + 100);
     assert.equal(await separator.getAttribute('aria-valuenow'), '420');
     assert.ok(
         await page.locator('.solid-layout').evaluate((element) => {
             const columns =
                 getComputedStyle(element).gridTemplateColumns.split(' ');
-            return Number.parseFloat(columns[2]) >= 320;
+            return columns.length === 2 && Number.parseFloat(columns[1]) >= 320;
         }),
     );
+    await page.close();
+});
+
+test('separator cancellation and compact disposal end pointer capture', async () => {
+    const page = await openHistory();
+    const separator = page.getByRole('separator');
+    await page.mouse.move(360, 100);
+    await page.mouse.down();
+    await page.mouse.move(400, 100);
+    assert.ok(
+        await separator.evaluate((element) => element.hasPointerCapture(1)),
+    );
+    await separator.dispatchEvent('pointercancel', { pointerId: 1 });
+    assert.equal(
+        await separator.evaluate((element) => element.hasPointerCapture(1)),
+        false,
+    );
+    await page.mouse.move(450, 100);
+    await page.mouse.up();
+    assert.equal(await separator.getAttribute('aria-valuenow'), '400');
+
+    await page.mouse.move(400, 100);
+    await page.mouse.down();
+    const oldSeparator = await separator.elementHandle();
+    assert.ok(oldSeparator);
+    await page.setViewportSize({ width: 600, height: 700 });
+    await separator.waitFor({ state: 'detached' });
+    assert.equal(
+        await oldSeparator.evaluate((element) => element.hasPointerCapture(1)),
+        false,
+    );
+    await page.mouse.move(500, 100);
+    await page.mouse.up();
+    await page.setViewportSize({ width: 1100, height: 700 });
+    await separator.waitFor();
+    assert.equal(await separator.getAttribute('aria-valuenow'), '360');
+    await separator.press('ArrowRight');
+    assert.equal(await separator.getAttribute('aria-valuenow'), '376');
+    await page.close();
+});
+
+test('resizing preserves wrapped history anchors and fixed bounded inbox slots', async () => {
+    const page = await openHistory();
+    await page.evaluate(() => {
+        const next = structuredClone(window.historyTest.current);
+        for (const message of Object.values(next.entities.messagesById)) {
+            if (message.kind === 'text')
+                message.text =
+                    'A wrapping message for resize anchor coverage. '.repeat(8);
+        }
+        window.historyTest.send(next, 2);
+    });
+
+    const viewport = page.locator('.solid-history__viewport');
+    // Settle text measurements before choosing an older-reader anchor.
+    await page.evaluate(
+        () =>
+            new Promise<void>((resolve) => {
+                requestAnimationFrame(() =>
+                    requestAnimationFrame(() => resolve()),
+                );
+            }),
+    );
+    const anchor = await viewport.evaluate((element) => {
+        element.scrollTop = 450;
+        element.dispatchEvent(new Event('scroll'));
+        const boundary =
+            element.getBoundingClientRect().top + element.clientTop;
+        const row = [
+            ...element.querySelectorAll<HTMLElement>('[data-message-id]'),
+        ].find((row) => row.getBoundingClientRect().bottom > boundary)!;
+        return {
+            id: row.dataset.messageId!,
+            offset: row.getBoundingClientRect().top - boundary,
+        };
+    });
+
+    const inbox = page.locator('.solid-inbox__viewport');
+    await inbox.evaluate((element) => {
+        element.scrollTop = 733;
+        element.dispatchEvent(new Event('scroll'));
+    });
+    const separator = page.getByRole('separator');
+    // Deliver the native scroll event before resizing the captured content.
+    await page.evaluate(
+        () =>
+            new Promise<void>((resolve) => {
+                requestAnimationFrame(() =>
+                    requestAnimationFrame(() => resolve()),
+                );
+            }),
+    );
+    const originalHeight = await page
+        .locator(`[data-message-id="${anchor.id}"]`)
+        .evaluate((element) => element.getBoundingClientRect().height);
+    for (const key of ['End', 'Home']) {
+        await separator.press(key);
+        await page.waitForFunction(({ id, offset }) => {
+            const element = document.querySelector('.solid-history__viewport')!;
+            const row = element.querySelector<HTMLElement>(
+                `[data-message-id="${id}"]`,
+            );
+            if (!row) return false;
+            const boundary =
+                element.getBoundingClientRect().top + element.clientTop;
+            return (
+                Math.abs(row.getBoundingClientRect().top - boundary - offset) <=
+                1
+            );
+        }, anchor);
+        if (key === 'End')
+            assert.ok(
+                (await page
+                    .locator(`[data-message-id="${anchor.id}"]`)
+                    .evaluate(
+                        (element) => element.getBoundingClientRect().height,
+                    )) > originalHeight,
+            );
+        assert.equal(await inbox.evaluate((element) => element.scrollTop), 733);
+        const slots = await page
+            .locator('.solid-inbox__thread-slot')
+            .evaluateAll((elements) =>
+                elements.map((element) => ({
+                    top: element.getBoundingClientRect().top,
+                    height: element.getBoundingClientRect().height,
+                    buttonHeight: element
+                        .querySelector('button')!
+                        .getBoundingClientRect().height,
+                })),
+            );
+        assert.ok(slots.length > 1 && slots.length <= 31);
+        for (let index = 0; index < slots.length; index++) {
+            assert.equal(slots[index].height, 72);
+            assert.equal(slots[index].buttonHeight, 72);
+            if (index)
+                assert.equal(slots[index].top - slots[index - 1].top, 72);
+        }
+        assert.ok((await page.locator('[data-message-id]').count()) <= 80);
+    }
     await page.close();
 });
 
