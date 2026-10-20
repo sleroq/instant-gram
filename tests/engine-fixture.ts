@@ -1,7 +1,7 @@
 import { Effect, Layer, Result } from 'effect';
 import {
     InboxRepositoryService,
-    type InboxRepositoryEffects,
+    adaptInboxRepository,
 } from '../lib/engine/db.ts';
 import {
     InboxEngineService,
@@ -29,42 +29,6 @@ export async function createInboxEngine(
     repository: InboxRepository,
     provider: TestProvider,
 ) {
-    const repositoryEffects: InboxRepositoryEffects = {
-        readHistoryWindow: (accountId, threadId, request) =>
-            Effect.tryPromise({
-                try: () =>
-                    repository.readHistoryWindow(accountId, threadId, request),
-                catch: () => new InboxError('storage'),
-            }),
-        touchHistory: (accountId, threadId, accessedAt) =>
-            Effect.tryPromise({
-                try: () =>
-                    repository.touchHistory(accountId, threadId, accessedAt),
-                catch: () => new InboxError('storage'),
-            }),
-        readResources: (accountId, keys) =>
-            Effect.tryPromise({
-                try: () => repository.readResources(accountId, keys),
-                catch: (cause) =>
-                    cause instanceof InboxError
-                        ? cause
-                        : new InboxError('storage'),
-            }),
-        commitResources: (accountId, update) =>
-            Effect.tryPromise({
-                try: () => repository.commitResources(accountId, update),
-                catch: (cause) =>
-                    cause instanceof InboxError
-                        ? cause
-                        : new InboxError('storage'),
-            }),
-        close: Effect.tryPromise({
-            try: () => repository.close(),
-            catch: (cause) =>
-                cause instanceof InboxError ? cause : new InboxError('storage'),
-        }),
-    };
-
     const providerEffects: InboxProviderEffects = {
         accept: () => undefined,
         account: Effect.tryPromise({
@@ -94,7 +58,7 @@ export async function createInboxEngine(
 
     const runtime = makeWorkerRuntime(
         Layer.succeed(InboxProviderService, providerEffects),
-        Layer.succeed(InboxRepositoryService, repositoryEffects),
+        Layer.succeed(InboxRepositoryService, adaptInboxRepository(repository)),
     );
     const engine = await runtime.runPromise(InboxEngineService);
     return {

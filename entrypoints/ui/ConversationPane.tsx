@@ -48,7 +48,6 @@ export function ConversationPane(props: {
     });
     const controller = viewport;
     let anchor: HistoryAnchor | undefined;
-    let previousIds: string[] = [];
     let firstRender = true;
     let localMovePending = false;
     let followBottom = false;
@@ -190,6 +189,7 @@ export function ConversationPane(props: {
             ] as const;
         },
         ([threadId, ids, savedAnchor, , , history], previous) => {
+            const previousIds = previous?.[1] ?? [];
             const idsChanged =
                 ids.length !== previousIds.length ||
                 ids.some((id, index) => id !== previousIds[index]);
@@ -225,7 +225,6 @@ export function ConversationPane(props: {
                 }
             }
 
-            previousIds = ids;
             queueMicrotask(() => {
                 const element = controller.element();
                 if (!element) return;

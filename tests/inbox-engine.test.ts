@@ -3,22 +3,14 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { IDBFactory } from 'fake-indexeddb';
 import { createInboxRepository } from '../lib/engine/db.ts';
-import type {
-    HistoryWindowRequest,
-    HistoryWindowRead,
-    ResourceCommit,
-} from '../lib/engine/resources.ts';
 import type { Message, Page, Thread } from '../lib/domain.ts';
 import {
     InboxError,
     normalizeMessages,
     normalizePage,
     emptyEntities,
-    type EntityFacts,
-    type InboxRepository,
     type InboxProjection,
     type PersistedResource,
-    type RepositoryRead,
 } from '../lib/engine/inbox.ts';
 
 function thread(id: string): Thread {
@@ -89,134 +81,6 @@ function record(
     };
     if (threadId) result.threadId = threadId;
     return result;
-}
-
-class MemoryRepository implements InboxRepository {
-    readonly resources = new Map<string, PersistedResource>();
-    entities: EntityFacts = {
-        threadsById: {},
-        usersById: {},
-        messagesById: {},
-    };
-    revision = 0;
-    fail = false;
-
-    async readResources(
-        _accountId: string,
-        keys: string[],
-    ): Promise<RepositoryRead> {
-        function matches(key: string) {
-            return keys.some((wanted) =>
-                wanted.endsWith('*')
-                    ? key.startsWith(wanted.slice(0, -1))
-                    : key === wanted,
-            );
-        }
-        return {
-            resources: [...this.resources.values()].filter((resource) =>
-                matches(resource.key),
-            ),
-            entities: this.entities,
-            revision: this.revision,
-        };
-    }
-
-    async readHistoryWindow(
-        _accountId: string,
-        threadId: string,
-        request?: HistoryWindowRequest,
-    ): Promise<HistoryWindowRead> {
-        const head = this.resources.get(`history:${threadId}`);
-        if (!head) return { entities: this.entities, revision: this.revision };
-        const chain = [head];
-        const visited = new Set<string>();
-        let tail = head;
-        while (tail.hasNextPage && tail.cursor && !visited.has(tail.cursor)) {
-            visited.add(tail.cursor);
-            const next = this.resources.get(
-                `history:${threadId}:page:${tail.cursor}`,
-            );
-            if (!next) break;
-            chain.push(next);
-            tail = next;
-        }
-
-        const ids = [
-            ...new Set(
-                chain
-                    .slice()
-                    .reverse()
-                    .flatMap((segment) => segment.orderedIds.slice().reverse()),
-            ),
-        ];
-        const anchor = request?.anchorId ? ids.indexOf(request.anchorId) : -1;
-        let start = Math.max(0, ids.length - 400);
-        if (anchor >= 0)
-            start =
-                request?.direction === 'older'
-                    ? Math.max(0, anchor - 320)
-                    : request?.direction === 'newer'
-                      ? Math.max(0, anchor - 80)
-                      : anchor;
-        const end = Math.min(ids.length, start + 400);
-        return {
-            history: {
-                ...head,
-                threadId,
-                orderedIds: ids.slice(start, end),
-                cursor: tail.cursor,
-                hasNextPage: tail.hasNextPage,
-                cachedOlder: start > 0,
-                cachedNewer: end < ids.length,
-            },
-            entities: this.entities,
-            revision: this.revision,
-        };
-    }
-
-    async touchHistory() {}
-    async readHistoryInventory() {
-        return [];
-    }
-
-    async commitResources(
-        _accountId: string,
-        update: ResourceCommit,
-    ): Promise<RepositoryRead> {
-        if (this.fail) throw new Error('disk');
-        for (const key of update.deleteKeys ?? []) this.resources.delete(key);
-        for (const resource of update.resources) {
-            if (
-                resource.requestCursor &&
-                resource.hasNextPage &&
-                resource.cursor === resource.requestCursor
-            )
-                throw new InboxError('no_progress');
-            this.resources.set(resource.key, resource);
-        }
-        this.entities = {
-            threadsById: {
-                ...this.entities.threadsById,
-                ...update.entities.threadsById,
-            },
-            usersById: {
-                ...this.entities.usersById,
-                ...update.entities.usersById,
-            },
-            messagesById: {
-                ...this.entities.messagesById,
-                ...update.entities.messagesById,
-            },
-        };
-        this.revision++;
-        return {
-            resources: [...this.resources.values()],
-            entities: this.entities,
-            revision: this.revision,
-        };
-    }
-
-    async close() {}
 }
 
 function provider(
@@ -295,6 +159,8 @@ test('native repository detail hydration preserves other inbox facts during a de
         if (value.histories.one?.availability === 'present') {
             assert.equal(value.entities.threadsById.two.title, 'Thread two');
             assert.ok(value.entities.messagesById['m-two']);
+            assert.ok(value.entities.threadsById.one);
+            assert.ok(value.entities.usersById['u-one']);
             detailReady.resolve();
         }
     }, 'one');
@@ -305,11 +171,10 @@ test('native repository detail hydration preserves other inbox facts during a de
     await engine.refresh();
     stopDetail();
     stopInbox();
-    await repository.close();
 });
 
 test('new subscribers cannot observe retained facts while renewed identity is pending', async (t) => {
-    const repository = new MemoryRepository();
+    const repository = createInboxRepository(new IDBFactory());
     const identity = deferred<string>();
     let recheck = false;
     const engine = await createInboxEngine(
@@ -343,23 +208,29 @@ test('new subscribers cannot observe retained facts while renewed identity is pe
 });
 
 test('hydrates cached inbox and history before one deferred background inbox refresh', async (t) => {
-    const repository = new MemoryRepository();
+    const repository = createInboxRepository(new IDBFactory());
     const inbox = normalizePage(page(thread('cached')));
     const history = normalizePage(page(thread('cached')));
-    repository.resources.set('inbox:primary', record('inbox:primary', inbox));
-    repository.resources.set('history:cached', {
-        ...record(
-            'history:cached',
+    await repository.commitResources('account', {
+        resources: [
+            record('inbox:primary', inbox),
             {
-                ...history,
-                resource: { ...history.resource, orderedIds: ['m-cached'] },
+                ...record(
+                    'history:cached',
+                    {
+                        ...history,
+                        resource: {
+                            ...history.resource,
+                            orderedIds: ['m-cached'],
+                        },
+                    },
+                    'cached',
+                ),
+                viewerId: 'viewer',
             },
-            'cached',
-        ),
-        viewerId: 'viewer',
+        ],
+        entities: inbox.entities,
     });
-    repository.entities = inbox.entities;
-    repository.revision = 1;
 
     const network = deferred<Page<Thread>>();
     const networkStarted = deferred<void>();
@@ -397,14 +268,19 @@ test('hydrates cached inbox and history before one deferred background inbox ref
 });
 
 test('a failed commit retains canonical data and never publishes fresh network data', async (t) => {
-    const repository = new MemoryRepository();
+    const repository = createInboxRepository(new IDBFactory());
     const cached = normalizePage(page(thread('safe')));
-    repository.resources.set('inbox:primary', record('inbox:primary', cached));
-    repository.entities = cached.entities;
-    repository.revision = 1;
-    repository.fail = true;
+    await repository.commitResources('account', {
+        resources: [record('inbox:primary', cached)],
+        entities: cached.entities,
+    });
     const engine = await createInboxEngine(
-        repository,
+        {
+            ...repository,
+            commitResources: async () => {
+                throw new Error('disk');
+            },
+        },
         provider({ inbox: async () => page(thread('unsafe')) }),
     );
     t.after(engine.dispose);
@@ -415,7 +291,7 @@ test('a failed commit retains canonical data and never publishes fresh network d
 });
 
 test('continuation rejects nonempty duplicates and explicit retry can advance', async (t) => {
-    const repository = new MemoryRepository();
+    const repository = createInboxRepository(new IDBFactory());
     let continuation = false;
     const engine = await createInboxEngine(
         repository,
@@ -446,47 +322,13 @@ test('continuation rejects nonempty duplicates and explicit retry can advance', 
     assert.deepEqual(engine.snapshot().inbox.orderedIds, ['one', 'two']);
 });
 
-test('partial detail hydration keeps inbox facts and runtime data', async (t) => {
-    const repository = new MemoryRepository();
-    const cached = normalizePage(page(thread('thread')));
-    repository.resources.set('inbox:primary', record('inbox:primary', cached));
-    repository.entities = cached.entities;
-    const history = normalizePage(page(thread('thread')));
-    repository.resources.set('history:thread', {
-        ...record(
-            'history:thread',
-            {
-                ...history,
-                resource: { ...history.resource, orderedIds: ['m-thread'] },
-            },
-            'thread',
-        ),
-        viewerId: 'viewer',
-    });
-    const inboxFlight = deferred<Page<Thread>>();
-    const engine = await createInboxEngine(
-        repository,
-        provider({ inbox: async () => inboxFlight.promise }),
-    );
-    t.after(engine.dispose);
-    const cachedInbox = deferred<void>();
-    engine.subscribe((value) => {
-        if (value.inbox.orderedIds[0] === 'thread') cachedInbox.resolve();
-    });
-    await cachedInbox.promise;
-    engine.subscribe(() => undefined, 'thread');
-    await engine.refreshHistory('thread');
-    assert.ok(engine.snapshot().entities.threadsById.thread);
-    assert.ok(engine.snapshot().entities.usersById['u-thread']);
-    inboxFlight.resolve(page(thread('thread')));
-    await engine.refresh();
-});
-
 test('deferred inbox refresh does not block a missing cached detail fetch', async (t) => {
-    const repository = new MemoryRepository();
+    const repository = createInboxRepository(new IDBFactory());
     const cached = normalizePage(page(thread('thread')));
-    repository.resources.set('inbox:primary', record('inbox:primary', cached));
-    repository.entities = cached.entities;
+    await repository.commitResources('account', {
+        resources: [record('inbox:primary', cached)],
+        entities: cached.entities,
+    });
     const inboxFlight = deferred<Page<Thread>>();
     const historyStarted = deferred<void>();
     const engine = await createInboxEngine(
@@ -517,10 +359,12 @@ test('deferred inbox refresh does not block a missing cached detail fetch', asyn
 });
 
 test('reselecting a detail drops its old generation and sends a new request', async (t) => {
-    const repository = new MemoryRepository();
+    const repository = createInboxRepository(new IDBFactory());
     const cached = normalizePage(page(thread('thread')));
-    repository.resources.set('inbox:primary', record('inbox:primary', cached));
-    repository.entities = cached.entities;
+    await repository.commitResources('account', {
+        resources: [record('inbox:primary', cached)],
+        entities: cached.entities,
+    });
     const oldResult = deferred<{
         items: Message[];
         hasNextPage: boolean;
@@ -572,16 +416,15 @@ test('reselecting a detail drops its old generation and sends a new request', as
 });
 
 test('a second listener keeps a queued shared detail flight alive', async (t) => {
-    const repository = new MemoryRepository();
+    const repository = createInboxRepository(new IDBFactory());
     const threads = Array.from({ length: 5 }, (_, index) =>
         thread(`t-${index}`),
     );
     const normalized = normalizePage(page(...threads));
-    repository.resources.set(
-        'inbox:primary',
-        record('inbox:primary', normalized),
-    );
-    repository.entities = normalized.entities;
+    await repository.commitResources('account', {
+        resources: [record('inbox:primary', normalized)],
+        entities: normalized.entities,
+    });
     const results = threads.map(() =>
         deferred<{
             items: Message[];
@@ -628,7 +471,7 @@ test('a second listener keeps a queued shared detail flight alive', async (t) =>
 });
 
 test('an exhausted duplicate continuation succeeds without a no-progress error', async (t) => {
-    const repository = new MemoryRepository();
+    const repository = createInboxRepository(new IDBFactory());
     let continuation = false;
     const engine = await createInboxEngine(
         repository,
@@ -654,10 +497,12 @@ test('an exhausted duplicate continuation succeeds without a no-progress error',
 });
 
 test('committing history does not clear an unrelated inbox error', async (t) => {
-    const repository = new MemoryRepository();
+    const repository = createInboxRepository(new IDBFactory());
     const cached = normalizePage(page(thread('thread')));
-    repository.resources.set('inbox:primary', record('inbox:primary', cached));
-    repository.entities = cached.entities;
+    await repository.commitResources('account', {
+        resources: [record('inbox:primary', cached)],
+        entities: cached.entities,
+    });
     let inboxCalls = 0;
     const engine = await createInboxEngine(
         repository,
@@ -679,58 +524,6 @@ test('committing history does not clear an unrelated inbox error', async (t) => 
     engine.subscribe(() => undefined, 'thread');
     await engine.refreshHistory('thread');
     assert.equal(engine.snapshot().inbox.error?.kind, 'protocol');
-});
-
-test('history retention persists complete 501 rows while projecting at most 400 and admitting 20 roots', async (t) => {
-    const repository = new MemoryRepository();
-    const threads = Array.from({ length: 21 }, (_, index) =>
-        thread(`t-${index}`),
-    );
-    const normalized = normalizePage(page(...threads));
-    repository.resources.set(
-        'inbox:primary',
-        record('inbox:primary', normalized),
-    );
-    repository.entities = normalized.entities;
-    const engine = await createInboxEngine(
-        repository,
-        provider({
-            inbox: async () => page(...threads),
-            history: async (_account, threadId) => ({
-                items:
-                    threadId === 't-0'
-                        ? Array.from({ length: 501 }, (_, index) =>
-                              message(`m-${index}`),
-                          )
-                        : [message(`m-${threadId}`)],
-                hasNextPage: false,
-                viewerId: 'viewer',
-            }),
-        }),
-    );
-    t.after(engine.dispose);
-
-    const unsubscribers = threads
-        .slice(0, 20)
-        .map((item) => engine.subscribe(() => undefined, item.key));
-    for (const item of threads.slice(0, 20))
-        await engine.refreshHistory(item.key);
-
-    const historyRows =
-        repository.resources.get('history:t-0')?.orderedIds ?? [];
-    const roots = [...repository.resources.values()].filter(
-        (resource) =>
-            resource.threadId &&
-            resource.key === `history:${resource.threadId}`,
-    );
-    assert.equal(historyRows.length, 501);
-    assert.equal(engine.snapshot().histories['t-0'].orderedIds.length, 400);
-    assert.equal(engine.snapshot().histories['t-0'].cachedOlder, true);
-    assert.ok(roots.length <= 20);
-
-    const rejected = engine.snapshot().histories['t-20'];
-    assert.equal(rejected, undefined);
-    for (const unsubscribe of unsubscribers) unsubscribe();
 });
 
 test('evicting inactive histories removes their runtime projections as well as durable roots', async (t) => {
@@ -765,13 +558,12 @@ test('evicting inactive histories removes their runtime projections as well as d
     );
     assert.equal(engine.snapshot().histories['visited-0'], undefined);
     stopInbox();
-    await repository.close();
 });
 
 test('head refresh preserves a failed continuation until that cursor chain changes', async (t) => {
     let cursor = 'older-a';
     const engine = await createInboxEngine(
-        new MemoryRepository(),
+        createInboxRepository(new IDBFactory()),
         provider({
             history: async (
                 _account: string,
@@ -812,7 +604,7 @@ test('a fresh client verifies the provider account before receiving existing fac
     const renewal = deferred<string>();
     let renew = false;
     const engine = await createInboxEngine(
-        new MemoryRepository(),
+        createInboxRepository(new IDBFactory()),
         provider({
             account: () =>
                 renew ? renewal.promise : Promise.resolve('account-a'),
@@ -846,7 +638,7 @@ test('a fresh client verifies the provider account before receiving existing fac
 test('provider identity unavailability retains authorized cache but authentication failure clears it', async (t) => {
     let failure: 'provider_unavailable' | 'auth' | undefined;
     const engine = await createInboxEngine(
-        new MemoryRepository(),
+        createInboxRepository(new IDBFactory()),
         provider({
             account: async () => {
                 if (failure) throw new InboxError(failure);

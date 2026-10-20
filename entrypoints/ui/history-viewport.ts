@@ -37,15 +37,9 @@ export function createHistoryViewportController(onResize: () => void) {
         const boundary = viewport.getBoundingClientRect().top;
         const row = [
             ...viewport.querySelectorAll<HTMLElement>('[data-message-id]'),
-        ]
-            .map((item) => ({ item, rect: item.getBoundingClientRect() }))
-            .find(({ rect }) => rect.bottom > boundary);
+        ].find((item) => item.getBoundingClientRect().bottom > boundary);
         if (!row) return undefined;
-        return captureHistoryAnchor(
-            viewport,
-            row.item,
-            row.item.dataset.messageId!,
-        );
+        return captureHistoryAnchor(viewport, row, row.dataset.messageId!);
     }
 
     function correct(anchor: HistoryAnchor) {

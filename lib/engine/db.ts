@@ -699,7 +699,12 @@ function storageError(cause: unknown): InboxError {
 export function makeInboxRepository(
     factory: IDBFactory = globalThis.indexedDB,
 ): InboxRepositoryEffects {
-    const repository = createInboxRepository(factory);
+    return adaptInboxRepository(createInboxRepository(factory));
+}
+
+export function adaptInboxRepository(
+    repository: InboxRepository,
+): InboxRepositoryEffects {
     return {
         readHistoryWindow: (accountId, threadId, request) =>
             Effect.tryPromise({

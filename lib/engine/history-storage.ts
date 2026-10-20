@@ -417,15 +417,13 @@ class Work {
             if ((await this.refCount('messages', id)) === 0)
                 this.store('messages').delete([this.accountId, id]);
     }
-    async remove(resource: PersistedResource, gc = false): Promise<void> {
+    async remove(resource: PersistedResource): Promise<void> {
         await this.adjustInventory(resource, -1);
         await this.resourceRefs(resource, -1);
-        if (gc) {
-            await this.pruneRefs(resource.refs);
-            await this.chunks(resource, async (chunk) => {
-                await this.pruneRefs(chunk.refs);
-            });
-        }
+        await this.pruneRefs(resource.refs);
+        await this.chunks(resource, async (chunk) => {
+            await this.pruneRefs(chunk.refs);
+        });
         for (let part = 1; part <= (resource.chunkCount ?? 0); part++)
             this.store('historyChunks').delete([
                 this.accountId,
@@ -550,7 +548,7 @@ class Work {
             add(chunk.refs);
         });
         await this.references(refs, 1);
-        if (old) await this.remove(old.value, true);
+        if (old) await this.remove(old.value);
         const copy = { ...resource, key, orderedIds: ids, refs };
         delete copy.requestCursor;
         const stored = await this.put(copy);
@@ -633,12 +631,12 @@ class Work {
                 this.store('resources'),
                 [this.accountId, key],
             );
-            if (row) await this.remove(row.value, true);
+            if (row) await this.remove(row.value);
         }
         const pages = await this.select([
             `history-previous-page:${threadId}:*`,
         ]);
-        for (const page of pages) await this.remove(page, true);
+        for (const page of pages) await this.remove(page);
         await cursorEach<Order>(
             this.store('historyPreviousOrder'),
             [this.accountId, threadId],
@@ -1223,7 +1221,7 @@ export function storageRepository(
                     for (const resource of update.resources)
                         await work.references(resource.refs, 1);
                     for (const old of oldResources.values())
-                        await work.remove(old, true);
+                        await work.remove(old);
 
                     const accepted: PersistedResource[] = [];
                     for (const resource of update.resources) {
@@ -1368,7 +1366,7 @@ export function storageRepository(
                                     },
                                 );
                                 if (!page) break;
-                                await work.remove(page, true);
+                                await work.remove(page);
                             }
                             await cursorEach<Order>(
                                 work.store('historyOrder').index('thread'),

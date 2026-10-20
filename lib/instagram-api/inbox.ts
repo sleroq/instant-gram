@@ -163,11 +163,7 @@ export function createInboxReader(
         if (!mailboxId) throw new InboxError('protocol');
         const result = await graphql(
             INSTAGRAM_GRAPHQL_OPERATIONS.IGDThreadListOffMsysPaginationQuery,
-            {
-                count: 5,
-                cursor,
-                mailboxId,
-            },
+            { cursor, mailboxId },
             expected,
         );
         return decodeInbox(result.json);

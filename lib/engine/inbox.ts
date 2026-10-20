@@ -720,10 +720,7 @@ export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
     function installRead(
         result: RepositoryRead,
         replace = false,
-        affected: { inbox: boolean; histories: Set<string> } = {
-            inbox: false,
-            histories: new Set(),
-        },
+        inboxAffected = false,
     ) {
         if (replace) {
             inboxSegments.clear();
@@ -736,7 +733,7 @@ export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
         const inbox = preserveRuntime(
             inboxProjection(),
             state.inbox,
-            affected.inbox,
+            inboxAffected,
         );
         const histories = { ...state.histories };
         for (const id of result.deletedHistoryIds ?? []) {
@@ -744,22 +741,6 @@ export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
             delete state.histories[id];
             for (const subscription of targetsFor(id))
                 subscription.window = undefined;
-        }
-        for (const [threadId, previous] of Object.entries(state.histories)) {
-            if (affected.histories.has(threadId)) continue;
-            if (histories[threadId]) {
-                histories[threadId] = preserveRuntime(
-                    histories[threadId],
-                    previous,
-                    false,
-                );
-            } else if (
-                !replace ||
-                (detailInterest.has(threadId) &&
-                    previous.availability === 'absent')
-            ) {
-                histories[threadId] = previous;
-            }
         }
         state = {
             ...state,
@@ -1370,10 +1351,7 @@ export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
                                     return;
                                 for (const deleteKey of deleteKeys)
                                     inboxSegments.delete(deleteKey);
-                                installRead(committed, true, {
-                                    inbox: true,
-                                    histories: new Set(),
-                                });
+                                installRead(committed, true, true);
                                 state.entities = {
                                     threadsById: {
                                         ...merged.threadsById,
@@ -1622,10 +1600,7 @@ export const makeInboxEngine = Effect.fn('InboxEngine.make')(function* (
                                     account !== state.accountId
                                 )
                                     return;
-                                installRead(committed, true, {
-                                    inbox: false,
-                                    histories: new Set([threadId]),
-                                });
+                                installRead(committed, true);
                                 state.entities = incoming;
                                 for (const key of acceptedNow)
                                     acceptedReadOrder.set(key, order);

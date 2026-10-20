@@ -144,6 +144,12 @@ test('thread parsing keeps images, reactions, structured fallbacks, and pin stat
                             edges: [
                                 {
                                     node: {
+                                        message_id: 'leading-reaction-log',
+                                        content_type: 'REACTION_LOG_XMAT',
+                                    },
+                                },
+                                {
+                                    node: {
                                         message_id: 'image-1',
                                         sender_fbid: 'sender-1',
                                         timestamp_ms: '2000',
@@ -204,6 +210,7 @@ test('thread parsing keeps images, reactions, structured fallbacks, and pin stat
     );
 
     assert.equal(response.viewerId, 'viewer-1');
+    assert.equal(response.thread?.lastMessage?.id, 'image-1');
     assert.deepEqual(
         response.items.map((message) => message.id),
         ['ai-1', 'image-1'],

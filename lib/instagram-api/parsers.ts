@@ -231,9 +231,11 @@ function fallbackFor(
     content: JsonObject | undefined,
 ): MessageFallback {
     const xma = objectProp(content?.xma);
-    const fragmentText = textFragments(content?.text_fragments);
     return {
-        label: xmaTitle(xma) ?? fragmentText ?? fallbackLabel(contentType),
+        label:
+            xmaTitle(xma) ??
+            textFragments(content?.text_fragments) ??
+            fallbackLabel(contentType),
         preview:
             stringProp(node.text_body) ??
             stringProp(content?.text_body) ??
@@ -466,15 +468,13 @@ export function parseThread(value: JsonValue | undefined): Thread | undefined {
         .map(parseUser)
         .filter((user): user is User => Boolean(user));
     const slideMessages = objectProp(thread.slide_messages);
-    const lastMessage = (
-        Array.isArray(slideMessages?.edges) ? slideMessages.edges : []
-    )
-        .map((edge) => parseMessage(objectProp(edge)?.node))
-        .find((message): message is Message => Boolean(message));
-    const generatedTitle = users
-        .map((user) => user.username || user.fullName)
-        .filter(Boolean)
-        .join(', ');
+    let lastMessage: Message | undefined;
+    for (const edge of Array.isArray(slideMessages?.edges)
+        ? slideMessages.edges
+        : []) {
+        lastMessage = parseMessage(objectProp(edge)?.node);
+        if (lastMessage) break;
+    }
 
     const viewerFbid = stringProp(
         objectProp(thread.viewer)?.interop_messaging_user_fbid,
@@ -507,7 +507,12 @@ export function parseThread(value: JsonValue | undefined): Thread | undefined {
             stringProp(thread.id),
         threadIgId: stringProp(thread.thread_id),
         title:
-            stringProp(thread.thread_title) ?? (generatedTitle || 'Untitled'),
+            stringProp(thread.thread_title) ??
+            (users
+                .map((user) => user.username || user.fullName)
+                .filter(Boolean)
+                .join(', ') ||
+                'Untitled'),
         isGroup:
             booleanProp(thread.is_group) ??
             booleanProp(thread.is_group_thread) ??

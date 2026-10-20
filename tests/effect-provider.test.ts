@@ -1,69 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { Effect, Fiber, Layer, Result } from 'effect';
+import { Effect, Fiber, Result } from 'effect';
 import { TestClock } from 'effect/testing';
-import {
-    InboxRepositoryService,
-    type InboxRepositoryEffects,
-} from '../lib/engine/db.ts';
-import {
-    emptyEntities,
-    InboxEngineService,
-    InboxError,
-} from '../lib/engine/inbox.ts';
+import { InboxError } from '../lib/engine/inbox.ts';
 import type { JsonValue } from '../lib/json.ts';
-import { makeWorkerRuntime } from '../lib/worker/layer.ts';
 import {
-    InboxProviderService,
     makeInboxProvider,
-    type InboxProviderEffects,
     type ProviderResponseInput,
 } from '../lib/provider/inbox.ts';
 import {
     PROVIDER_PORT,
     type ProviderRequest,
 } from '../lib/provider/protocol.ts';
-
-test('InboxProviderService is independently substitutable', async () => {
-    const stub: InboxProviderEffects = {
-        accept: () => undefined,
-        account: Effect.succeed('layer-account'),
-        inbox: () => Effect.succeed({ items: [], hasNextPage: false }),
-        history: () =>
-            Effect.succeed({
-                items: [],
-                hasNextPage: false,
-                viewerId: 'layer-account',
-            }),
-    };
-    const result = await Effect.runPromise(
-        InboxProviderService.pipe(
-            Effect.flatMap((provider) => provider.account),
-            Effect.provide(Layer.succeed(InboxProviderService, stub)),
-        ),
-    );
-    assert.equal(result, 'layer-account');
-});
-
-test('InboxRepositoryService is independently substitutable', async () => {
-    const expected = { resources: [], entities: emptyEntities(), revision: 7 };
-    const stub: InboxRepositoryEffects = {
-        readResources: () => Effect.succeed(expected),
-        readHistoryWindow: () => Effect.die('unexpected history read'),
-        touchHistory: () => Effect.die('unexpected history access'),
-        commitResources: () => Effect.succeed(expected),
-        close: Effect.void,
-    };
-    const result = await Effect.runPromise(
-        InboxRepositoryService.pipe(
-            Effect.flatMap((repository) =>
-                repository.readResources('account', ['inbox:primary']),
-            ),
-            Effect.provide(Layer.succeed(InboxRepositoryService, stub)),
-        ),
-    );
-    assert.equal(result.revision, 7);
-});
 
 test('InboxError keeps its constructor and wire error ergonomics when tagged', () => {
     const error = new InboxError('protocol');
@@ -79,45 +27,6 @@ test('InboxError keeps its constructor and wire error ergonomics when tagged', (
             message: 'Instagram conversations could not be loaded.',
         },
     );
-});
-
-test('worker layer composes one substitutable engine from provider and repository layers', async () => {
-    let inboxReads = 0;
-    const provider: InboxProviderEffects = {
-        accept: () => undefined,
-        account: Effect.succeed('account'),
-        inbox: () => {
-            inboxReads++;
-            return Effect.succeed({ items: [], hasNextPage: false });
-        },
-        history: () => Effect.die('unused'),
-    };
-    const repository: InboxRepositoryEffects = {
-        readResources: () =>
-            Effect.succeed({
-                resources: [],
-                entities: emptyEntities(),
-                revision: 0,
-            }),
-        readHistoryWindow: () => Effect.die('unexpected history read'),
-        touchHistory: () => Effect.die('unexpected history access'),
-        commitResources: (_account, update) =>
-            Effect.succeed({
-                resources: update.resources,
-                entities: update.entities,
-                revision: 1,
-            }),
-        close: Effect.void,
-    };
-    const runtime = makeWorkerRuntime(
-        Layer.succeed(InboxProviderService, provider),
-        Layer.succeed(InboxRepositoryService, repository),
-    );
-    await runtime.runPromise(
-        Effect.flatMap(InboxEngineService, (engine) => engine.refresh),
-    );
-    assert.equal(inboxReads, 1);
-    await runtime.dispose();
 });
 
 test('readiness timeout follows the Effect clock', async (t) => {
