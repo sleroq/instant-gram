@@ -49,7 +49,7 @@ function page(
     };
 }
 
-async function open(factory: IDBFactory, version = 4): Promise<IDBDatabase> {
+async function open(factory: IDBFactory, version = 5): Promise<IDBDatabase> {
     return new Promise((resolve, reject) => {
         const request = factory.open('icr-successor', version);
         request.onsuccess = () => resolve(request.result);

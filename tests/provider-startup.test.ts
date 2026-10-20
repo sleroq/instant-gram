@@ -135,6 +135,9 @@ test('provider reconnects after worker stop and disposal removes listeners and l
         },
     };
     const reads = {
+        async mutate() {
+            throw new Error('unused');
+        },
         async inbox() {
             throw new Error('unused');
         },

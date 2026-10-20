@@ -16,13 +16,15 @@ Components import reactive primitives from `solid-js` and DOM rendering from
 
 The UI consumes complete, bounded worker snapshots with one normalized entity
 dictionary shared by inbox and selected/retained history resources. Dictionary
-reconciliation preserves unchanged records and rows. In the current R1 slice,
-refresh is explicit; R2.11 replaces routine manual refresh with worker-owned
-interest-driven synchronization while retaining refresh only as a repair affordance.
+reconciliation preserves unchanged records and rows. R2 implements worker-owned
+visible-interest synchronization; explicit refresh remains a repair affordance.
+Bounded operation snapshots feed the shared pure overlay projector; drafts stay
+per-window and settlement stays in the worker. R2 is complete by user acceptance
+with passing automated checks ([evidence and limits](r2-verification.md)).
 The fixed 72px inbox mounts at most 31 rows and history mounts at most 80.
 Routes and logical scroll/focus restoration are window state, not a second
 cache. Message previews do not imply a modal player or media-info API. Polling
-and mutations remain later milestones.
+and core mutations are worker-owned R2 capabilities, never component adapters.
 
 Effects separate reactive computation from imperative application: the first
 `createEffect` callback reads and returns tracked state, while the second applies

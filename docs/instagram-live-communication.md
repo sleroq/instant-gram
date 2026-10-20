@@ -1,13 +1,11 @@
 # Instagram DM live communication
 
-**Status: protocol evidence, NOT current runtime capabilities.** The production
-closed provider exposes only reads under the [engine contract](engine-inbox-contract.md);
-the Solid client does not poll, mark messages read, or send mutations. R2 plans
-worker-owned interest-driven polling and durable paired read commands; passive
-Iris/MQTT observation remains gated by fresh evidence in R5. See the
-[application contract](application-architecture.md) and
-[restoration checklist](solid-restoration-checklist.md). Do not restore a UI
-polling loop or UI-owned reconciliation store from these protocol references.
+**Status: protocol reference, not blanket runtime capability evidence.** The
+[engine contract](engine-inbox-contract.md) now implements closed R2 send/reply,
+pin/unpin, and paired read methods plus worker-owned visible-interest polling.
+Fresh R2 live evidence is not yet recorded; [verification and user acceptance](r2-verification.md)
+remain pending. R3 interactions, R4 media/comments, and R5 passive Iris observation
+remain future scope. These references do not authorize UI-owned protocol adapters.
 
 Tracked reference capture: `examples/www.instagram.com-live-communication.har` under `docs/examples`; the request examples here are sanitized. The separately named `message-editing.har` is local, untracked evidence. Use the same common GraphQL form fields and headers as `instagram-har-useful-requests.md`; all calls below are `POST https://www.instagram.com/api/graphql`.
 

@@ -4,6 +4,7 @@ import {
     INBOX_CLIENT_PORT,
     isClientCommand,
     type SnapshotMessage,
+    type ServerMessage,
 } from './protocol.ts';
 
 type PortMessage = Parameters<
@@ -17,7 +18,7 @@ export interface InboxClientPort {
         addListener(listener: (message: PortMessage) => void): void;
     };
     readonly onDisconnect: { addListener(listener: () => void): void };
-    postMessage(message: SnapshotMessage): void;
+    postMessage(message: ServerMessage): void;
     disconnect(): void;
 }
 
@@ -26,6 +27,15 @@ function bindInboxClientPort(port: InboxClientPort, engine: InboxEngine) {
     let unsubscribe: (() => void) | undefined;
     let selectedListener: ((projection: InboxProjection) => void) | undefined;
     let closed = false;
+    let visible = false;
+    function commandResult(operation: ReturnType<InboxEngine['mutate']>) {
+        handle(
+            operation.then((result) => {
+                if (!closed)
+                    port.postMessage({ kind: 'operation-result', result });
+            }),
+        );
+    }
     function handle(operation: Promise<void>) {
         void operation.catch(() => undefined);
     }
@@ -41,7 +51,29 @@ function bindInboxClientPort(port: InboxClientPort, engine: InboxEngine) {
         }
 
         const command = unknownCommand;
-        if (command.kind === 'subscribe') {
+        if (command.kind === 'visibility') {
+            visible = command.visible;
+            if (selectedListener) engine.setVisible(selectedListener, visible);
+        } else if (command.kind === 'mutate')
+            commandResult(engine.mutate(command.command));
+        else if (
+            command.kind === 'retry-operation' ||
+            command.kind === 'remove-operation'
+        ) {
+            commandResult(
+                command.kind === 'retry-operation'
+                    ? engine.retryOperation(
+                          command.accountId,
+                          command.accountEpoch,
+                          command.operationId,
+                      )
+                    : engine.removeOperation(
+                          command.accountId,
+                          command.accountEpoch,
+                          command.operationId,
+                      ),
+            );
+        } else if (command.kind === 'subscribe') {
             // Acquire the replacement interest first so a route change cannot
             // transiently cancel a shared detail flight needed by both routes.
             const previous = unsubscribe;
@@ -60,6 +92,7 @@ function bindInboxClientPort(port: InboxClientPort, engine: InboxEngine) {
                 command.anchorId,
                 previousListener,
             );
+            engine.setVisible(selectedListener, visible);
             previous?.();
         } else if (command.kind === 'refresh') handle(engine.refresh());
         else if (command.kind === 'load-more-inbox')

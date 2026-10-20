@@ -1,6 +1,11 @@
 # Instagram protocol reference: captured operations
 
-**Status: protocol reference, NOT current runtime capabilities.** The production closed provider exposes only the reads defined by [the engine contract](engine-inbox-contract.md). Mutations, polling, media loading, and comments are evidence for future R2–R5 restoration, not implemented UI features.
+**Status: protocol reference, not blanket runtime capability evidence.** The
+[engine contract](engine-inbox-contract.md) now implements closed R2 send/reply,
+pin/unpin, and paired read methods plus worker-owned visible-interest polling.
+Fresh R2 live evidence is not yet recorded; [verification and user acceptance](r2-verification.md)
+remain pending. R3 interactions, R4 media/comments, and R5 passive Iris observation
+remain future scope. These references do not authorize UI-owned protocol adapters.
 
 Tracked reference captures: `examples/www.instagram.com.har`, `examples/www.instagram.com-the-second.har`, and `examples/www.instagram.com-open-reel-from-chat-and-watch.har`. Separately named captures below are local, untracked evidence; only their sanitized descriptions are recorded here. Values omit live auth tokens; replay requires current `fb_dtsg`, `lsd`, `jazoest`, `csrftoken`, `device_id_for_iris_subscription`, and viewer FBID. Read operations below are HAR-backed; conversation pin/unpin uses the dated live evidence recorded below. See `instagram-har-useful-requests.md` for sanitized request examples.
 

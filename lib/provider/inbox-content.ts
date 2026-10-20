@@ -1,3 +1,8 @@
+import type { MutationRequest, MutationReceipt } from '../engine/operations.ts';
+import {
+    validateMutationRequest,
+    validateMutationReceipt,
+} from './mutations.ts';
 import type browser from 'webextension-polyfill';
 import type { Page, Thread, ThreadMessages } from '../domain.ts';
 import { InboxError } from '../engine/resources.ts';
@@ -9,6 +14,10 @@ import {
 } from './protocol.ts';
 
 type ReadDependencies = {
+    mutate(
+        expectedAccountId: string,
+        request: MutationRequest,
+    ): Promise<MutationReceipt>;
     account(): string;
     prepare(): Promise<void>;
     inbox(cursor?: string): Promise<Page<Thread>>;
@@ -20,6 +29,7 @@ export async function executeInboxProviderRequest(
     dependencies: ReadDependencies,
 ): Promise<ProviderResponse> {
     let expected: string | undefined;
+    let mutationDispatched = false;
 
     function verify() {
         try {
@@ -45,9 +55,32 @@ export async function executeInboxProviderRequest(
         if (request.expectedAccountId !== expected)
             throw new InboxError('auth');
 
+        if (request.method === 'mutate')
+            validateMutationRequest(request.request);
         await dependencies.prepare();
         verify();
 
+        if (request.method === 'mutate') {
+            mutationDispatched = true;
+            const value = await dependencies
+                .mutate(expected, request.request)
+                .catch((cause: unknown) => {
+                    // The API only exposes auth before network dispatch; afterwards it returns unknown_outcome.
+                    if (cause instanceof InboxError && cause.kind === 'auth')
+                        mutationDispatched = false;
+                    throw cause;
+                });
+            verify();
+            return {
+                kind: 'response',
+                id: request.id,
+                method: 'mutate',
+                result: {
+                    ok: true,
+                    value: validateMutationReceipt(request.request, value),
+                },
+            };
+        }
         if (request.method === 'history') {
             const value = await dependencies.history(
                 request.threadKey,
@@ -78,6 +111,7 @@ export async function executeInboxProviderRequest(
         } catch {
             error = new InboxError('auth');
         }
+        if (mutationDispatched) error = new InboxError('unknown_outcome');
         return {
             kind: 'response',
             id: request.id,
@@ -92,7 +126,7 @@ export async function executeInboxProviderRequest(
 
 export function registerInboxProvider(
     runtime: Pick<browser.Runtime.Static, 'connect'>,
-    reads: Pick<ReadDependencies, 'inbox' | 'history'>,
+    reads: Pick<ReadDependencies, 'inbox' | 'history' | 'mutate'>,
 ) {
     let disposed = false;
     let releasePort: (() => void) | undefined;
@@ -135,6 +169,7 @@ export function registerInboxProvider(
                 prepare: async () => {
                     await harvestTokens(true);
                 },
+                mutate: reads.mutate,
                 inbox: reads.inbox,
                 history: reads.history,
             }).then((response) => {

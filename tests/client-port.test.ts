@@ -64,6 +64,22 @@ test('real client Port forwards detail interest, keeps sequence across routes, a
     let released = 0;
     let active = 0;
     const engine: InboxEngine = {
+        mutate: async (command) => ({
+            ok: true,
+            operationId: command.operationId,
+            revision: 1,
+        }),
+        retryOperation: async (_account, _epoch, operationId) => ({
+            ok: true,
+            operationId,
+            revision: 1,
+        }),
+        removeOperation: async (_account, _epoch, operationId) => ({
+            ok: true,
+            operationId,
+            revision: 1,
+        }),
+        setVisible: () => undefined,
         subscribe(listener, threadId, anchorId, replaceListener) {
             interests.push(threadId);
             anchors.push(anchorId);
@@ -201,6 +217,22 @@ test('startup buffering supports prototype-backed ports and rejects invalid send
     const activate = prepareInboxClientPort(port);
     for (const listener of messages.listeners) listener({ kind: 'subscribe' });
     activate({
+        mutate: async (command) => ({
+            ok: true,
+            operationId: command.operationId,
+            revision: 1,
+        }),
+        retryOperation: async (_account, _epoch, operationId) => ({
+            ok: true,
+            operationId,
+            revision: 1,
+        }),
+        removeOperation: async (_account, _epoch, operationId) => ({
+            ok: true,
+            operationId,
+            revision: 1,
+        }),
+        setVisible: () => undefined,
         subscribe: () => {
             subscriptions++;
             return () => undefined;

@@ -14,8 +14,16 @@ import {
 } from '../lib/provider/inbox.ts';
 import { bindInboxEngine, makeWorkerRuntime } from '../lib/worker/layer.ts';
 import type { Page, Thread, ThreadMessages } from '../lib/domain.ts';
+import type {
+    MutationRequest,
+    MutationReceipt,
+} from '../lib/engine/operations.ts';
 
 type TestProvider = {
+    mutate?(
+        accountId: string,
+        request: MutationRequest,
+    ): Promise<MutationReceipt>;
     account(): Promise<string>;
     inbox(expectedAccountId: string, cursor?: string): Promise<Page<Thread>>;
     history(
@@ -31,6 +39,17 @@ export async function createInboxEngine(
 ) {
     const providerEffects: InboxProviderEffects = {
         accept: () => undefined,
+        mutate: (accountId, request) =>
+            Effect.tryPromise({
+                try: () =>
+                    provider.mutate
+                        ? provider.mutate(accountId, request)
+                        : Promise.reject(new InboxError('invalid_request')),
+                catch: (cause) =>
+                    cause instanceof InboxError
+                        ? cause
+                        : new InboxError('unknown_outcome'),
+            }),
         account: Effect.tryPromise({
             try: () => provider.account(),
             catch: (cause) =>

@@ -1,3 +1,4 @@
+import { createInboxMutator } from './mutations.ts';
 import type { Page, Thread, ThreadMessages } from '../domain.ts';
 import { InboxError } from '../engine/resources.ts';
 import {
@@ -91,7 +92,10 @@ export function createInboxReader(
         operation: InstagramGraphqlDescriptor<Input>,
         input: Input,
         expected: string,
+        mutation = false,
     ) {
+        if (!expected) throw new InboxError('auth');
+        verify(expected);
         const tokens = await getTokens();
         verify(expected);
 
@@ -109,37 +113,42 @@ export function createInboxReader(
             doc_id: operation.docId,
             variables: JSON.stringify(operation.buildVariables(input, tokens)),
         });
-        const response = await request(
-            `https://www.instagram.com${operation.endpoint}`,
-            {
-                method: 'POST',
-                credentials: 'include',
-                body,
-                headers: {
-                    'content-type': 'application/x-www-form-urlencoded',
-                    'x-ig-app-id': '936619743392459',
-                    'x-asbd-id': '359341',
-                    'x-fb-lsd': tokens.lsd,
-                    'x-fb-friendly-name': operation.friendlyName,
-                    'x-csrftoken': tokens.csrfToken,
+        try {
+            const response = await request(
+                `https://www.instagram.com${operation.endpoint}`,
+                {
+                    method: 'POST',
+                    credentials: 'include',
+                    body,
+                    headers: {
+                        'content-type': 'application/x-www-form-urlencoded',
+                        'x-ig-app-id': '936619743392459',
+                        'x-asbd-id': '359341',
+                        'x-fb-lsd': tokens.lsd,
+                        'x-fb-friendly-name': operation.friendlyName,
+                        'x-csrftoken': tokens.csrfToken,
+                    },
                 },
-            },
-        );
-        verify(expected);
-        if (response.status === 401 || response.status === 403)
-            throw new InboxError('auth');
-        if (!response.ok) throw new InboxError('protocol');
+            );
+            verify(expected);
+            if (response.status === 401 || response.status === 403)
+                throw new InboxError('auth');
+            if (!response.ok) throw new InboxError('protocol');
 
-        const json = parseJson(await response.text());
-        verify(expected);
-        const errors = field(json, 'errors');
-        if (
-            errors !== undefined &&
-            (!Array.isArray(errors) || errors.length > 0)
-        )
-            throw new InboxError('protocol');
+            const json = parseJson(await response.text());
+            verify(expected);
+            const errors = field(json, 'errors');
+            if (
+                errors !== undefined &&
+                (!Array.isArray(errors) || errors.length > 0)
+            )
+                throw new InboxError('protocol');
 
-        return { json, viewerId: tokens.viewerId };
+            return { json, viewerId: tokens.viewerId };
+        } catch (cause) {
+            if (mutation) throw new InboxError('unknown_outcome');
+            throw cause;
+        }
     }
 
     async function inbox(cursor?: string): Promise<Page<Thread>> {
@@ -187,5 +196,10 @@ export function createInboxReader(
               );
         return decodeHistory(result.json, result.viewerId);
     }
-    return { inbox, history };
+    const mutate = createInboxMutator({
+        graphql: (operation, input, expected) =>
+            graphql(operation, input, expected, true),
+        history,
+    });
+    return { inbox, history, mutate };
 }

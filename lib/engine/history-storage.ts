@@ -1,9 +1,25 @@
+import {
+    SETTLED_SEND_ALIAS_LIMIT,
+    ACTIVE_OPERATION_LIMIT,
+    sameMutationIntent,
+    isMutationCommand,
+    isMutationIntent,
+    type MutationCommand,
+    type MutationRequest,
+    type Operation,
+} from './operations.ts';
 import type { Message, User } from '../domain.ts';
-import { isNumber, type JsonValue } from '../json.ts';
+import {
+    isNumber,
+    isJsonObject,
+    type JsonObject,
+    type JsonValue,
+} from '../json.ts';
 import {
     HISTORY_WINDOW_LIMIT,
     InboxError,
     emptyEntities,
+    emptyResource,
     type EntityFacts,
     type HistoryProjection,
     type HistoryInventory,
@@ -17,6 +33,7 @@ import {
 } from './resources.ts';
 
 const stores = [
+    'operations',
     'users',
     'threads',
     'messages',
@@ -61,6 +78,175 @@ type Chunk = {
     refs: PersistedResource['refs'];
 };
 type Row<T> = { accountId: string; id: string; value: T };
+type OperationVisibility = 'active' | 'alias' | 'tombstone';
+function operationVisibility(operation: Operation): OperationVisibility {
+    return operationVisibilityForFields(
+        operation.status,
+        operation.intent.type,
+        operation.receipt?.type === 'send',
+    );
+}
+
+function validateMutationCommand(
+    command: MutationCommand,
+    request?: MutationRequest,
+    createdAt?: number,
+): void {
+    if (
+        !isMutationCommand(command) ||
+        (request &&
+            (!sameMutationIntent(command.intent, request.intent) ||
+                !request.offlineThreadingId)) ||
+        (createdAt !== undefined &&
+            (!Number.isSafeInteger(createdAt) || createdAt < 0))
+    )
+        throw new InboxError('invalid_request');
+}
+
+/** IndexedDB is an external boundary, including records reached by exact dedup key. */
+function validOperationRow(
+    value: JsonValue | undefined,
+    accountId: string,
+    validateFact?: FactValidator,
+    id?: string,
+): value is JsonObject & Row<Operation> {
+    if (
+        !isJsonObject(value) ||
+        value.accountId !== accountId ||
+        typeof value.id !== 'string' ||
+        (id !== undefined && value.id !== id) ||
+        !isJsonObject(value.value)
+    )
+        return false;
+    const operation = value.value;
+    const command = {
+        accountId: operation.accountId,
+        accountEpoch: operation.accountEpoch,
+        operationId: operation.operationId,
+        intent: operation.intent,
+    };
+    if (
+        !isMutationCommand(command) ||
+        command.accountId !== accountId ||
+        command.operationId !== value.id
+    )
+        return false;
+    const request = operation.request;
+    if (
+        !isJsonObject(request) ||
+        !isMutationIntent(request.intent) ||
+        !sameMutationIntent(command.intent, request.intent) ||
+        typeof request.offlineThreadingId !== 'string' ||
+        !request.offlineThreadingId.trim()
+    )
+        return false;
+    if (
+        Object.keys(request).some(
+            (key) =>
+                ![
+                    'intent',
+                    'offlineThreadingId',
+                    'threadFbid',
+                    'threadIgId',
+                    'viewerId',
+                ].includes(key),
+        ) ||
+        ['threadFbid', 'threadIgId', 'viewerId'].some(
+            (key) =>
+                request[key] !== undefined &&
+                (typeof request[key] !== 'string' || !request[key].trim()),
+        )
+    )
+        return false;
+    if (
+        typeof operation.createdAt !== 'number' ||
+        !Number.isSafeInteger(operation.createdAt) ||
+        operation.createdAt < 0 ||
+        typeof operation.acceptedRevision !== 'number' ||
+        !Number.isSafeInteger(operation.acceptedRevision) ||
+        operation.acceptedRevision < 1 ||
+        typeof operation.attempts !== 'number' ||
+        !Number.isSafeInteger(operation.attempts) ||
+        operation.attempts < 0 ||
+        typeof operation.status !== 'string' ||
+        ![
+            'queued',
+            'dispatching',
+            'succeeded',
+            'failed',
+            'outcome_unknown',
+            'removed',
+        ].includes(operation.status) ||
+        typeof operation.retryable !== 'boolean' ||
+        (operation.echoed !== undefined &&
+            typeof operation.echoed !== 'boolean')
+    )
+        return false;
+    if (
+        value.acceptedRevision !== operation.acceptedRevision ||
+        value.visibility !==
+            operationVisibilityForFields(
+                operation.status,
+                command.intent.type,
+                operation.receipt !== undefined,
+            )
+    )
+        return false;
+    if (
+        operation.error !== undefined &&
+        (!isJsonObject(operation.error) ||
+            typeof operation.error.kind !== 'string' ||
+            typeof operation.error.message !== 'string')
+    )
+        return false;
+
+    if (operation.receipt === undefined) return true;
+    const receipt = operation.receipt;
+    if (!isJsonObject(receipt) || receipt.type !== command.intent.type)
+        return false;
+    if (receipt.type === 'read')
+        return (
+            command.intent.type === 'read' &&
+            typeof receipt.threadIgId === 'string' &&
+            !!receipt.threadIgId.trim() &&
+            (request.threadIgId === undefined ||
+                request.threadIgId === receipt.threadIgId) &&
+            receipt.messageId === command.intent.messageId &&
+            receipt.timestampMs === command.intent.timestampMs
+        );
+    if (
+        typeof receipt.threadFbid !== 'string' ||
+        !receipt.threadFbid.trim() ||
+        (request.threadFbid !== undefined &&
+            request.threadFbid !== receipt.threadFbid)
+    )
+        return false;
+    if (receipt.type === 'pin')
+        return (
+            command.intent.type === 'pin' &&
+            receipt.isPinned === command.intent.isPinned
+        );
+    return (
+        isJsonObject(receipt.message) &&
+        typeof receipt.message.id === 'string' &&
+        !!receipt.message.id.trim() &&
+        typeof receipt.message.ts === 'number' &&
+        Number.isFinite(receipt.message.ts) &&
+        (!validateFact ||
+            validateFact('messages', receipt.message.id, receipt.message))
+    );
+}
+
+function operationVisibilityForFields(
+    status: string,
+    type: MutationCommand['intent']['type'],
+    receipt: boolean,
+): OperationVisibility {
+    if (status === 'removed') return 'tombstone';
+    if (status !== 'succeeded') return 'active';
+    return type === 'send' && receipt ? 'alias' : 'tombstone';
+}
+
 type Ref = { accountId: string; kind: Kind; id: string; count: number };
 type Totals = { histories: number; messages: number };
 
@@ -399,9 +585,87 @@ class Work {
         });
         return stored;
     }
+    private operationReferences?: Map<Kind, Set<string>>;
+    async operations(visibility: OperationVisibility): Promise<Operation[]> {
+        const values: Operation[] = [];
+        await cursorEach<JsonValue>(
+            this.store('operations').index('visibility'),
+            [this.accountId, visibility],
+            (row) => {
+                if (!validOperationRow(row, this.accountId, this.validateFact))
+                    throw new InboxError('storage');
+                values.push(row.value);
+            },
+        );
+        return values;
+    }
+    async operation(id: string): Promise<Operation | undefined> {
+        const row = await get<JsonValue>(this.store('operations'), [
+            this.accountId,
+            id,
+        ]);
+        if (row === undefined) return undefined;
+        if (!validOperationRow(row, this.accountId, this.validateFact, id))
+            throw new InboxError('storage');
+        return row.value;
+    }
+    putOperation(operation: Operation): void {
+        this.operationReferences = undefined;
+        this.store('operations').put({
+            accountId: this.accountId,
+            id: operation.operationId,
+            value: operation,
+            visibility: operationVisibility(operation),
+            acceptedRevision: operation.acceptedRevision,
+        });
+    }
+    async operationProtects(kind: Kind, id: string): Promise<boolean> {
+        if (!this.operationReferences) {
+            const refs = new Map<Kind, Set<string>>([
+                ['threads', new Set()],
+                ['users', new Set()],
+                ['messages', new Set()],
+            ]);
+            for (const visibility of ['active', 'alias'] as const) {
+                for (const operation of await this.operations(visibility)) {
+                    if (visibility === 'alias') {
+                        if (operation.receipt?.type === 'send')
+                            refs.get('messages')!.add(
+                                operation.receipt.message.id,
+                            );
+                        continue;
+                    }
+                    refs.get('threads')!.add(operation.intent.threadId);
+                    if (operation.intent.type === 'read')
+                        refs.get('messages')!.add(operation.intent.messageId);
+                    if (
+                        operation.intent.type === 'send' &&
+                        operation.intent.replyTo
+                    )
+                        refs.get('messages')!.add(operation.intent.replyTo);
+                }
+            }
+            for (const threadId of refs.get('threads')!) {
+                const row = await get<Row<ThreadFact>>(this.store('threads'), [
+                    this.accountId,
+                    threadId,
+                ]);
+                for (const userId of row?.value.userIds ?? [])
+                    refs.get('users')!.add(userId);
+                if (row?.value.lastMessageId)
+                    refs.get('messages')!.add(row.value.lastMessageId);
+            }
+            this.operationReferences = refs;
+        }
+        return this.operationReferences.get(kind)!.has(id);
+    }
     async pruneRefs(refs: PersistedResource['refs']): Promise<void> {
         for (const id of refs.threadIds) {
-            if ((await this.refCount('threads', id)) > 0) continue;
+            if (
+                (await this.refCount('threads', id)) > 0 ||
+                (await this.operationProtects('threads', id))
+            )
+                continue;
             const thread = await this.fact<ThreadFact>('threads', id);
             await this.pruneRefs({
                 threadIds: [],
@@ -411,10 +675,16 @@ class Work {
             this.store('threads').delete([this.accountId, id]);
         }
         for (const id of refs.userIds)
-            if ((await this.refCount('users', id)) === 0)
+            if (
+                (await this.refCount('users', id)) === 0 &&
+                !(await this.operationProtects('users', id))
+            )
                 this.store('users').delete([this.accountId, id]);
         for (const id of refs.messageIds)
-            if ((await this.refCount('messages', id)) === 0)
+            if (
+                (await this.refCount('messages', id)) === 0 &&
+                !(await this.operationProtects('messages', id))
+            )
                 this.store('messages').delete([this.accountId, id]);
     }
     async remove(resource: PersistedResource): Promise<void> {
@@ -821,7 +1091,10 @@ class Work {
     async prune(candidates: Map<Kind, Set<string>>): Promise<void> {
         for (const [kind, ids] of candidates) {
             for (const id of ids)
-                if ((await this.refCount(kind, id)) === 0)
+                if (
+                    (await this.refCount(kind, id)) === 0 &&
+                    !(await this.operationProtects(kind, id))
+                )
                     this.store(kind).delete([this.accountId, id]);
         }
     }
@@ -914,8 +1187,425 @@ export function storageRepository(
         );
     }
 
+    async function commit(
+        work: Work,
+        accountId: string,
+        update: ResourceCommit,
+    ): Promise<RepositoryRead> {
+        const candidates = new Map<Kind, Set<string>>([
+            ['threads', new Set()],
+            ['users', new Set()],
+            ['messages', new Set()],
+        ]);
+        function remember(refs: PersistedResource['refs']) {
+            for (const id of refs.threadIds) candidates.get('threads')!.add(id);
+            for (const id of refs.userIds) candidates.get('users')!.add(id);
+            for (const id of refs.messageIds)
+                candidates.get('messages')!.add(id);
+        }
+
+        const oldResources = new Map<string, PersistedResource>();
+        for (const key of new Set([
+            ...(update.deleteKeys ?? []),
+            ...update.resources.map((resource) => resource.key),
+        ])) {
+            const old = await get<Row<PersistedResource>>(
+                work.store('resources'),
+                [accountId, key],
+            );
+            if (old) oldResources.set(key, old.value);
+        }
+
+        // User/message facts are installed before current thread dependency edges change.
+        for (const kind of ['users', 'messages'] as const) {
+            const facts =
+                kind === 'users'
+                    ? update.entities.usersById
+                    : update.entities.messagesById;
+            for (const [id, value] of Object.entries(facts)) {
+                work.store(kind).put({ accountId, id, value });
+                candidates.get(kind)!.add(id);
+            }
+        }
+        for (const [id, value] of Object.entries(update.entities.threadsById)) {
+            const old = await get<Row<ThreadFact>>(work.store('threads'), [
+                accountId,
+                id,
+            ]);
+            if (old && (await work.refCount('threads', id)) > 0) {
+                await work.threadEdges(value, 1);
+                await work.threadEdges(old.value, -1);
+                remember({
+                    threadIds: [],
+                    userIds: old.value.userIds,
+                    messageIds: old.value.lastMessageId
+                        ? [old.value.lastMessageId]
+                        : [],
+                });
+            }
+            work.store('threads').put({ accountId, id, value });
+            candidates.get('threads')!.add(id);
+        }
+
+        for (const resource of update.resources) {
+            if (!resource.threadId || resource.requestCursor !== undefined)
+                continue;
+            const old = oldResources.get(resource.key);
+            let unchangedCoverage =
+                old !== undefined &&
+                update.resources.length === 1 &&
+                (update.deleteKeys?.length ?? 0) === 0 &&
+                old.requestCursor === undefined &&
+                old.cursor === resource.cursor &&
+                old.hasNextPage === resource.hasNextPage;
+            if (unchangedCoverage && old) {
+                const ids = new Set(resource.orderedIds);
+                await work.pageIds(old, async (part) => {
+                    if (part.some((id) => !ids.has(id)))
+                        unchangedCoverage = false;
+                });
+            }
+            if (unchangedCoverage) continue;
+            await work.capture(resource.threadId);
+            if (old && old.orderedIds.length)
+                await work.snapshot(
+                    old,
+                    `history-archive:${resource.threadId}:${old.orderedIds[0]}`,
+                );
+        }
+        // New edges precede old releases, including thread-owned transitive edges.
+        for (const resource of update.resources)
+            await work.references(resource.refs, 1);
+        for (const old of oldResources.values()) await work.remove(old);
+
+        const accepted: PersistedResource[] = [];
+        for (const resource of update.resources) {
+            const stored = await work.put(resource);
+            await work.adjustInventory(stored, 1);
+            accepted.push(stored);
+        }
+
+        // Active segment replacements must not leave ordering pointing at released facts.
+        const rebuildThreads = new Set<string>();
+        for (const old of oldResources.values()) {
+            if (!old.threadId || old.requestCursor === undefined) continue;
+            const inventory = await work.inventory(old.threadId);
+            if (old.activeGeneration === inventory.generation)
+                rebuildThreads.add(old.threadId);
+        }
+        // Heads rebuild before continuations in a multi-page commit.
+        for (const resource of accepted.filter(
+            (resource) => resource.requestCursor === undefined,
+        ))
+            await work.activate(resource);
+        for (const threadId of rebuildThreads) {
+            if (
+                accepted.some(
+                    (resource) =>
+                        resource.threadId === threadId &&
+                        resource.requestCursor === undefined,
+                )
+            )
+                continue;
+            const inventory = await work.inventory(threadId);
+            if (!inventory.headKey) continue;
+            const head = await get<Row<PersistedResource>>(
+                work.store('resources'),
+                [accountId, inventory.headKey],
+            );
+            if (head) await work.activate(head.value);
+        }
+        for (const resource of accepted.filter(
+            (resource) => resource.requestCursor !== undefined,
+        )) {
+            const current = (await get<Row<PersistedResource>>(
+                work.store('resources'),
+                [accountId, resource.key],
+            ))!.value;
+            const inventory = current.threadId
+                ? await work.inventory(current.threadId)
+                : undefined;
+            if (current.activeGeneration !== inventory?.generation)
+                await work.activate(current);
+        }
+
+        const deletedHistoryIds: string[] = [];
+        for (const threadId of new Set(
+            [...oldResources.values()].flatMap((resource) =>
+                resource.threadId ? [resource.threadId] : [],
+            ),
+        )) {
+            const inventory = await work.inventory(threadId);
+            if (inventory.segmentCount === 0) {
+                await cursorEach<Order>(
+                    work.store('historyOrder').index('thread'),
+                    [accountId, threadId],
+                    (_order, cursor) => {
+                        cursor.delete();
+                    },
+                );
+                work.store('historyInventory').delete([accountId, threadId]);
+                deletedHistoryIds.push(threadId);
+            } else if (
+                inventory.headKey &&
+                !(await get(work.store('resources'), [
+                    accountId,
+                    inventory.headKey,
+                ]))
+            ) {
+                delete inventory.headKey;
+                delete inventory.tailKey;
+                delete inventory.cursor;
+                inventory.hasNextPage = false;
+                inventory.activeMessageCount = 0;
+                inventory.generation++;
+                work.store('historyInventory').put(inventory);
+            }
+        }
+        if (
+            update.retention &&
+            accepted.some((resource) => resource.threadId)
+        ) {
+            const protectedIds = new Set(update.retention.protectedThreadIds);
+            for (const operation of await operations(work)) {
+                if (
+                    operation.status !== 'succeeded' &&
+                    operation.status !== 'removed'
+                )
+                    protectedIds.add(operation.intent.threadId);
+            }
+            let recent = 0;
+            await cursorEach<Inventory>(
+                work.store('historyInventory').index('access'),
+                [accountId],
+                (inventory) => {
+                    if (!protectedIds.has(inventory.threadId)) {
+                        protectedIds.add(inventory.threadId);
+                        recent++;
+                    }
+                    return recent < 2;
+                },
+                'prev',
+            );
+            while (true) {
+                const totals = (await get<Totals>(
+                    work.store('meta'),
+                    totalsKey(accountId),
+                )) ?? { histories: 0, messages: 0 };
+                if (
+                    totals.histories <= update.retention.maxHistories &&
+                    totals.messages <= update.retention.maxMessages
+                )
+                    break;
+                let victim: Inventory | undefined;
+                await cursorEach<Inventory>(
+                    work.store('historyInventory').index('access'),
+                    [accountId],
+                    (inventory) => {
+                        if (protectedIds.has(inventory.threadId)) return;
+                        victim = inventory;
+                        return false;
+                    },
+                );
+                if (!victim) break;
+                // Fetch one descriptor at a time; no whole-history message array.
+                while (true) {
+                    let page: PersistedResource | undefined;
+                    await cursorEach<Row<PersistedResource>>(
+                        work.store('resources').index('history'),
+                        [accountId, victim.threadId],
+                        (row) => {
+                            page = row.value;
+                            return false;
+                        },
+                    );
+                    if (!page) break;
+                    await work.remove(page);
+                }
+                await cursorEach<Order>(
+                    work.store('historyOrder').index('thread'),
+                    [accountId, victim.threadId],
+                    (_order, cursor) => {
+                        cursor.delete();
+                    },
+                );
+                await work.retirePrevious(victim.threadId);
+                work.store('historyInventory').delete([
+                    accountId,
+                    victim.threadId,
+                ]);
+                deletedHistoryIds.push(victim.threadId);
+            }
+        }
+
+        await work.prune(candidates);
+        const nextRevision =
+            revision(await get(work.store('meta'), 'revision')) + 1;
+        work.store('meta').put(nextRevision, 'revision');
+        return {
+            ...(await work.read(update.returnKeys ?? ['*'])),
+            deletedHistoryIds,
+        };
+    }
+    async function operations(work: Work): Promise<Operation[]> {
+        const groups = await Promise.all(
+            (['active', 'alias'] as const).map((visibility) =>
+                work.operations(visibility),
+            ),
+        );
+        return groups
+            .flat()
+            .sort((a, b) => a.acceptedRevision - b.acceptedRevision);
+    }
+    async function bump(work: Work): Promise<number> {
+        const next = revision(await get(work.store('meta'), 'revision')) + 1;
+        work.store('meta').put(next, 'revision');
+        return next;
+    }
     return {
         close,
+        async acceptOperation(
+            command: MutationCommand,
+            request: MutationRequest | undefined,
+            createdAt: number,
+        ) {
+            validateMutationCommand(command);
+
+            return transaction(
+                await open(),
+                'readwrite',
+                command.accountId,
+                async (work) => {
+                    const old = await work.operation(command.operationId);
+                    if (old) {
+                        if (!sameMutationIntent(old.intent, command.intent))
+                            throw new InboxError('invalid_request');
+                        return {
+                            operation: old,
+                            revision: revision(
+                                await get(work.store('meta'), 'revision'),
+                            ),
+                        };
+                    }
+                    if (!request) throw new InboxError('invalid_request');
+                    validateMutationCommand(command, request, createdAt);
+                    if (
+                        (await work.operations('active')).length >=
+                        ACTIVE_OPERATION_LIMIT
+                    )
+                        throw new InboxError('capacity');
+                    const acceptedRevision = await bump(work);
+                    const operation: Operation = {
+                        ...command,
+                        request,
+                        createdAt,
+                        acceptedRevision,
+                        status: 'queued',
+                        attempts: 0,
+                        retryable: false,
+                    };
+                    work.putOperation(operation);
+                    return { operation, revision: acceptedRevision };
+                },
+            );
+        },
+        async readOperations(accountId: string) {
+            if (!accountId) throw new InboxError('invalid_request');
+            return transaction(
+                await open(),
+                'readonly',
+                accountId,
+                async (work) => {
+                    const retained = await operations(work);
+                    const refs: PersistedResource['refs'] = {
+                        threadIds: [],
+                        userIds: [],
+                        messageIds: [],
+                    };
+                    for (const operation of retained) {
+                        if (operation.status === 'succeeded') continue;
+                        refs.threadIds.push(operation.intent.threadId);
+                        if (operation.intent.type === 'read')
+                            refs.messageIds.push(operation.intent.messageId);
+                        if (
+                            operation.intent.type === 'send' &&
+                            operation.intent.replyTo
+                        )
+                            refs.messageIds.push(operation.intent.replyTo);
+                    }
+                    const entities = await work.entities(
+                        [{ ...emptyResource(), key: 'operations', refs }],
+                        false,
+                    );
+                    return {
+                        operations: retained,
+                        entities,
+                        revision: revision(
+                            await get(work.store('meta'), 'revision'),
+                        ),
+                    };
+                },
+            );
+        },
+        async updateOperation(
+            accountId: string,
+            operation: Operation,
+            update?: ResourceCommit,
+        ) {
+            if (accountId !== operation.accountId)
+                throw new InboxError('invalid_request');
+            if (update) validate(accountId, update);
+
+            return transaction(
+                await open(),
+                'readwrite',
+                accountId,
+                async (work) => {
+                    const old = await work.operation(operation.operationId);
+                    if (
+                        !old ||
+                        !sameMutationIntent(old.intent, operation.intent) ||
+                        old.acceptedRevision !== operation.acceptedRevision ||
+                        !sameMutationIntent(
+                            old.request.intent,
+                            operation.request.intent,
+                        ) ||
+                        old.request.offlineThreadingId !==
+                            operation.request.offlineThreadingId ||
+                        old.request.viewerId !== operation.request.viewerId ||
+                        old.request.threadFbid !==
+                            operation.request.threadFbid ||
+                        old.request.threadIgId !==
+                            operation.request.threadIgId ||
+                        old.accountEpoch !== operation.accountEpoch ||
+                        old.createdAt !== operation.createdAt
+                    )
+                        throw new InboxError('invalid_request');
+
+                    work.putOperation(operation);
+                    const aliases = await work.operations('alias');
+                    const expiredMessages = new Set<string>();
+                    for (const oldAlias of aliases.slice(
+                        0,
+                        Math.max(0, aliases.length - SETTLED_SEND_ALIAS_LIMIT),
+                    )) {
+                        if (oldAlias.receipt?.type === 'send')
+                            expiredMessages.add(oldAlias.receipt.message.id);
+                        delete oldAlias.receipt;
+                        work.putOperation(oldAlias);
+                    }
+
+                    await work.prune(new Map([['messages', expiredMessages]]));
+                    if (update)
+                        return {
+                            ...(await commit(work, accountId, update)),
+                            operation,
+                        };
+                    await bump(work);
+                    return { ...(await work.read([])), operation };
+                },
+            );
+        },
         readHistoryInventory,
         async readResources(accountId, keys) {
             if (!accountId || keys.some((key) => !key))
@@ -1129,269 +1819,7 @@ export function storageRepository(
                 'readwrite',
                 accountId,
                 async (work) => {
-                    const candidates = new Map<Kind, Set<string>>([
-                        ['threads', new Set()],
-                        ['users', new Set()],
-                        ['messages', new Set()],
-                    ]);
-                    function remember(refs: PersistedResource['refs']) {
-                        for (const id of refs.threadIds)
-                            candidates.get('threads')!.add(id);
-                        for (const id of refs.userIds)
-                            candidates.get('users')!.add(id);
-                        for (const id of refs.messageIds)
-                            candidates.get('messages')!.add(id);
-                    }
-
-                    const oldResources = new Map<string, PersistedResource>();
-                    for (const key of new Set([
-                        ...(update.deleteKeys ?? []),
-                        ...update.resources.map((resource) => resource.key),
-                    ])) {
-                        const old = await get<Row<PersistedResource>>(
-                            work.store('resources'),
-                            [accountId, key],
-                        );
-                        if (old) oldResources.set(key, old.value);
-                    }
-
-                    // User/message facts are installed before current thread dependency edges change.
-                    for (const kind of ['users', 'messages'] as const) {
-                        const facts =
-                            kind === 'users'
-                                ? update.entities.usersById
-                                : update.entities.messagesById;
-                        for (const [id, value] of Object.entries(facts)) {
-                            work.store(kind).put({ accountId, id, value });
-                            candidates.get(kind)!.add(id);
-                        }
-                    }
-                    for (const [id, value] of Object.entries(
-                        update.entities.threadsById,
-                    )) {
-                        const old = await get<Row<ThreadFact>>(
-                            work.store('threads'),
-                            [accountId, id],
-                        );
-                        if (old && (await work.refCount('threads', id)) > 0) {
-                            await work.threadEdges(value, 1);
-                            await work.threadEdges(old.value, -1);
-                            remember({
-                                threadIds: [],
-                                userIds: old.value.userIds,
-                                messageIds: old.value.lastMessageId
-                                    ? [old.value.lastMessageId]
-                                    : [],
-                            });
-                        }
-                        work.store('threads').put({ accountId, id, value });
-                        candidates.get('threads')!.add(id);
-                    }
-
-                    for (const resource of update.resources) {
-                        if (
-                            !resource.threadId ||
-                            resource.requestCursor !== undefined
-                        )
-                            continue;
-                        const old = oldResources.get(resource.key);
-                        let unchangedCoverage =
-                            old !== undefined &&
-                            update.resources.length === 1 &&
-                            (update.deleteKeys?.length ?? 0) === 0 &&
-                            old.requestCursor === undefined &&
-                            old.cursor === resource.cursor &&
-                            old.hasNextPage === resource.hasNextPage;
-                        if (unchangedCoverage && old) {
-                            const ids = new Set(resource.orderedIds);
-                            await work.pageIds(old, async (part) => {
-                                if (part.some((id) => !ids.has(id)))
-                                    unchangedCoverage = false;
-                            });
-                        }
-                        if (unchangedCoverage) continue;
-                        await work.capture(resource.threadId);
-                        if (old && old.orderedIds.length)
-                            await work.snapshot(
-                                old,
-                                `history-archive:${resource.threadId}:${old.orderedIds[0]}`,
-                            );
-                    }
-                    // New edges precede old releases, including thread-owned transitive edges.
-                    for (const resource of update.resources)
-                        await work.references(resource.refs, 1);
-                    for (const old of oldResources.values())
-                        await work.remove(old);
-
-                    const accepted: PersistedResource[] = [];
-                    for (const resource of update.resources) {
-                        const stored = await work.put(resource);
-                        await work.adjustInventory(stored, 1);
-                        accepted.push(stored);
-                    }
-
-                    // Active segment replacements must not leave ordering pointing at released facts.
-                    const rebuildThreads = new Set<string>();
-                    for (const old of oldResources.values()) {
-                        if (!old.threadId || old.requestCursor === undefined)
-                            continue;
-                        const inventory = await work.inventory(old.threadId);
-                        if (old.activeGeneration === inventory.generation)
-                            rebuildThreads.add(old.threadId);
-                    }
-                    // Heads rebuild before continuations in a multi-page commit.
-                    for (const resource of accepted.filter(
-                        (resource) => resource.requestCursor === undefined,
-                    ))
-                        await work.activate(resource);
-                    for (const threadId of rebuildThreads) {
-                        if (
-                            accepted.some(
-                                (resource) =>
-                                    resource.threadId === threadId &&
-                                    resource.requestCursor === undefined,
-                            )
-                        )
-                            continue;
-                        const inventory = await work.inventory(threadId);
-                        if (!inventory.headKey) continue;
-                        const head = await get<Row<PersistedResource>>(
-                            work.store('resources'),
-                            [accountId, inventory.headKey],
-                        );
-                        if (head) await work.activate(head.value);
-                    }
-                    for (const resource of accepted.filter(
-                        (resource) => resource.requestCursor !== undefined,
-                    )) {
-                        const current = (await get<Row<PersistedResource>>(
-                            work.store('resources'),
-                            [accountId, resource.key],
-                        ))!.value;
-                        const inventory = current.threadId
-                            ? await work.inventory(current.threadId)
-                            : undefined;
-                        if (current.activeGeneration !== inventory?.generation)
-                            await work.activate(current);
-                    }
-
-                    const deletedHistoryIds: string[] = [];
-                    for (const threadId of new Set(
-                        [...oldResources.values()].flatMap((resource) =>
-                            resource.threadId ? [resource.threadId] : [],
-                        ),
-                    )) {
-                        const inventory = await work.inventory(threadId);
-                        if (inventory.segmentCount === 0) {
-                            await cursorEach<Order>(
-                                work.store('historyOrder').index('thread'),
-                                [accountId, threadId],
-                                (_order, cursor) => {
-                                    cursor.delete();
-                                },
-                            );
-                            work.store('historyInventory').delete([
-                                accountId,
-                                threadId,
-                            ]);
-                            deletedHistoryIds.push(threadId);
-                        } else if (
-                            inventory.headKey &&
-                            !(await get(work.store('resources'), [
-                                accountId,
-                                inventory.headKey,
-                            ]))
-                        ) {
-                            delete inventory.headKey;
-                            delete inventory.tailKey;
-                            delete inventory.cursor;
-                            inventory.hasNextPage = false;
-                            inventory.activeMessageCount = 0;
-                            inventory.generation++;
-                            work.store('historyInventory').put(inventory);
-                        }
-                    }
-                    if (
-                        update.retention &&
-                        accepted.some((resource) => resource.threadId)
-                    ) {
-                        const protectedIds = new Set(
-                            update.retention.protectedThreadIds,
-                        );
-                        let recent = 0;
-                        await cursorEach<Inventory>(
-                            work.store('historyInventory').index('access'),
-                            [accountId],
-                            (inventory) => {
-                                if (!protectedIds.has(inventory.threadId)) {
-                                    protectedIds.add(inventory.threadId);
-                                    recent++;
-                                }
-                                return recent < 2;
-                            },
-                            'prev',
-                        );
-                        while (true) {
-                            const totals = (await get<Totals>(
-                                work.store('meta'),
-                                totalsKey(accountId),
-                            )) ?? { histories: 0, messages: 0 };
-                            if (
-                                totals.histories <=
-                                    update.retention.maxHistories &&
-                                totals.messages <= update.retention.maxMessages
-                            )
-                                break;
-                            let victim: Inventory | undefined;
-                            await cursorEach<Inventory>(
-                                work.store('historyInventory').index('access'),
-                                [accountId],
-                                (inventory) => {
-                                    if (protectedIds.has(inventory.threadId))
-                                        return;
-                                    victim = inventory;
-                                    return false;
-                                },
-                            );
-                            if (!victim) break;
-                            // Fetch one descriptor at a time; no whole-history message array.
-                            while (true) {
-                                let page: PersistedResource | undefined;
-                                await cursorEach<Row<PersistedResource>>(
-                                    work.store('resources').index('history'),
-                                    [accountId, victim.threadId],
-                                    (row) => {
-                                        page = row.value;
-                                        return false;
-                                    },
-                                );
-                                if (!page) break;
-                                await work.remove(page);
-                            }
-                            await cursorEach<Order>(
-                                work.store('historyOrder').index('thread'),
-                                [accountId, victim.threadId],
-                                (_order, cursor) => {
-                                    cursor.delete();
-                                },
-                            );
-                            await work.retirePrevious(victim.threadId);
-                            work.store('historyInventory').delete([
-                                accountId,
-                                victim.threadId,
-                            ]);
-                            deletedHistoryIds.push(victim.threadId);
-                        }
-                    }
-
-                    await work.prune(candidates);
-                    const nextRevision =
-                        revision(await get(work.store('meta'), 'revision')) + 1;
-                    work.store('meta').put(nextRevision, 'revision');
-                    return {
-                        ...(await work.read(update.returnKeys ?? ['*'])),
-                        deletedHistoryIds,
-                    };
+                    return commit(work, accountId, update);
                 },
             );
         },

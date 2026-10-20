@@ -1,6 +1,11 @@
 # Useful HAR request examples
 
-**Status: protocol reference, NOT current runtime capabilities.** The production closed provider exposes only reads defined by [the engine contract](engine-inbox-contract.md). Media, engagement, and mutations are references for future R2–R5, not implemented UI features.
+**Status: protocol reference, not blanket runtime capability evidence.** The
+[engine contract](engine-inbox-contract.md) now implements closed R2 send/reply,
+pin/unpin, and paired read methods plus worker-owned visible-interest polling.
+Fresh R2 live evidence is not yet recorded; [verification and user acceptance](r2-verification.md)
+remain pending. R3 interactions, R4 media/comments, and R5 passive Iris observation
+remain future scope. These references do not authorize UI-owned protocol adapters.
 
 Sanitized request extracts from tracked captures under `docs/examples`, including `examples/www.instagram.com.har` and `examples/www.instagram.com-the-second.har`. Other named captures below are local and untracked; only sanitized descriptions are recorded here. Auth/session fields are intentionally placeholders; replay requires current credentials from the live Instagram anchor tab.
 

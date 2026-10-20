@@ -1,9 +1,9 @@
 # Inbox and conversation engine contract
 
-**Status:** R1 read-only resource implementation. Read with the stable
+**Status:** R2 complete by user acceptance; automated checks pass. Read with the stable
 [application contract](application-architecture.md),
 [restoration checklist](solid-restoration-checklist.md), and
-[verification record](r1-verification.md). There is one worker authority and no
+[R2 verification record](r2-verification.md). There is one worker authority and no
 legacy UI adapter.
 
 The implementation is native to the exactly pinned Effect 4 beta
@@ -28,12 +28,18 @@ durable restart contract.
 ## Storage and projection
 
 `lib/engine/resources.ts` defines the shared normalized facts, resource states,
-errors, and repository contract. IndexedDB v4 preserves the v1/v2 inbox migration
+errors, and repository contract. IndexedDB v5 adds the operation store and preserves the v1/v2 inbox migration
 and adds indexed history inventory, incremental references, chronological order,
 physical page chunks, and one previous proven coverage per thread. Legacy
 truncated history coverage is invalidated without discarding the inbox or global
 revision. Resources own thread/user/message references and their current
 participant/latest-message dependencies.
+
+History headers do not own inbox pin metadata and cannot downgrade a newer
+inbox activity/preview. A read intent may target a proven seen history message
+even if a newer inbox message arrives before acceptance; only the seen watermark
+advances. Fresh matching canonical read state can settle a failed read without
+replaying it.
 
 Head and opaque-cursor page segments are durable resources. A transaction writes
 the affected segments/facts, removes explicitly evicted resources, prunes only
@@ -54,7 +60,7 @@ Synthetic message identities are scoped to their stable conversation, consistent
 inbox previews and history, and are never treated as provider IDs.
 
 Complete snapshots carry `entities`, an aggregate `inbox` resource, and bounded
-`histories` keyed by stable thread ID, plus account/worker epochs and revision.
+`histories` keyed by stable thread ID, bounded operations, plus account/worker epochs and revision.
 Each Port sees its inbox, selected detail, and at most two recently visited warm
 histories—not the entire retained database. Sequence numbers are contiguous for
 that Port, including after its selected interest changes. Gaps, worker restart,
@@ -66,13 +72,17 @@ The worker verifies `ds_user_id` before publishing persisted account data. The
 provider checks identity around token preparation and network reads; mailbox
 pagination identity is separately cached per account. History viewer identity
 is not the storage account: an older-page fallback does not replace the viewer
-established by initial detail. Cookie evidence cannot prove that every external
+established by initial detail. Read-receipt actor identity comes from the
+MAIN-world `PolarisViewer.data.fbid`, not a storage/profile ID or token segment.
+The versioned auth bridge replaces its previous listener on reinjection.
+Cookie evidence cannot prove that every external
 account switch is observable. Unknown-account offline reopening remains excluded.
 
-The production provider exposes only account, inbox/page, and history/older reads.
-The four captured read descriptors and their response parsing live under
-`lib/instagram-api`; future mutations and media capabilities remain documentation,
-not dormant handler implementations. Authentication requests a fresh MAIN-world
+The production closed provider exposes account, inbox/page, history/older reads,
+and R2 send/reply, pin/unpin, and paired read methods. Captured descriptors and
+strict receipt parsing live under `lib/instagram-api`; R3 interactions and R4
+media capabilities remain future scope. R2 acceptance and live diagnostic evidence
+are recorded separately from automated fixtures. Authentication requests a fresh MAIN-world
 probe for page-module tokens and reads cookies in the content script. It does not
 scan HTML or script payloads, substitute the storage account for the message
 viewer, or retain diagnostic token-source metadata.
@@ -109,14 +119,40 @@ controls whole-history inactive LRU eviction under soft account pressure, protec
 interested histories and two recent inactive histories. Inbox previews survive
 through independent references. Projection and DOM bounds remain independent.
 
+## Durable commands and synchronization
+
+IndexedDB v5 records immutable account-scoped intent before any dispatch. Identical
+operation redelivery deduplicates; conflicting payload reuse is rejected. Receipt,
+canonical facts, and operation settlement commit atomically. Per-target dispatch
+serialization and account/epoch guards remain worker-owned. Ordered overlays are
+replayed over canonical facts by the shared pure projector.
+
+Runtime/snapshot retention is bounded to 200 active commands and 200 settled send
+aliases. Immutable deduplication tombstones persist indefinitely: the persisted
+operation log does **not** have finite retention. This is a known storage-growth
+tradeoff, not a bounded-database claim. Browser quota/write failure rejects new
+acceptance before dispatch. No expiry or clear product policy has been invented.
+Retained send alias anchors resolve to canonical IDs in the worker.
+
+Queued, dispatching, succeeded, failed, outcome_unknown, and removed are durable
+operation statuses. Retry requires explicit safe eligibility; unknown sends are
+never blindly retried. Pins reconcile authoritative receipts and local acceptance
+order. Paired read marking coalesces watermarks and targets only the latest message
+actually seen; arrivals must not be implicitly marked read.
+
+The worker polls inbox/selected history for visible interested clients, stopping
+without those interests. The initial 5-second interval and capped 60-second
+backoff are configured targets, not production measurements. Refresh/Retry remain
+repair controls. No client polling or always-on alarm authority is introduced.
+
 ## Exclusions and evidence
 
-The R1 path is read-only. It provides no mutation/outbox, automatic read marking,
-polling, media player/comments, replay log, or offline account chooser. Small
-global settings will use one `storage.local` owner when a consuming feature ships.
-Media bytes and auth secrets are not persisted.
+Media player/comments, R3 reactions/edit/forward, R5 settings, a durable client-stream
+replay log, and an offline account chooser remain excluded. Media bytes and auth
+secrets are not persisted. Future small global settings have one `storage.local`
+owner when their consuming feature ships.
 
-Repository/engine tests use `fake-indexeddb` and controlled providers; browser
-fixtures exercise the built Solid page with a mocked Port. These are not live
-Instagram or installed-extension lifecycle evidence. The accepted R0/R1 stage
-and independent evidence limits are recorded in the verification record.
+Repository fixtures and mocked-Port browser tests are not live Instagram or
+installed-extension lifecycle evidence. R0–R2 are complete by user acceptance;
+R2 acceptance closes its testing gate without extending the agent's independent
+per-scenario measurements. See [R2 verification](r2-verification.md).

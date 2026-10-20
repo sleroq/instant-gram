@@ -200,7 +200,7 @@ test('migrates both v1 account partitions and preserves revision after reopen', 
     });
     const pruned = await repository.readResources('one', ['inbox:primary']);
     assert.equal(pruned.entities.threadsById['t-orphan'], undefined);
-    const database = await requestDone(factory.open(DB_NAME, 4));
+    const database = await requestDone(factory.open(DB_NAME, 5));
     const inspection = database.transaction(['threads'], 'readonly');
     const orphan = await requestDone(
         inspection.objectStore('threads').get(['one', 't-orphan']),
@@ -240,12 +240,12 @@ test('aborts malformed v1 migration without changing the v1 database', async () 
     database.close();
 });
 
-test('closes the v4 connection when a native v5 open requests a versionchange', async () => {
+test('closes the v5 connection when a native v6 open requests a versionchange', async () => {
     const factory = new IDBFactory();
     const repository = createInboxRepository(factory);
     await repository.readResources('one', ['inbox:primary']);
-    const upgraded = await requestDone(factory.open(DB_NAME, 5));
-    assert.equal(upgraded.version, 5);
+    const upgraded = await requestDone(factory.open(DB_NAME, 6));
+    assert.equal(upgraded.version, 6);
     upgraded.close();
     await repository.close();
 });
@@ -292,7 +292,7 @@ test('rejects dangling persisted references on read and commit', async () => {
             },
         }),
     );
-    const database = await requestDone(factory.open(DB_NAME, 4));
+    const database = await requestDone(factory.open(DB_NAME, 5));
     const transaction = database.transaction(['messages'], 'readwrite');
     transaction.objectStore('messages').delete(['one', 'm']);
     await new Promise<void>((resolve, reject) => {
@@ -319,7 +319,7 @@ test('rejects unknown or incomplete persisted message variants', async () => {
         ],
         entities: entities(facts),
     });
-    const database = await requestDone(factory.open(DB_NAME, 4));
+    const database = await requestDone(factory.open(DB_NAME, 5));
     const transaction = database.transaction(['messages'], 'readwrite');
     transaction.objectStore('messages').put({
         accountId: 'one',

@@ -104,8 +104,16 @@ test('auth ignores malformed, stale, and future probe events while awaiting its 
             '{',
             JSON.stringify({ ...valid, at: 'invalid' }),
             JSON.stringify({ ...valid, fbDtsg: 1 }),
-            JSON.stringify({ ...valid, fbDtsg: 'stale', at: valid.at - 60_001 }),
-            JSON.stringify({ ...valid, fbDtsg: 'future', at: valid.at + 60_000 }),
+            JSON.stringify({
+                ...valid,
+                fbDtsg: 'stale',
+                at: valid.at - 60_001,
+            }),
+            JSON.stringify({
+                ...valid,
+                fbDtsg: 'future',
+                at: valid.at + 60_000,
+            }),
         ]) {
             assert.doesNotThrow(() => fixture.emit(detail));
         }
@@ -195,4 +203,83 @@ test('MAIN-world probe responds on demand, uses page modules, and reuses its dev
     });
     assert.deepEqual(await harvestTokens(true), first);
     assert.equal(replies, 2);
+});
+
+test('MAIN-world probe prioritizes the captured Polaris read actor over account identities', async (t) => {
+    const fixture = authFixture(t);
+    Object.defineProperty(fixture.target, 'require', {
+        value(name: string) {
+            switch (name) {
+                case 'DTSGInitialData':
+                    return { token: 'abc:11111' };
+                case 'LSD':
+                    return { token: 'lsd-valid' };
+                case 'CurrentUserInitialData':
+                    return { USER_ID: '22222', ACCOUNT_ID: '33333' };
+                case 'PolarisViewer':
+                    return {
+                        id: '44444',
+                        data: { id: '55555', fbid: '67890' },
+                    };
+            }
+        },
+    });
+    startMainWorldAuthProbe();
+    const tokens = await harvestTokens(true);
+    assert.equal(tokens.viewerId, '67890');
+    assert.equal(currentInstagramAccountId(), '12345');
+});
+
+test('updated actor probe replaces an installed handler and ignores the legacy account-ID bridge', async (t) => {
+    const fixture = authFixture(t);
+    Object.defineProperty(fixture.target, 'require', {
+        value(name: string) {
+            if (name === 'DTSGInitialData') return { token: 'dtsg-valid' };
+            if (name === 'LSD') return { token: 'lsd-valid' };
+            if (name === 'PolarisViewer') return { data: { fbid: '67890' } };
+        },
+    });
+    let legacyRequests = 0;
+    let replacedRequests = 0;
+    fixture.target.addEventListener('icr:ig-auth-probe-request', () => {
+        legacyRequests++;
+    });
+    function outdated() {
+        replacedRequests++;
+    }
+    fixture.target.addEventListener(AUTH_PROBE_REQUEST_EVENT, outdated);
+    Object.assign(fixture.target, {
+        __instantGramAuthProbeStarted: true,
+        __instantGramAuthProbeCleanup: () =>
+            fixture.target.removeEventListener(
+                AUTH_PROBE_REQUEST_EVENT,
+                outdated,
+            ),
+    });
+
+    startMainWorldAuthProbe();
+    const tokens = await harvestTokens(true);
+    assert.equal(tokens.viewerId, '67890');
+    assert.equal(legacyRequests, 0);
+    assert.equal(replacedRequests, 0);
+});
+
+test('MAIN-world probe never substitutes account IDs or a token segment for a missing actor', async (t) => {
+    const fixture = authFixture(t);
+    Object.defineProperty(fixture.target, 'require', {
+        value(name: string) {
+            switch (name) {
+                case 'DTSGInitialData':
+                    return { token: 'abc:11111' };
+                case 'LSD':
+                    return { token: 'lsd-valid' };
+                case 'CurrentUserInitialData':
+                    return { USER_ID: '22222', ACCOUNT_ID: '33333' };
+                case 'PolarisViewer':
+                    return { id: '44444', data: { id: '55555' } };
+            }
+        },
+    });
+    startMainWorldAuthProbe();
+    await assert.rejects(harvestTokens(true), /auth tokens were not found/);
 });

@@ -1,4 +1,16 @@
-import { createEffect, createSignal, onCleanup, Show } from 'solid-js';
+import {
+    createEffect,
+    createSignal,
+    createStore,
+    onCleanup,
+    Show,
+    untrack,
+} from 'solid-js';
+import type {
+    MutationIntent,
+    OperationResult,
+} from '../../lib/engine/operations';
+import type { ThreadDraft } from './Composer';
 import { ConversationPane } from './ConversationPane';
 import { createInboxClient } from './client';
 import { InboxList } from './InboxList';
@@ -9,6 +21,39 @@ import type { ListAnchor } from './virtual-list';
 
 export default function App() {
     const client = createInboxClient();
+    const [drafts, setDrafts] = createStore<Record<string, ThreadDraft>>({});
+    const pendingDrafts = new Map<string, Promise<OperationResult>>();
+    function mutateWithDraftGuard(
+        intent: MutationIntent,
+    ): Promise<OperationResult> {
+        if (intent.type !== 'send') return client.mutate(intent);
+        const generation = navigationGeneration;
+        const accountId = client.state.accountId;
+        const accountEpoch = client.state.accountEpoch;
+        const version = drafts[intent.threadId]?.version ?? 0;
+        const key = `${accountId}:${accountEpoch}:${intent.threadId}:${version}`;
+        const pending = pendingDrafts.get(key);
+        if (pending) return pending;
+        const acceptance = client.mutate(intent);
+        pendingDrafts.set(key, acceptance);
+        void acceptance.then((result) =>
+            untrack(() => {
+                pendingDrafts.delete(key);
+                if (
+                    result.ok &&
+                    generation === navigationGeneration &&
+                    drafts[intent.threadId]?.version === version
+                )
+                    setDrafts((draft) => {
+                        draft[intent.threadId] = {
+                            text: '',
+                            version: version + 1,
+                        };
+                    });
+            }),
+        );
+        return acceptance;
+    }
     const route = createRouteController();
     const [compact, setCompact] = createSignal(window.innerWidth < 700);
     let listAnchor: ListAnchor | undefined;
@@ -57,6 +102,10 @@ export default function App() {
                         next.accountEpoch > 0 &&
                         next.identityError === 'auth'))
             ) {
+                setDrafts((draft) => {
+                    for (const id of Object.keys(draft)) delete draft[id];
+                });
+                pendingDrafts.clear();
                 navigationGeneration++;
                 setNavigationKey(navigationGeneration + 1);
                 route.inbox();
@@ -98,6 +147,16 @@ export default function App() {
         return (
             <ConversationPane
                 threadId={threadId}
+                draft={drafts[threadId] ?? { text: '', version: 0 }}
+                updateDraft={(value) =>
+                    setDrafts((draft) => {
+                        draft[threadId] = value;
+                    })
+                }
+                mutate={mutateWithDraftGuard}
+                operations={client.state.operations ?? []}
+                onRetry={client.retryOperation}
+                onRemove={client.removeOperation}
                 facts={facts()}
                 history={client.state.histories[threadId]}
                 compact={compact()}

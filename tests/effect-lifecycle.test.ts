@@ -116,6 +116,7 @@ function controlledProvider(ids = ['a', 'b', 'c', 'd', 'e']) {
     const starts = new Map(ids.map((id) => [id, signal()]));
     const provider: InboxProviderEffects = {
         accept: () => undefined,
+        mutate: () => Effect.fail(new InboxError('invalid_request')),
         account: Effect.succeed('account'),
         inbox: () =>
             Effect.succeed({ items: ids.map(thread), hasNextPage: false }),
@@ -564,6 +565,7 @@ for (const outcome of ['switch', 'auth'] as const) {
         let renew = false;
         const provider: InboxProviderEffects = {
             accept: () => undefined,
+            mutate: () => Effect.fail(new InboxError('invalid_request')),
             account: Effect.suspend(() =>
                 renew
                     ? Effect.andThen(
@@ -699,6 +701,7 @@ test('interrupted identity waiters leave one scoped identity/bootstrap producer 
     let hydrations = 0;
     const provider: InboxProviderEffects = {
         accept: () => undefined,
+        mutate: () => Effect.fail(new InboxError('invalid_request')),
         account: Effect.andThen(
             Effect.sync(() => {
                 identityCalls++;

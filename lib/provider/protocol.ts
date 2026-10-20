@@ -1,8 +1,16 @@
+import type { MutationRequest, MutationReceipt } from '../engine/operations.ts';
 import type { Page, Thread, ThreadMessages } from '../domain.ts';
 import type { EngineError } from '../engine/inbox.ts';
 
 export const PROVIDER_PORT = 'icr:instagram-provider-v2';
 export type ProviderRequest =
+    | {
+          kind: 'request';
+          id: number;
+          method: 'mutate';
+          expectedAccountId: string;
+          request: MutationRequest;
+      }
     | { kind: 'request'; id: number; method: 'account' }
     | {
           kind: 'request';
@@ -20,6 +28,14 @@ export type ProviderRequest =
           cursor?: string;
       };
 export type ProviderResponse =
+    | {
+          kind: 'response';
+          id: number;
+          method: 'mutate';
+          result:
+              | { ok: true; value: MutationReceipt }
+              | { ok: false; error: EngineError };
+      }
     | {
           kind: 'response';
           id: number;

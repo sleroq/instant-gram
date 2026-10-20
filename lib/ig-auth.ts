@@ -22,15 +22,15 @@ type TokenModule = { token?: string };
 type IdentityModule = {
     viewer_fbid?: string;
     actorID?: string;
-    USER_ID?: string;
-    ACCOUNT_ID?: string;
 };
 type PageModules = {
     DTSGInitialData: TokenModule;
     LSD: TokenModule;
     LSDToken: TokenModule;
     CurrentUserInitialData: IdentityModule;
-    PolarisViewer: IdentityModule;
+    PolarisViewer: IdentityModule & {
+        data?: { fbid?: string; id?: string };
+    };
     Viewer: IdentityModule;
 };
 type PageRequire = <Name extends keyof PageModules>(
@@ -42,12 +42,12 @@ declare global {
         require?: PageRequire;
     }
     interface WindowEventMap {
-        'icr:ig-auth-probe': CustomEvent<string>;
+        [AUTH_PROBE_EVENT]: CustomEvent<string>;
     }
 }
 
-export const AUTH_PROBE_EVENT = 'icr:ig-auth-probe';
-export const AUTH_PROBE_REQUEST_EVENT = 'icr:ig-auth-probe-request';
+export const AUTH_PROBE_EVENT = 'icr:ig-auth-probe-v3';
+export const AUTH_PROBE_REQUEST_EVENT = 'icr:ig-auth-probe-request-v3';
 
 let tokenCache: { tokens: Tokens; at: number } | undefined;
 let pendingHarvest: Promise<Tokens> | undefined;
@@ -168,18 +168,15 @@ function moduleToken(
 }
 
 function moduleUserId(): string | undefined {
+    const actor = userId(requireModule('PolarisViewer')?.data?.fbid);
+    if (actor) return actor;
     for (const name of [
         'CurrentUserInitialData',
         'PolarisViewer',
         'Viewer',
     ] as const) {
         const value = requireModule(name);
-        for (const found of [
-            value?.viewer_fbid,
-            value?.actorID,
-            value?.USER_ID,
-            value?.ACCOUNT_ID,
-        ]) {
+        for (const found of [value?.viewer_fbid, value?.actorID]) {
             const id = userId(found);
             if (id) return id;
         }
@@ -201,7 +198,7 @@ function emitProbe() {
         fbDtsg,
         lsd: moduleToken('LSD') ?? moduleToken('LSDToken'),
         deviceId: deviceId(),
-        viewerId: moduleUserId() ?? userId(fbDtsg?.split(':')[1]),
+        viewerId: moduleUserId(),
         at: Date.now(),
     };
     window.dispatchEvent(
@@ -210,9 +207,12 @@ function emitProbe() {
 }
 
 export function startMainWorldAuthProbe() {
-    // SAFETY: This optional marker is owned exclusively by the MAIN-world probe.
-    const host = window as Window & { __instantGramAuthProbeStarted?: boolean };
-    if (host.__instantGramAuthProbeStarted) return;
-    host.__instantGramAuthProbeStarted = true;
+    // SAFETY: This cleanup slot is owned exclusively by the MAIN-world probe.
+    const host = window as Window & {
+        __instantGramAuthProbeCleanup?: () => void;
+    };
+    host.__instantGramAuthProbeCleanup?.();
     window.addEventListener(AUTH_PROBE_REQUEST_EVENT, emitProbe);
+    host.__instantGramAuthProbeCleanup = () =>
+        window.removeEventListener(AUTH_PROBE_REQUEST_EVENT, emitProbe);
 }

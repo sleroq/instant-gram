@@ -1,8 +1,9 @@
 # R1 restoration verification
 
 **Stage accepted:** the user confirms this stage works and manual testing passed.
-R0, R1, and complete-history retention are completed; R2 is unblocked and not yet
-started. This is user acceptance, not an additional agent-run test or new
+R0, R1, and complete-history retention were completed; R2 was unblocked and not yet
+started at this stage. Current local R2 implementation and pending verification
+are tracked separately in [R2 verification](r2-verification.md). This is user acceptance, not an additional agent-run test or new
 per-scenario measurement.
 
 ## Cleanup verification
@@ -91,5 +92,5 @@ production-code fixture evidence, not live-account measurement.
 Unknown-identity offline reopening remains excluded by the current contract.
 Future slices must keep fixture, installed/live, and user-acceptance evidence
 separate; measure input-to-visible timing with identity/cache readiness included,
-record unavailable scenarios, and run the checklist's quality gates. Mutations,
+record unavailable scenarios, and run the checklist's quality gates. At this historical stage, mutations,
 read marking, polling, media/player/comments, and settings remain future scope.

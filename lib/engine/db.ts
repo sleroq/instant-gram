@@ -1,3 +1,8 @@
+import type {
+    MutationCommand,
+    MutationRequest,
+    Operation,
+} from './operations.ts';
 import { Context, Effect, Layer } from 'effect';
 import { migrateHistoryStorage, storageRepository } from './history-storage.ts';
 import type { Message, User } from '../domain.ts';
@@ -253,6 +258,9 @@ function validThread(
         isFiniteNumber(value.lastActivityMs) &&
         typeof value.isUnread === 'boolean' &&
         typeof value.serverIsPin === 'boolean' &&
+        validOptionalNumber(value, 'pinOrder') &&
+        validOptionalNumber(value, 'readWatermarkMs') &&
+        validOptionalString(value, 'readWatermarkMessageId') &&
         isStringArray(value.userIds) &&
         (value.lastMessageId === undefined ||
             typeof value.lastMessageId === 'string')
@@ -491,7 +499,7 @@ async function migrateV1(
 
 function openDatabase(factory: IDBFactory): Promise<IDBDatabase> {
     return new Promise<IDBDatabase>((resolve, reject) => {
-        const request = factory.open(DB_NAME, 4);
+        const request = factory.open(DB_NAME, 5);
         request.onupgradeneeded = (event) => {
             const database = request.result;
             const transaction = request.transaction;
@@ -518,6 +526,18 @@ function openDatabase(factory: IDBFactory): Promise<IDBDatabase> {
                     resourcesStore = transaction.objectStore('resources');
                 }
 
+                if (event.oldVersion < 5) {
+                    const operations = database.createObjectStore(
+                        'operations',
+                        { keyPath: ['accountId', 'id'] },
+                    );
+                    operations.createIndex('accountId', 'accountId');
+                    operations.createIndex('visibility', [
+                        'accountId',
+                        'visibility',
+                        'acceptedRevision',
+                    ]);
+                }
                 if (event.oldVersion < 4) {
                     database.createObjectStore('historyPrevious', {
                         keyPath: ['accountId', 'threadId'],
@@ -666,6 +686,22 @@ export function createInboxRepository(
 }
 
 export interface InboxRepositoryEffects {
+    readonly acceptOperation: (
+        command: MutationCommand,
+        request: MutationRequest | undefined,
+        createdAt: number,
+    ) => Effect.Effect<{ operation: Operation; revision: number }, InboxError>;
+    readonly readOperations: (
+        accountId: string,
+    ) => Effect.Effect<
+        { operations: Operation[]; revision: number; entities: EntityFacts },
+        InboxError
+    >;
+    readonly updateOperation: (
+        accountId: string,
+        operation: Operation,
+        update?: ResourceCommit,
+    ) => Effect.Effect<RepositoryRead & { operation: Operation }, InboxError>;
     readonly readHistoryWindow: (
         accountId: string,
         threadId: string,
@@ -706,6 +742,23 @@ export function adaptInboxRepository(
     repository: InboxRepository,
 ): InboxRepositoryEffects {
     return {
+        acceptOperation: (command, request, createdAt) =>
+            Effect.tryPromise({
+                try: () =>
+                    repository.acceptOperation(command, request, createdAt),
+                catch: storageError,
+            }),
+        readOperations: (accountId) =>
+            Effect.tryPromise({
+                try: () => repository.readOperations(accountId),
+                catch: storageError,
+            }),
+        updateOperation: (accountId, operation, update) =>
+            Effect.tryPromise({
+                try: () =>
+                    repository.updateOperation(accountId, operation, update),
+                catch: storageError,
+            }),
         readHistoryWindow: (accountId, threadId, request) =>
             Effect.tryPromise({
                 try: () =>

@@ -1,9 +1,13 @@
 # Solid restoration checklist
 
-R0 and R1 are complete by user acceptance, including complete-history retention.
-**R2 is next and not yet started.** Checked items describe accepted capabilities;
-unchecked items remain future requirements. See the [frontend architecture](frontend-architecture.md),
-[engine contract](engine-inbox-contract.md), and [verification record](r1-verification.md)
+**R0, R1, and R2 are complete by user acceptance**, including complete-history
+retention and the read acknowledgement/sidebar refresh follow-up fixes. The user
+confirmed the corrected build works and closed testing-blocked R2 work.
+**R3 — Full message interactions is next**; R4 media/player is also unblocked by
+R2. Checked items record accepted capabilities; unchecked items remain future
+requirements. User acceptance does not imply additional agent-run live tests or
+new performance measurements. See the [frontend architecture](frontend-architecture.md),
+[engine contract](engine-inbox-contract.md), and [R2 verification record](r2-verification.md)
 for current ownership and evidence limits. Protocol types/parsers alone do not
 establish a runtime feature; optional scope is not a restoration commitment.
 
@@ -137,26 +141,30 @@ sender grouping remain correct across a prepend boundary.
 
 ## R2 — Durable core messaging
 
+R2 is complete by user acceptance following the manual-QA fixes. See
+[R2 verification](r2-verification.md) for independent evidence limits (not remaining
+acceptance blockers) and the indefinite dedup-tombstone storage tradeoff.
+
 ### Outbox and optimistic projection
 
 | Checklist                                     | Lowest owner / implementation                                                                                                                                                                                                                                                                       | Focused acceptance                                                                                                                                         |
 | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [ ] **R2.1 — Durable acceptance and dedup.**  | Engine transaction persists `(accountId, operationId, immutable payload)`, target, stage, attempts, and outcome before dispatch. Identical redelivery returns the same acceptance; the same ID with a different payload is rejected; distinct user commands remain distinct even when text matches. | Accepted commands survive restart. Storage-quota/write failure rejects acceptance and causes zero provider calls.                                          |
-| [ ] **R2.2 — Canonical facts plus overlays.** | One pure projector combines canonical server facts with ordered operation overlays. Matching receipts commit facts; failures roll back or retain a failed-send row per operation.                                                                                                                   | Worker and client use the same pure projector for speculation; an accepted revision replaces same-frame speculation without flicker or double application. |
-| [ ] **R2.3 — Target serialization.**          | Worker serializes commands per target and durably records attempts/unknown outcomes.                                                                                                                                                                                                                | Restart cannot concurrently dispatch the same target; retry eligibility requires explicit operation evidence, not an upstream exactly-once assumption.     |
-| [ ] **R2.4 — First commands.**                | Closed provider methods implement send/reply, pin/unpin, and paired read marking.                                                                                                                                                                                                                   | Every command has strict input/receipt validation and account/target checks.                                                                               |
+| [x] **R2.1 — Durable acceptance and dedup.**  | Engine transaction persists `(accountId, operationId, immutable payload)`, target, stage, attempts, and outcome before dispatch. Identical redelivery returns the same acceptance; the same ID with a different payload is rejected; distinct user commands remain distinct even when text matches. | Accepted commands survive restart. Storage-quota/write failure rejects acceptance and causes zero provider calls.                                          |
+| [x] **R2.2 — Canonical facts plus overlays.** | One pure projector combines canonical server facts with ordered operation overlays. Matching receipts commit facts; failures roll back or retain a failed-send row per operation.                                                                                                                   | Worker and client use the same pure projector for speculation; an accepted revision replaces same-frame speculation without flicker or double application. |
+| [x] **R2.3 — Target serialization.**          | Worker serializes commands per target and durably records attempts/unknown outcomes.                                                                                                                                                                                                                | Restart cannot concurrently dispatch the same target; retry eligibility requires explicit operation evidence, not an upstream exactly-once assumption.     |
+| [x] **R2.4 — First commands.**                | Closed provider methods implement send/reply, pin/unpin, and paired read marking.                                                                                                                                                                                                                   | Every command has strict input/receipt validation and account/target checks.                                                                               |
 
 ### Composer and send lifecycle
 
-- [ ] **R2.5 — Local composer state.** Keep per-window, per-thread draft,
-      reply/edit intent, focus, and validation in Solid; handle Enter, Shift+Enter,
+- [x] **R2.5 — Local composer state.** Keep per-window, per-thread draft,
+      reply intent (edit remains R3), focus, and validation in Solid; handle Enter, Shift+Enter,
       and IME composition correctly.
-- [ ] **R2.6 — Acceptance semantics.** Clear the submitted draft only when the
+- [x] **R2.6 — Acceptance semantics.** Clear the submitted draft only when the
       worker accepts the immutable operation; preserve it on rejection.
-- [ ] **R2.7 — Pending controls.** Show pending/failed messages with eligible
+- [x] **R2.7 — Pending controls.** Show pending/failed messages with eligible
       Retry and Remove. Alias local ID to server ID while preserving stable DOM
       identity.
-- [ ] **R2.8 — List effects.** Reconcile inbox snippet/order and either follow the
+- [x] **R2.8 — List effects.** Reconcile inbox snippet/order and either follow the
       bottom or preserve the current anchor according to pre-send position.
 
 Acceptance: restart and two-client tests show one durable operation, no duplicate
@@ -165,23 +173,22 @@ window.
 
 ### Pins, reads, and incoming repair
 
-- [ ] **R2.9 — Authoritative pins.** `PinThreadResult` returns `threadFbid` and
+- [x] **R2.9 — Authoritative pins.** `PinThreadResult` returns `threadFbid` and
       `isPinned`; validate that target/state against the command account and epoch.
       The worker derives and persists pin order from acceptance order—no upstream
       order field is implied. Never globally reassign pins during account switch. An old
       storage-pin migration is needed only if reintroduced, and must be opt-in for a
       verified account; porting old settings is not required.
-- [ ] **R2.10 — Paired read mutations.** Target thread `igid`, latest message ID,
+- [x] **R2.10 — Paired read mutations.** Target thread `igid`, latest message ID,
       and timestamp together. Maintain a watermark, coalesce the same latest value,
       and prevent a newly arrived message from being rolled back to read.
-- [ ] **R2.11 — Interest-driven polling fallback.** The worker alone polls known
+- [x] **R2.11 — Interest-driven polling fallback.** The worker alone polls known
       inbox/detail queries for visible interested clients, stops with no interests,
-      and reconciles facts plus overlays without root reset. Choose and measure
-      active/backed-off timing.
+      and reconciles facts plus overlays without root reset. Configured initial 5s / capped 60s backoff; production timing measurement remains pending.
       Normal inbox and selected-thread freshness becomes automatic: refresh buttons
       are no longer the primary synchronization UX and remain only as an explicit
       repair/retry affordance when automatic synchronization is delayed or fails.
-- [ ] **R2.12 — No competing authority.** Do not add independent client polling
+- [x] **R2.12 — No competing authority.** Do not add independent client polling
       or always-on worker alarms.
 
 Acceptance: two clients plus worker restart converge on the same pin/read/message

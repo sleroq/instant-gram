@@ -165,6 +165,9 @@ test('content execution preserves the account identity boundary', async () => {
         let reads = 0;
         const response = await executeInboxProviderRequest(inboxRequest, {
             account,
+            mutate: async () => {
+                throw new Error('unused');
+            },
             prepare: async () => undefined,
             history: async () => ({
                 items: [],
@@ -186,12 +189,16 @@ test('content execution preserves the account identity boundary', async () => {
 
     for (const after of ['2', undefined]) {
         let checks = 0;
+
         const response = await executeInboxProviderRequest(inboxRequest, {
             account: () => {
                 checks++;
                 if (checks === 1) return '1';
                 if (after) return after;
                 throw new Error('gone');
+            },
+            mutate: async () => {
+                throw new Error('unused');
             },
             prepare: async () => undefined,
             history: async () => ({
@@ -211,10 +218,14 @@ test('content execution preserves the account identity boundary', async () => {
 test('content execution classifies failed reads and returns only parsed first-page data', async () => {
     for (const changed of [false, true]) {
         let checks = 0;
+
         const response = await executeInboxProviderRequest(
             { kind: 'request', id: 1, method: 'inbox', expectedAccountId: '1' },
             {
                 account: () => (++checks > 1 && changed ? '2' : '1'),
+                mutate: async () => {
+                    throw new Error('unused');
+                },
                 prepare: async () => undefined,
                 history: async () => ({
                     items: [],
@@ -231,11 +242,15 @@ test('content execution classifies failed reads and returns only parsed first-pa
             changed ? 'auth' : 'protocol',
         );
     }
+
     const page = { items: [], hasNextPage: false, cursor: 'next' };
     const response = await executeInboxProviderRequest(
         { kind: 'request', id: 2, method: 'inbox', expectedAccountId: '1' },
         {
             account: () => '1',
+            mutate: async () => {
+                throw new Error('unused');
+            },
             prepare: async () => undefined,
             history: async () => ({
                 items: [],
@@ -261,6 +276,9 @@ test('closed history and pagination requests verify account before reading', asy
         },
         {
             account: () => '2',
+            mutate: async () => {
+                throw new Error('unused');
+            },
             prepare: async () => undefined,
             inbox: async () => ({ items: [], hasNextPage: false }),
             history: async () => {

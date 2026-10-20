@@ -104,6 +104,9 @@ function content(message: Message) {
 
 export function MessageRow(props: {
     message: Message;
+    onReply(): void;
+    onRetry(operationId: string): void;
+    onRemove(operationId: string): void;
     user: User | undefined;
     outgoing: boolean;
     showSender: boolean;
@@ -140,6 +143,67 @@ export function MessageRow(props: {
                 <div class="solid-message__content">
                     {content(props.message)}
                 </div>
+                <Show
+                    when={
+                        !props.message.isSyntheticId &&
+                        (!props.message.delivery ||
+                            props.message.delivery.status === 'succeeded')
+                    }
+                >
+                    <button type="button" onClick={() => props.onReply()}>
+                        Reply
+                    </button>
+                </Show>
+                <Show
+                    when={
+                        props.message.delivery &&
+                        props.message.delivery.status !== 'succeeded'
+                            ? props.message.delivery
+                            : undefined
+                    }
+                >
+                    {(delivery) => (
+                        <div role="status">
+                            {delivery().status === 'outcome_unknown'
+                                ? 'Delivery unknown — check conversation before sending again.'
+                                : delivery().status}
+                            <Show when={delivery().error}>
+                                {delivery().error?.message}
+                            </Show>
+                            <Show
+                                when={
+                                    delivery().status === 'failed' &&
+                                    delivery().retryable
+                                }
+                            >
+                                <button
+                                    type="button"
+                                    onClick={() =>
+                                        props.onRetry(delivery().operationId)
+                                    }
+                                >
+                                    Retry send
+                                </button>
+                            </Show>
+                            <Show
+                                when={
+                                    delivery().status === 'failed' ||
+                                    delivery().status === 'outcome_unknown'
+                                }
+                            >
+                                <button
+                                    type="button"
+                                    title="Remove this local status only; this does not unsend on Instagram."
+                                    onClick={() =>
+                                        props.onRemove(delivery().operationId)
+                                    }
+                                >
+                                    Remove send
+                                </button>
+                            </Show>
+                        </div>
+                    )}
+                </Show>
                 <time
                     datetime={
                         Number.isFinite(props.message.ts) &&

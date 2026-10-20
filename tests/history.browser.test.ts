@@ -727,8 +727,14 @@ test(
     },
 );
 
-test('message variants remain accessible and do not create provider work', async () => {
+test('message variants remain accessible with capability-gated composer and no provider work', async () => {
     const page = await openHistory();
+    assert.equal(
+        await page
+            .getByRole('textbox', { name: 'Message', exact: true })
+            .count(),
+        0,
+    );
     await page.evaluate(() => {
         const next = structuredClone(window.historyTest.current);
         const base = next.entities.messagesById['message-80'];
@@ -736,6 +742,7 @@ test('message variants remain accessible and do not create provider work', async
             throw new Error('text fixture missing');
         const image =
             'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
+        next.entities.threadsById['thread-0'].threadFbid = 'fbid-0';
         next.entities.messagesById['message-80'] = {
             ...base,
             kind: 'image',
@@ -782,6 +789,7 @@ test('message variants remain accessible and do not create provider work', async
         window.historyTest.send(next, 2);
     });
 
+    await page.getByRole('textbox', { name: 'Message', exact: true }).waitFor();
     await page.getByText('Shared a reel').waitFor();
     await page.getByText('Shared post').waitFor();
     await page.getByText('Unavailable attachment').waitFor();
@@ -791,11 +799,21 @@ test('message variants remain accessible and do not create provider work', async
         await page.evaluate(
             () =>
                 window.historyTest.commands.filter(
-                    (command) => command.kind !== 'subscribe',
+                    (command) =>
+                        command.kind !== 'subscribe' &&
+                        command.kind !== 'visibility',
                 ).length,
         ),
         0,
     );
+    await page.evaluate(() => {
+        const next = structuredClone(window.historyTest.current);
+        delete next.histories['thread-0'].viewerId;
+        window.historyTest.send(next, 3);
+    });
+    await page
+        .getByRole('textbox', { name: 'Message', exact: true })
+        .waitFor({ state: 'detached' });
     await page.close();
 });
 

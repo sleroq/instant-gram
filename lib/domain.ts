@@ -29,6 +29,14 @@ export type MessageFallback = {
 
 type MessageMetadata = {
     id: string;
+    /** Stable local key aliases the provider ID after an accepted send. */
+    serverId?: string;
+    delivery?: {
+        operationId: string;
+        status: import('./engine/operations.ts').Operation['status'];
+        retryable: boolean;
+        error?: import('./engine/resources.ts').EngineError;
+    };
     /** True only when `id` was synthesized because Instagram returned no message ID. */
     isSyntheticId?: true;
     ts: number;

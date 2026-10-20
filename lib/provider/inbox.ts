@@ -1,3 +1,9 @@
+import type { MutationRequest, MutationReceipt } from '../engine/operations.ts';
+import {
+    MutationReceiptValue,
+    validateMutationRequest,
+    validateMutationReceipt,
+} from './mutations.ts';
 import { Context, Deferred, Effect, Exit, Layer, Schema } from 'effect';
 import type { Page, Thread, ThreadMessages } from '../domain.ts';
 import type { JsonValue } from '../json.ts';
@@ -34,6 +40,10 @@ export type ProviderResponseInput = JsonValue;
 
 export type InboxProviderError = InboxError;
 export interface InboxProviderEffects {
+    readonly mutate: (
+        expectedAccountId: string,
+        request: MutationRequest,
+    ) => Effect.Effect<MutationReceipt, InboxError>;
     readonly accept: (port: ProviderPort) => void;
     readonly account: Effect.Effect<string, InboxProviderError>;
     readonly inbox: (
@@ -54,7 +64,9 @@ export class InboxProviderService extends Context.Service<
 
 type Pending = {
     method: ProviderRequest['method'];
-    succeed(value: string | Page<Thread> | ThreadMessages): void;
+    succeed(
+        value: string | Page<Thread> | ThreadMessages | MutationReceipt,
+    ): void;
     fail(error: InboxProviderError): void;
 };
 type Connection = {
@@ -66,7 +78,7 @@ type Connection = {
 const ResponseHeader = Schema.Struct({
     kind: Schema.Literal('response'),
     id: Schema.Int,
-    method: Schema.Literals(['account', 'inbox', 'history']),
+    method: Schema.Literals(['account', 'inbox', 'history', 'mutate']),
     result: Schema.Unknown,
 });
 const ErrorResult = Schema.Struct({
@@ -79,6 +91,10 @@ const ErrorResult = Schema.Struct({
             'storage',
             'no_progress',
             'capacity',
+            'invalid_request',
+            'unknown_outcome',
+            'rate_limited',
+            'offline',
         ]),
         message: Schema.String,
     }),
@@ -249,6 +265,25 @@ function providerResponse(
     header: ResponseHeader,
 ): ProviderResponse | undefined {
     const failure = decode(ErrorResult, header.result);
+    if (header.method === 'mutate') {
+        const result =
+            failure ??
+            decode(
+                Schema.Struct({
+                    ok: Schema.Literal(true),
+                    value: MutationReceiptValue,
+                }),
+                header.result,
+            );
+        return (
+            result && {
+                kind: 'response',
+                id: header.id,
+                method: 'mutate',
+                result,
+            }
+        );
+    }
     if (failure) {
         if (header.method === 'account')
             return {
@@ -362,7 +397,11 @@ export function makeInboxProvider(options: {
     function retire(connection: Connection) {
         connection.removeListeners();
         for (const pending of connection.pending.values())
-            pending.fail(unavailable());
+            pending.fail(
+                pending.method === 'mutate'
+                    ? new InboxError('unknown_outcome')
+                    : unavailable(),
+            );
         connection.pending.clear();
     }
 
@@ -409,7 +448,13 @@ export function makeInboxProvider(options: {
             connection.pending.delete(header.id);
             const response = providerResponse(header);
             if (!response) {
-                pending.fail(new InboxError('protocol'));
+                pending.fail(
+                    new InboxError(
+                        pending.method === 'mutate'
+                            ? 'unknown_outcome'
+                            : 'protocol',
+                    ),
+                );
                 return;
             }
             if (response.result.ok) pending.succeed(response.result.value);
@@ -484,13 +529,24 @@ export function makeInboxProvider(options: {
                 connected.port.postMessage(request);
             } catch {
                 connected.pending.delete(request.id);
-                resume(Effect.fail(unavailable()));
+                resume(
+                    Effect.fail(
+                        request.method === 'mutate'
+                            ? new InboxError('unknown_outcome')
+                            : unavailable(),
+                    ),
+                );
             }
             return Effect.sync(() => connected.pending.delete(request.id));
         }).pipe(
             Effect.timeoutOrElse({
                 duration: '15 seconds',
-                orElse: () => Effect.fail(unavailable()),
+                orElse: () =>
+                    Effect.fail(
+                        request.method === 'mutate'
+                            ? new InboxError('unknown_outcome')
+                            : unavailable(),
+                    ),
             }),
         );
     });
@@ -509,6 +565,24 @@ export function makeInboxProvider(options: {
             connections.clear();
         },
         accept,
+        mutate: (expectedAccountId, input) =>
+            Effect.gen(function* () {
+                const validated = yield* Effect.try({
+                    try: () => validateMutationRequest(input),
+                    catch: () => new InboxError('invalid_request'),
+                });
+                const receipt = yield* request<MutationReceipt>((id) => ({
+                    kind: 'request',
+                    id,
+                    method: 'mutate',
+                    expectedAccountId,
+                    request: validated,
+                }));
+                return yield* Effect.try({
+                    try: () => validateMutationReceipt(validated, receipt),
+                    catch: () => new InboxError('unknown_outcome'),
+                });
+            }),
         account: request<string>((id) => ({
             kind: 'request',
             id,

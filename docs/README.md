@@ -4,12 +4,13 @@
 
 - [Application architecture](application-architecture.md): stable ownership,
   identity, reads, commands, persistence, and bounded rendering.
-- [Frontend architecture](frontend-architecture.md): implemented read-only UI.
-- [Engine contract](engine-inbox-contract.md): implemented storage and read path.
+- [Frontend architecture](frontend-architecture.md): locally implemented R2 Messages UI.
+- [Engine contract](engine-inbox-contract.md): implemented storage, reads, outbox, and polling.
 - [Solid 2 guide](solid-2-guide.md): pinned runtime and authoring conventions.
-- [Roadmap](solid-restoration-checklist.md): accepted R0/R1 and future R2–R6 scope.
-- [Acceptance evidence](r1-verification.md): accepted stage and evidence limits,
-  not a guarantee about later builds.
+- [Roadmap](solid-restoration-checklist.md): accepted R0–R2 and future R3–R6 scope.
+- [R1 acceptance evidence](r1-verification.md): historical accepted stage.
+- [R2 verification](r2-verification.md): user acceptance, passing local checks,
+  known tradeoffs, and independent evidence limits.
 
 ## Future implementation references
 

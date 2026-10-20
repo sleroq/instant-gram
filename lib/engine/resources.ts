@@ -1,5 +1,10 @@
 import type { Message, Thread, User } from '../domain.ts';
 import { Schema } from 'effect';
+import type {
+    MutationCommand,
+    MutationRequest,
+    Operation,
+} from './operations.ts';
 
 export type InboxErrorKind =
     | 'auth'
@@ -7,7 +12,11 @@ export type InboxErrorKind =
     | 'protocol'
     | 'storage'
     | 'no_progress'
-    | 'capacity';
+    | 'capacity'
+    | 'invalid_request'
+    | 'unknown_outcome'
+    | 'rate_limited'
+    | 'offline';
 
 export type EngineError = { kind: InboxErrorKind; message: string };
 
@@ -18,6 +27,11 @@ const MESSAGES = {
     storage: 'Saved conversation data is unavailable.',
     no_progress: 'Instagram returned no older conversations or messages.',
     capacity: 'Conversation retention capacity has been reached.',
+    invalid_request: 'This action is no longer valid. Please try again.',
+    unknown_outcome:
+        'Instagram may have received this action. Refresh to check its current state.',
+    rate_limited: 'Instagram is limiting requests. Please try again later.',
+    offline: 'Instagram could not be reached.',
 } satisfies Record<InboxErrorKind, string>;
 
 export class InboxError extends Schema.TaggedError<InboxError>()('InboxError', {
@@ -28,6 +42,10 @@ export class InboxError extends Schema.TaggedError<InboxError>()('InboxError', {
         'storage',
         'no_progress',
         'capacity',
+        'invalid_request',
+        'unknown_outcome',
+        'rate_limited',
+        'offline',
     ]),
     message: Schema.String,
 }) {
@@ -40,6 +58,9 @@ export class InboxError extends Schema.TaggedError<InboxError>()('InboxError', {
 export type ThreadFact = Omit<Thread, 'users' | 'lastMessage'> & {
     userIds: string[];
     lastMessageId?: string;
+    pinOrder?: number;
+    readWatermarkMs?: number;
+    readWatermarkMessageId?: string;
 };
 
 export type EntityFacts = {
@@ -61,7 +82,7 @@ export type ResourceProjection = {
     failedOperation?: 'refresh' | 'continuation';
 };
 
-export const HISTORY_WINDOW_LIMIT = 400;
+export { HISTORY_WINDOW_LIMIT } from './projection-limits.ts';
 
 export type HistoryProjection = ResourceProjection & {
     threadId: string;
@@ -100,6 +121,7 @@ export type InboxProjection = {
     entities: EntityFacts;
     inbox: ResourceProjection;
     histories: Record<string, HistoryProjection>;
+    operations?: Operation[];
 };
 
 export type PersistedResource = ResourceProjection & {
@@ -134,6 +156,21 @@ export type ResourceCommit = {
 };
 
 export interface InboxRepository {
+    acceptOperation(
+        command: MutationCommand,
+        request: MutationRequest | undefined,
+        createdAt: number,
+    ): Promise<{ operation: Operation; revision: number }>;
+    readOperations(accountId: string): Promise<{
+        operations: Operation[];
+        revision: number;
+        entities: EntityFacts;
+    }>;
+    updateOperation(
+        accountId: string,
+        operation: Operation,
+        update?: ResourceCommit,
+    ): Promise<RepositoryRead & { operation: Operation }>;
     readResources(accountId: string, keys: string[]): Promise<RepositoryRead>;
     readHistoryWindow(
         accountId: string,

@@ -14,6 +14,15 @@ export function bindInboxEngine(
 ): InboxEngine {
     return {
         ...engine,
+        mutate: (command) => runPromise(engine.mutate(command)),
+        retryOperation: (accountId, accountEpoch, operationId) =>
+            runPromise(
+                engine.retryOperation(accountId, accountEpoch, operationId),
+            ),
+        removeOperation: (accountId, accountEpoch, operationId) =>
+            runPromise(
+                engine.removeOperation(accountId, accountEpoch, operationId),
+            ),
         refresh: () => runPromise(engine.refresh),
         loadMoreInbox: () => runPromise(engine.loadMoreInbox),
         refreshHistory: (id, listener, anchorId) =>

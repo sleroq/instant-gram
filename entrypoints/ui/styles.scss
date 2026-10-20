@@ -378,3 +378,29 @@ a:focus-visible {
         transition: none !important;
     }
 }
+
+.solid-composer {
+    padding: 12px;
+    border-top: 1px solid #34343b;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    label {
+        flex: 1;
+    }
+    textarea {
+        display: block;
+        width: 100%;
+        min-height: 48px;
+        resize: vertical;
+        color: inherit;
+        background: #202027;
+        border: 1px solid #555;
+        border-radius: 8px;
+        padding: 8px;
+    }
+    [role='status'],
+    [role='alert'] {
+        width: 100%;
+    }
+}
