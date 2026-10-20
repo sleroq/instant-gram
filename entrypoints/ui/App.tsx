@@ -3,6 +3,7 @@ import {
     createSignal,
     createStore,
     onCleanup,
+    onSettled,
     Show,
     untrack,
 } from 'solid-js';
@@ -18,8 +19,23 @@ import { createRouteController } from './route';
 import { Sidebar } from './Sidebar';
 import type { HistoryAnchor } from './history-window';
 import type { ListAnchor } from './virtual-list';
+import type { MotionPreferences } from '../../lib/preferences/motion';
+import { SettingsPage } from './SettingsPage';
 
-export default function App() {
+export default function App(props: { motion: MotionPreferences }) {
+    const [motionVersion, setMotionVersion] = createSignal(0);
+    const unsubscribeMotion = untrack(() =>
+        props.motion.subscribe(() => setMotionVersion((value) => value + 1)),
+    );
+    onCleanup(unsubscribeMotion);
+    const motion = () => {
+        motionVersion();
+        return {
+            preference: props.motion.preference(),
+            effective: props.motion.effective(),
+            error: props.motion.error(),
+        };
+    };
     const client = createInboxClient();
     const [drafts, setDrafts] = createStore<Record<string, ThreadDraft>>({});
     const pendingDrafts = new Map<string, Promise<OperationResult>>();
@@ -55,6 +71,22 @@ export default function App() {
         return acceptance;
     }
     const route = createRouteController();
+    let settingsFocus: string | undefined;
+    function openSettings(event: MouseEvent) {
+        const target = event.currentTarget;
+        if (
+            !(target instanceof HTMLAnchorElement) ||
+            event.button !== 0 ||
+            event.metaKey ||
+            event.ctrlKey ||
+            event.shiftKey ||
+            event.altKey
+        )
+            return;
+        event.preventDefault();
+        settingsFocus = target.dataset.settingsLink;
+        route.settings(settingsFocus || 'inbox');
+    }
     const [compact, setCompact] = createSignal(window.innerWidth < 700);
     let listAnchor: ListAnchor | undefined;
     const anchors: Record<string, HistoryAnchor | undefined> = {};
@@ -69,7 +101,23 @@ export default function App() {
     const [navigationKey, setNavigationKey] = createSignal(1);
     let lastAuthorizedAccountId: string | null = null;
 
-    const onResize = () => setCompact(window.innerWidth < 700);
+    function focusSettingsEntry(origin: string) {
+        const target =
+            document.querySelector<HTMLElement>(
+                `[data-settings-link="${origin}"]`,
+            ) || document.querySelector<HTMLElement>('[data-settings-link]');
+        target?.focus({ preventScroll: true });
+    }
+    const onResize = () => {
+        const focused = document.activeElement;
+        const origin =
+            focused instanceof HTMLElement
+                ? focused.dataset.settingsLink
+                : undefined;
+        setCompact(window.innerWidth < 700);
+        // A resize event can arrive just after Back restored the previous pane.
+        if (origin) queueMicrotask(() => focusSettingsEntry(origin));
+    };
     window.addEventListener('resize', onResize);
     onCleanup(() => window.removeEventListener('resize', onResize));
 
@@ -122,25 +170,30 @@ export default function App() {
     const facts = () => client.state.entities;
     const selected = () => route.route().threadId;
 
-    const list = () => (
-        <Show when={navigationKey()} keyed>
-            {(key) => (
-                <InboxList
-                    facts={facts()}
-                    resource={inbox()}
-                    selectedId={selected()}
-                    restore={listAnchor}
-                    onPosition={(anchor) => {
-                        if (key === navigationGeneration + 1)
-                            listAnchor = anchor;
-                    }}
-                    onSelect={(id) => route.open(id)}
-                    onRefresh={client.refresh}
-                    onLoadMore={client.loadMoreInbox}
-                />
-            )}
-        </Show>
-    );
+    const list = () => {
+        const restoreFocus = !settingsFocus;
+        return (
+            <Show when={navigationKey()} keyed>
+                {(key) => (
+                    <InboxList
+                        facts={facts()}
+                        resource={inbox()}
+                        selectedId={selected()}
+                        restore={listAnchor}
+                        restoreFocus={restoreFocus}
+                        onSettings={openSettings}
+                        onPosition={(anchor) => {
+                            if (key === navigationGeneration + 1)
+                                listAnchor = anchor;
+                        }}
+                        onSelect={(id) => route.open(id)}
+                        onRefresh={client.refresh}
+                        onLoadMore={client.loadMoreInbox}
+                    />
+                )}
+            </Show>
+        );
+    };
 
     const conversation = (threadId: string) => {
         const generation = navigationGeneration;
@@ -168,6 +221,7 @@ export default function App() {
                     }
                 }}
                 onBack={route.inbox}
+                onSettings={openSettings}
                 onRefresh={(anchorId) =>
                     client.refreshHistory(threadId, anchorId)
                 }
@@ -177,8 +231,14 @@ export default function App() {
         );
     };
 
-    return (
-        <main class="solid-app">
+    function Messages() {
+        onSettled(() => {
+            if (settingsFocus) {
+                focusSettingsEntry(settingsFocus);
+                settingsFocus = undefined;
+            }
+        });
+        return (
             <Show
                 when={compact()}
                 fallback={
@@ -195,6 +255,28 @@ export default function App() {
                 <Show when={selected()} fallback={list()} keyed>
                     {(id) => conversation(id)}
                 </Show>
+            </Show>
+        );
+    }
+
+    function Settings() {
+        // The history entry keeps this origin across repeated Back/Forward visits.
+        settingsFocus = route.settingsFocus() || 'inbox';
+        return (
+            <SettingsPage
+                preference={motion().preference}
+                effective={motion().effective}
+                error={motion().error}
+                onChange={props.motion.set}
+                onBack={route.backFromSettings}
+            />
+        );
+    }
+
+    return (
+        <main class="solid-app">
+            <Show when={route.route().settings} fallback={<Messages />}>
+                <Settings />
             </Show>
         </main>
     );

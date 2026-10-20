@@ -1,3 +1,4 @@
+import { installPreferenceStorage } from './preference-storage';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -63,6 +64,7 @@ async function openHistory(
     });
     page.setDefaultTimeout(5_000);
     page.setDefaultNavigationTimeout(5_000);
+    await installPreferenceStorage(page);
     await page.addInitScript((options) => {
         const ids = Array.from(
             { length: 120 },
@@ -238,6 +240,9 @@ async function openHistory(
         };
         Object.assign(globalThis, {
             chrome: {
+                get storage() {
+                    return window.preferenceTest.storage;
+                },
                 runtime: {
                     id: 'test',
                     lastError: undefined,
@@ -913,9 +918,13 @@ test('a direct compact route has a safe in-app Back destination', async () => {
     const page = await browser.newPage({
         viewport: { width: 600, height: 700 },
     });
+    await installPreferenceStorage(page);
     await page.addInitScript(() => {
         Object.assign(globalThis, {
             chrome: {
+                get storage() {
+                    return window.preferenceTest.storage;
+                },
                 runtime: {
                     id: 'test',
                     lastError: undefined,
@@ -1335,5 +1344,138 @@ test('a previous cached range preserves its boundary and only explicitly jumps t
     await page.locator('[data-message-id="thread-1-message"]').waitFor();
     assert.equal(await latest.count(), 0);
     assert.ok((await page.locator('[data-message-id]').count()) <= 80);
+    await page.close();
+});
+
+for (const width of [320, 390, 1100]) {
+    test(`settings preserve Messages drafts, logical anchors, focus and browser Back at ${width}px`, async () => {
+        const page = await openHistory(width);
+        await page.evaluate(() => {
+            const next = structuredClone(window.historyTest.current);
+            next.entities.threadsById['thread-0'].threadFbid = 'fbid-0';
+            window.historyTest.send(next, 2);
+        });
+        const viewport = page.locator('.solid-history__viewport');
+        const editor = page.getByRole('textbox', {
+            name: 'Message',
+            exact: true,
+        });
+        await editor.fill('draft kept across settings');
+        await viewport.evaluate((element) => {
+            element.scrollTop = element.scrollHeight / 2;
+            element.dispatchEvent(new Event('scroll'));
+        });
+        const anchor = await viewport.evaluate((element) => {
+            const boundary = element.getBoundingClientRect().top;
+            const row = [
+                ...element.querySelectorAll<HTMLElement>('[data-message-id]'),
+            ].find((item) => item.getBoundingClientRect().bottom > boundary)!;
+            return {
+                id: row.dataset.messageId!,
+                offset: row.getBoundingClientRect().top - boundary,
+            };
+        });
+        const settings = page.locator('[data-settings-link="conversation"]');
+        await settings.focus();
+        await page.keyboard.press('Enter');
+        await page
+            .getByRole('heading', { name: 'Settings', exact: true })
+            .waitFor();
+        assert.equal(
+            await page.evaluate(() => document.activeElement?.id),
+            'settings-title',
+        );
+        assert.equal(await page.locator('.solid-conversation').count(), 0);
+        await page
+            .getByRole('radio', { name: 'Reduced', exact: false })
+            .check();
+        await page.goBack();
+        await viewport.waitFor();
+        assert.equal(new URL(page.url()).hash, '#/thread/thread-0');
+        assert.equal(await editor.inputValue(), 'draft kept across settings');
+        await page.waitForFunction(
+            () =>
+                document.activeElement?.getAttribute('data-settings-link') ===
+                'conversation',
+        );
+        const after = await viewport.evaluate((element, id) => {
+            const row = element.querySelector<HTMLElement>(
+                `[data-message-id="${id}"]`,
+            )!;
+            return (
+                row.getBoundingClientRect().top -
+                element.getBoundingClientRect().top
+            );
+        }, anchor.id);
+        assert.ok(
+            Math.abs(after - anchor.offset) < 1,
+            `anchor moved by ${after - anchor.offset}px`,
+        );
+        assert.ok((await page.locator('[data-message-id]').count()) <= 80);
+        assert.ok((await page.locator('[data-thread-id]').count()) <= 31);
+        const overflow = await page.evaluate(
+            () => document.documentElement.scrollWidth > window.innerWidth,
+        );
+        assert.equal(overflow, false);
+        const title = await page
+            .getByRole('heading', { name: 'Cached conversation' })
+            .boundingBox();
+        assert.ok(
+            title && title.width >= 100,
+            'conversation title remains readable',
+        );
+        await page.goForward();
+        await page
+            .getByRole('heading', { name: 'Settings', exact: true })
+            .waitFor();
+        await page.getByRole('button', { name: 'Back to Messages' }).click();
+        await viewport.waitFor();
+        assert.equal(await editor.inputValue(), 'draft kept across settings');
+        await page.waitForFunction(
+            () =>
+                document.activeElement?.getAttribute('data-settings-link') ===
+                'conversation',
+        );
+        await page.close();
+    });
+}
+
+test('visiting settings from an older inbox position restores its exact pixels', async () => {
+    const page = await openHistory(390);
+    await page.getByRole('button', { name: 'Back', exact: true }).click();
+    const inbox = page.locator('.solid-inbox__viewport');
+    await inbox.evaluate((element) => {
+        element.scrollTop = 733;
+        element.dispatchEvent(new Event('scroll'));
+    });
+    await page.locator('[data-settings-link="inbox"]').click();
+    await page
+        .getByRole('heading', { name: 'Settings', exact: true })
+        .waitFor();
+    await page.goBack();
+    await inbox.waitFor();
+    await page.waitForFunction(
+        () =>
+            document.activeElement?.getAttribute('data-settings-link') ===
+            'inbox',
+    );
+    assert.equal(await inbox.evaluate((element) => element.scrollTop), 733);
+    await page.close();
+});
+
+test('settings focus returns to the visible entry point after a desktop-to-compact resize', async () => {
+    const page = await openHistory();
+    await page.locator('[data-settings-link="inbox"]').click();
+    await page
+        .getByRole('heading', { name: 'Settings', exact: true })
+        .waitFor();
+    await page.setViewportSize({ width: 320, height: 700 });
+    await page.goBack();
+    await page.locator('.solid-conversation').waitFor();
+    await page.waitForFunction(
+        () =>
+            document.activeElement?.getAttribute('data-settings-link') ===
+            'conversation',
+    );
     await page.close();
 });

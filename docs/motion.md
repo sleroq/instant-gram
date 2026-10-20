@@ -1,9 +1,21 @@
 # Motion requirements
 
-The shared motion preference and animation lifecycle remain planned.
-The [application contract](application-architecture.md) and
-[roadmap](roadmap.md) own delivery and state
-boundaries. The current UI honors system reduced-motion.
+The application shell owns one motion preference service in
+[`lib/preferences/motion.ts`](../lib/preferences/motion.ts), persisted as the
+validated `presentation.motion` value in `storage.local`. The Settings route
+(`#/settings`) exposes System (default), Reduced, and Full. System follows initial
+and live `prefers-reduced-motion` changes; storage events update other windows.
+The shell resolves the effective mode before mounting the UI and publishes it
+as `data-motion="reduced|full"` on the document root. CSS motion consumers use
+this effective mode, so an explicit Full choice overrides the OS preference.
+The same owner supplies reactive effective motion to future feature consumers.
+
+Preferences are global presentation choices, separate from account-partitioned
+Instagram facts and worker read/storage policy. No cache or loading policy is
+selected here. Unread-loading controls belong with the working `icr-sik0`
+capability; do not expose placeholders. Feature animations remain their own
+tasks, subject to the [application contract](application-architecture.md) and
+[roadmap](roadmap.md).
 
 ## Required behavior
 

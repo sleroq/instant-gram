@@ -1,3 +1,4 @@
+import { installPreferenceStorage } from './preference-storage';
 import assert from 'node:assert/strict';
 import { readdir, readFile } from 'node:fs/promises';
 import test from 'node:test';
@@ -37,7 +38,7 @@ test.before(async () => {
     const manifest = JSON.parse(
         await readFile(`${output}/manifest.json`, 'utf8'),
     );
-    assert.deepEqual(manifest.permissions, ['tabs', 'scripting']);
+    assert.deepEqual(manifest.permissions, ['tabs', 'scripting', 'storage']);
     assert.deepEqual(manifest.host_permissions, [
         'https://www.instagram.com/*',
     ]);
@@ -75,8 +76,14 @@ test.after(async () => {
     );
 });
 
-async function openInbox(): Promise<{ page: Page; errors: string[] }> {
+async function openInbox(
+    options: { motion?: unknown; reduce?: boolean; route?: string } = {},
+): Promise<{ page: Page; errors: string[] }> {
     const page = await browser.newPage();
+    await page.emulateMedia({
+        reducedMotion: options.reduce ? 'reduce' : 'no-preference',
+    });
+    await installPreferenceStorage(page, options.motion);
     await page.addInitScript(() => {
         const ids = Array.from(
             { length: 1_000 },
@@ -153,6 +160,9 @@ async function openInbox(): Promise<{ page: Page; errors: string[] }> {
 
         Object.assign(globalThis, {
             chrome: {
+                get storage() {
+                    return window.preferenceTest.storage;
+                },
                 runtime: {
                     id: 'test',
                     lastError: undefined,
@@ -229,9 +239,14 @@ async function openInbox(): Promise<{ page: Page; errors: string[] }> {
     });
     page.on('pageerror', (error) => errors.push(error.message));
 
-    await page.goto(`${baseUrl}/ui.html`);
-    await page.getByRole('heading', { name: 'Messages' }).waitFor();
-    await page.getByText('thread-0').waitFor();
+    await page.goto(`${baseUrl}/ui.html${options.route ?? ''}`);
+    await page
+        .getByRole('heading', {
+            name: options.route === '#/settings' ? 'Settings' : 'Messages',
+        })
+        .waitFor();
+    if (options.route !== '#/settings')
+        await page.getByText('thread-0').waitFor();
     return { page, errors };
 }
 
@@ -366,6 +381,143 @@ test('sequence gaps and worker disconnects replace exactly one port and reset ch
     );
     await page.waitForTimeout(50);
     assert.equal(await page.evaluate(() => window.solidTest.connections), 3);
+    assert.deepEqual(errors, []);
+    await page.close();
+});
+
+for (const sample of [
+    { motion: undefined, reduce: true, expected: 'reduced' },
+    { motion: 'invalid', reduce: false, expected: 'full' },
+    { motion: 'full', reduce: true, expected: 'full' },
+    { motion: 'reduced', reduce: false, expected: 'reduced' },
+]) {
+    test(`initial motion is resolved before surfaces mount: ${JSON.stringify(sample)}`, async () => {
+        const { page, errors } = await openInbox(sample);
+        assert.equal(
+            await page.evaluate(() => window.preferenceTest.firstMountMotion),
+            sample.expected,
+        );
+        assert.equal(
+            await page.locator('html').getAttribute('data-motion'),
+            sample.expected,
+        );
+        assert.deepEqual(errors, []);
+        await page.close();
+    });
+}
+
+test('settings controls use native keyboard access, persist changes, follow live OS/storage events, and gate decorative motion', async () => {
+    const { page, errors } = await openInbox({ reduce: true });
+    const link = page.getByRole('link', { name: 'Settings' });
+    await link.focus();
+    await page.keyboard.press('Enter');
+    await page
+        .getByRole('heading', { name: 'Settings', exact: true })
+        .waitFor();
+    assert.equal(
+        await page.evaluate(() => document.activeElement?.id),
+        'settings-title',
+    );
+    assert.equal(await page.getByRole('group', { name: 'Motion' }).count(), 1);
+    assert.equal(await page.getByRole('radio').count(), 3);
+    const system = page.getByRole('radio', { name: 'System', exact: false });
+    await system.focus();
+    await page.keyboard.press('ArrowDown');
+    await page.waitForFunction(
+        () => window.preferenceTest.values['presentation.motion'] === 'reduced',
+    );
+    assert.equal(
+        await page.evaluate(
+            () => (document.activeElement as HTMLInputElement)?.value,
+        ),
+        'reduced',
+    );
+    await page.keyboard.press('ArrowDown');
+    await page.waitForFunction(
+        () => window.preferenceTest.values['presentation.motion'] === 'full',
+    );
+    assert.equal(
+        await page.locator('html').getAttribute('data-motion'),
+        'full',
+    );
+    assert.equal(
+        await page.evaluate(
+            () => (document.activeElement as HTMLInputElement)?.value,
+        ),
+        'full',
+    );
+    await page.addStyleTag({
+        content:
+            '@keyframes fixture-spin { to { transform: rotate(360deg); } } .fixture-spin { animation: fixture-spin 1s linear infinite; transition: opacity 2s; }',
+    });
+    await page.evaluate(() => {
+        const spinner = document.createElement('span');
+        spinner.className = 'fixture-spin';
+        document.querySelector('.solid-settings')!.append(spinner);
+    });
+    const spinner = page.locator('.fixture-spin');
+    assert.equal(
+        await spinner.evaluate(
+            (element) => getComputedStyle(element).animationName,
+        ),
+        'fixture-spin',
+    );
+    await page.evaluate(() => window.preferenceTest.publish('reduced'));
+    await page.waitForFunction(
+        () => document.documentElement.dataset.motion === 'reduced',
+    );
+    assert.equal(
+        await spinner.evaluate(
+            (element) => getComputedStyle(element).animationName,
+        ),
+        'none',
+    );
+    assert.equal(
+        await spinner.evaluate(
+            (element) => getComputedStyle(element).transitionDuration,
+        ),
+        '0s',
+    );
+    await system.check();
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    await page.waitForFunction(
+        () => document.documentElement.dataset.motion === 'full',
+    );
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.waitForFunction(
+        () => document.documentElement.dataset.motion === 'reduced',
+    );
+    await page.evaluate(() => {
+        window.preferenceTest.fail = true;
+    });
+    await page.getByRole('radio', { name: 'Full', exact: false }).click();
+    await page
+        .getByRole('alert')
+        .filter({ hasText: 'Could not save' })
+        .waitFor();
+    assert.equal(await system.isChecked(), true);
+    assert.equal(
+        await page.locator('html').getAttribute('data-motion'),
+        'reduced',
+    );
+    await page.getByRole('button', { name: 'Back to Messages' }).click();
+    await link.waitFor();
+    assert.equal(await page.locator('.solid-settings').count(), 0);
+    await page.waitForFunction(
+        () =>
+            document.activeElement?.getAttribute('data-settings-link') ===
+            'inbox',
+    );
+    // The intentional failed save is handled in the UI, not as an uncaught error.
+    assert.deepEqual(errors, []);
+    await page.close();
+});
+
+test('a direct settings route provides a safe Messages destination', async () => {
+    const { page, errors } = await openInbox({ route: '#/settings' });
+    await page.getByRole('button', { name: 'Back to Messages' }).click();
+    await page.getByRole('heading', { name: 'Messages' }).waitFor();
+    assert.equal(new URL(page.url()).hash, '#/');
     assert.deepEqual(errors, []);
     await page.close();
 });

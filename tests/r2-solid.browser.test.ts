@@ -1,3 +1,4 @@
+import { installPreferenceStorage } from './preference-storage';
 import type { SnapshotMessage } from '../lib/engine/protocol';
 import type { InboxProjection } from '../lib/engine/inbox';
 import assert from 'node:assert/strict';
@@ -25,6 +26,7 @@ test('composer preserves newer drafts on acceptance and supports IME and replies
     const browser = await chromium.launch({ headless: true });
     try {
         const page = await browser.newPage();
+        await installPreferenceStorage(page);
         await page.addInitScript(() => {
             const commands: MutationCommand[] = [];
             type ServerMessage =
@@ -270,6 +272,9 @@ test('composer preserves newer drafts on acceptance and supports IME and replies
             });
             Object.assign(globalThis, {
                 chrome: {
+                    get storage() {
+                        return window.preferenceTest.storage;
+                    },
                     runtime: {
                         id: 'test',
                         connect: () => {

@@ -60,7 +60,7 @@ export default defineConfig({
     manifest: ({ command }) => ({
         name: command === 'serve' ? 'Instagram DM Client (Dev)' : undefined,
         key: command === 'serve' ? devKey : undefined,
-        permissions: ['tabs', 'scripting'],
+        permissions: ['tabs', 'scripting', 'storage'],
         host_permissions: ['https://www.instagram.com/*'],
         action: {
             default_title:

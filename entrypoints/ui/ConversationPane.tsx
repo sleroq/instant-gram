@@ -35,6 +35,7 @@ export function ConversationPane(props: {
     facts: EntityFacts;
     history: HistoryProjection | undefined;
     onBack(): void;
+    onSettings(event: MouseEvent): void;
     onRefresh(anchorId?: string): void;
     onLoadOlder(): void;
     onLoadNewer(): void;
@@ -425,6 +426,13 @@ export function ConversationPane(props: {
                         <p>Showing retained history</p>
                     </Show>
                 </div>
+                <a
+                    href="#/settings"
+                    data-settings-link="conversation"
+                    onClick={(event) => props.onSettings(event)}
+                >
+                    Settings
+                </a>
                 <button
                     type="button"
                     aria-pressed={

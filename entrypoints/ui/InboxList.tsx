@@ -53,6 +53,8 @@ export function InboxList(props: {
     onLoadMore(): void;
     restore?: ListAnchor;
     onPosition?(anchor: ListAnchor): void;
+    restoreFocus?: boolean;
+    onSettings(event: MouseEvent): void;
 }) {
     const [scrollTop, setScrollTop] = createSignal(0);
     const orderedIds = createMemo(() => {
@@ -116,13 +118,14 @@ export function InboxList(props: {
                 );
                 setScrollTop(element.scrollTop);
                 const focusId = restore.focusId || id;
-                queueMicrotask(() =>
-                    element
-                        .querySelector<HTMLButtonElement>(
-                            `[data-thread-id="${CSS.escape(focusId)}"]`,
-                        )
-                        ?.focus({ preventScroll: true }),
-                );
+                if (props.restoreFocus !== false)
+                    queueMicrotask(() =>
+                        element
+                            .querySelector<HTMLButtonElement>(
+                                `[data-thread-id="${CSS.escape(focusId)}"]`,
+                            )
+                            ?.focus({ preventScroll: true }),
+                    );
             });
         },
     );
@@ -134,6 +137,13 @@ export function InboxList(props: {
                     <p class="solid-inbox__eyebrow">Read-only inbox</p>
                     <h1>Messages</h1>
                 </div>
+                <a
+                    href="#/settings"
+                    data-settings-link="inbox"
+                    onClick={(event) => props.onSettings(event)}
+                >
+                    Settings
+                </a>
                 <button
                     type="button"
                     onClick={() => props.onRefresh()}

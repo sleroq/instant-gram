@@ -78,6 +78,9 @@ The MV3 worker is the server. Solid windows are disposable clients.
   31 fixed 72px inbox rows and 80 history rows.
 - Poll only while visible clients have interest. The worker owns synchronization.
 - Keep routes, drafts, focus, and scroll anchors local to each window.
+- The application shell alone owns small global presentation preferences in
+  `storage.local`; [motion](motion.md) is its first consumer. These preferences
+  never select worker cache, read, outbox, or account-partition policy.
 - Previews are not a player. Unread booleans/watermarks are not exact unread counts.
 
 See [roadmap](roadmap.md) for future capabilities and

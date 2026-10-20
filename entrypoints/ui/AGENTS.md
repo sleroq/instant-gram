@@ -8,7 +8,9 @@ Read [application architecture](../../docs/application-architecture.md) and the
 
 - `App.tsx` composes features and owns per-thread drafts, reply intent, and
   acceptance guards for this window. Clear these on identity reset.
-  `route.ts` owns `#/` and `#/thread/<stable-key>` browser history.
+  `route.ts` owns `#/`, `#/thread/<stable-key>`, and `#/settings` browser history.
+  The shell initializes the sole global motion owner in `lib/preferences/motion.ts`
+  before mounting App; Settings consumes it without a second persisted copy.
 - `client.ts` owns one Port, complete bounded projection reconciliation,
   epoch/sequence recovery, and closed command/read intents. Reconnect or gaps
   request snapshots; no UI-owned canonical cache, alias store, provider RPC,
