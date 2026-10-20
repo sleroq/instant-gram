@@ -346,8 +346,31 @@ test('composer preserves newer drafts on acceptance and supports IME and replies
             exact: true,
         });
         assert.equal(await editor.getAttribute('maxlength'), '1000');
+        await editor.fill('   ');
+        assert.equal(
+            await page
+                .getByRole('button', { name: 'Send', exact: true })
+                .isDisabled(),
+            true,
+        );
+        await editor.press('Enter');
+        assert.equal(await page.evaluate('window.r2.commands.length'), 0);
+        // Exercise submit validation for a restored over-limit draft, not typing past maxlength.
+        await editor.evaluate((element: HTMLTextAreaElement) => {
+            element.value = 'x'.repeat(1001);
+            element.dispatchEvent(new Event('input', { bubbles: true }));
+        });
+        await editor.press('Enter');
+        await page
+            .getByRole('alert')
+            .filter({ hasText: '1000 characters or fewer' })
+            .waitFor();
+        assert.equal(await page.evaluate('window.r2.commands.length'), 0);
+        assert.equal((await editor.inputValue()).length, 1001);
         await editor.fill('first');
+        await editor.press('End');
         await editor.press('Shift+Enter');
+        assert.equal(await editor.inputValue(), 'first\n');
         assert.equal(await page.evaluate('window.r2.commands.length'), 0);
         await editor.dispatchEvent('compositionstart');
         await editor.press('Enter');
@@ -375,6 +398,13 @@ test('composer preserves newer drafts on acceptance and supports IME and replies
                 .locator('[data-message-id^="operation:"]')
                 .getAttribute('data-message-id'),
             speculativeRow,
+        );
+        await page.getByRole('button', { name: 'Reply', exact: true }).click();
+        await page.getByRole('button', { name: 'Cancel reply' }).click();
+        assert.equal(await editor.inputValue(), 'newer');
+        assert.equal(
+            await page.getByRole('button', { name: 'Cancel reply' }).count(),
+            0,
         );
         await page.getByRole('button', { name: 'Reply', exact: true }).click();
         await page.getByRole('button', { name: 'Send', exact: true }).click();

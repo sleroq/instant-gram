@@ -6,6 +6,13 @@ import {
 
 export function createHistoryViewportController(onResize: () => void) {
     let viewport: HTMLDivElement | undefined;
+    let bottomClearance = 0;
+
+    function setBottomClearance(height: number) {
+        bottomClearance = height;
+        viewport?.style.setProperty('--composer-height', `${height}px`);
+        onResize();
+    }
     let observer: ResizeObserver | undefined;
     let mutations: MutationObserver | undefined;
 
@@ -26,6 +33,7 @@ export function createHistoryViewportController(onResize: () => void) {
         observer?.disconnect();
         mutations?.disconnect();
         viewport = element;
+        element.style.setProperty('--composer-height', `${bottomClearance}px`);
         observer = new ResizeObserver(onResize);
         mutations = new MutationObserver(observeRows);
         mutations.observe(element, { childList: true, subtree: true });
@@ -61,6 +69,7 @@ export function createHistoryViewportController(onResize: () => void) {
 
     return {
         attach,
+        setBottomClearance,
         capture,
         correct,
         element: () => (viewport?.isConnected ? viewport : undefined),
