@@ -594,19 +594,21 @@ export function ConversationPane(props: {
                                                 dateLabel(previous.ts)),
                                 );
                             };
-                            const groupStart = () => {
+                            const continuesSender = () => {
                                 const current = message();
                                 const previous = prior();
-                                return (
-                                    !current ||
-                                    !previous ||
-                                    !('senderId' in current) ||
-                                    !('senderId' in previous) ||
-                                    current.senderId !== previous.senderId ||
-                                    newDate() ||
-                                    current.ts - previous.ts > 5 * 60_000
+                                return Boolean(
+                                    current &&
+                                        previous &&
+                                        'senderId' in current &&
+                                        'senderId' in previous &&
+                                        current.senderId === previous.senderId,
                                 );
                             };
+                            const groupStart = () =>
+                                !continuesSender() ||
+                                newDate() ||
+                                message()!.ts - prior()!.ts > 5 * 60_000;
 
                             return (
                                 <>
@@ -648,7 +650,11 @@ export function ConversationPane(props: {
                                                 user={userFor(id)}
                                                 outgoing={outgoing(id)}
                                                 groupStart={groupStart()}
-                                                showAuthor={
+                                                senderRunStart={
+                                                    index() === 0 ||
+                                                    !continuesSender()
+                                                }
+                                                isGroup={
                                                     props.facts.threadsById[
                                                         props.threadId
                                                     ]?.isGroup ?? false

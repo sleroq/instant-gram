@@ -1,3 +1,4 @@
+import { sizeSenderAvatarRuns } from './history-avatars';
 import {
     captureHistoryAnchor,
     correctionForAnchor,
@@ -34,7 +35,10 @@ export function createHistoryViewportController(onResize: () => void) {
         mutations?.disconnect();
         viewport = element;
         element.style.setProperty('--composer-height', `${bottomClearance}px`);
-        observer = new ResizeObserver(onResize);
+        observer = new ResizeObserver(() => {
+            onResize();
+            sizeSenderAvatarRuns(element);
+        });
         mutations = new MutationObserver(observeRows);
         mutations.observe(element, { childList: true, subtree: true });
         observeRows();

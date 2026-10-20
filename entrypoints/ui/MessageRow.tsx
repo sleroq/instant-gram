@@ -110,11 +110,15 @@ export function MessageRow(props: {
     user: User | undefined;
     outgoing: boolean;
     groupStart: boolean;
-    showAuthor: boolean;
+    senderRunStart: boolean;
+    isGroup: boolean;
 }) {
     const reply = () => replyPreview(props.message);
     const showSender = () =>
-        props.groupStart && !props.outgoing && 'senderId' in props.message;
+        props.isGroup &&
+        props.groupStart &&
+        !props.outgoing &&
+        'senderId' in props.message;
     const author = () =>
         props.user?.fullName ||
         props.user?.username ||
@@ -126,21 +130,35 @@ export function MessageRow(props: {
                 'solid-message': true,
                 'solid-message--outgoing': props.outgoing,
                 'solid-message--group-start': props.groupStart,
+                'solid-message--incoming-group':
+                    props.isGroup && !props.outgoing,
             }}
             data-message-id={props.message.id}
+            data-sender-id={
+                'senderId' in props.message ? props.message.senderId : undefined
+            }
         >
-            <Show when={showSender()}>
-                <span class="solid-message__avatar" aria-hidden="true">
-                    <Show
-                        when={props.user?.picUrl}
-                        fallback={initials(props.user, 'Message')}
-                    >
-                        <img src={props.user?.picUrl || undefined} alt="" />
-                    </Show>
+            <Show
+                when={
+                    props.isGroup &&
+                    !props.outgoing &&
+                    props.senderRunStart &&
+                    'senderId' in props.message
+                }
+            >
+                <span class="solid-message__avatar-run" aria-hidden="true">
+                    <span class="solid-message__avatar">
+                        <Show
+                            when={props.user?.picUrl}
+                            fallback={initials(props.user, 'Message')}
+                        >
+                            <img src={props.user?.picUrl || undefined} alt="" />
+                        </Show>
+                    </span>
                 </span>
             </Show>
             <div class="solid-message__body">
-                <Show when={showSender() && props.showAuthor}>
+                <Show when={showSender()}>
                     <div class="solid-message__author">{author()}</div>
                 </Show>
                 <Show when={reply()}>

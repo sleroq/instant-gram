@@ -898,6 +898,45 @@ function messageRow(page: Page, id: string) {
 
 const authorName = 'Peer';
 
+test('direct chats omit redundant author labels while group chats identify senders', async () => {
+    const page = await openHistory();
+    await replaceMessages(page, [
+        {
+            id: 'chat-type-message',
+            ts: 1_700_000_000_000,
+            kind: 'text',
+            text: 'Message in either conversation type',
+            senderId: 'peer',
+        },
+    ]);
+    const row = messageRow(page, 'chat-type-message');
+    const node = await row.elementHandle();
+    await row.getByText(authorName, { exact: true }).waitFor();
+
+    await page.evaluate(() => {
+        const next = structuredClone(window.historyTest.current);
+        next.entities.threadsById['thread-0'].isGroup = false;
+        next.entities.threadsById['thread-0'].userIds = ['peer', 'viewer'];
+        window.historyTest.send(next, ++next.commitRevision);
+    });
+    await row
+        .getByText(authorName, { exact: true })
+        .waitFor({ state: 'detached' });
+    assert.equal(
+        await row
+            .getByText('Message in either conversation type', { exact: true })
+            .count(),
+        1,
+    );
+    assert.equal(await node!.evaluate((element) => element.isConnected), true);
+    await row.getByRole('button', { name: 'Reply', exact: true }).click();
+    await page
+        .getByRole('status')
+        .filter({ hasText: 'Replying to Message in either conversation type' })
+        .waitFor();
+    await page.close();
+});
+
 test('rolling five-minute groups identify authors across time, sender, day and system boundaries', async () => {
     const page = await openHistory();
     const start = await page.evaluate(() =>
@@ -1162,6 +1201,64 @@ test('author context uses the retained predecessor without fetching history at a
             ),
         ),
         false,
+    );
+    await page.close();
+});
+
+test('group history retains logical anchors and rows through content growth and local traversal', async () => {
+    const page = await openHistory(1100, { bounded: true });
+    await page.evaluate(() => {
+        const next = structuredClone(window.historyTest.current);
+        next.entities.threadsById['thread-0'].isGroup = true;
+        next.entities.threadsById['thread-0'].title = 'Group history';
+        window.historyTest.send(next, 2);
+    });
+    await page.getByRole('heading', { name: 'Group history' }).waitFor();
+    const viewport = page.getByLabel('Messages', { exact: true });
+    await viewport.evaluate((element) => {
+        element.scrollTop = element.scrollHeight / 2;
+        element.dispatchEvent(new Event('scroll'));
+    });
+    await layoutSettled(page);
+    const anchorId = (await visibleMessage(page))!;
+    const row = await messageRow(page, anchorId).elementHandle();
+
+    await page.evaluate((anchorId) => {
+        const next = structuredClone(window.historyTest.current);
+        const ids = next.histories['thread-0'].orderedIds;
+        const priorId = ids[ids.indexOf(anchorId) - 1];
+        next.entities.messagesById[priorId] = {
+            id: priorId,
+            senderId: 'peer',
+            kind: 'text',
+            text: 'Expanded retained message. '.repeat(100),
+            ts: next.entities.messagesById[priorId].ts,
+        };
+        window.historyTest.send(next, 3);
+    }, anchorId);
+    await page
+        .getByText('Expanded retained message.', { exact: false })
+        .waitFor({ state: 'attached' });
+    await layoutSettled(page);
+    assert.equal(await visibleMessage(page), anchorId);
+    await page.setViewportSize({ width: 900, height: 650 });
+    await layoutSettled(page);
+    assert.equal(await visibleMessage(page), anchorId);
+    assert.equal(await row!.evaluate((element) => element.isConnected), true);
+
+    const before = await page.evaluate(
+        () => window.historyTest.commands.length,
+    );
+    await viewport.evaluate((element) => {
+        element.scrollTop = 0;
+        element.dispatchEvent(new Event('scroll'));
+    });
+    await messageRow(page, 'message-1320').waitFor({ state: 'attached' });
+    assert.equal(await row!.evaluate((element) => element.isConnected), true);
+    assert.ok((await page.locator('[data-message-id]').count()) <= 80);
+    assert.equal(
+        await page.evaluate(() => window.historyTest.commands.length),
+        before,
     );
     await page.close();
 });

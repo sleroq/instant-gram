@@ -265,20 +265,28 @@ a:focus-visible {
     align-items: flex-end;
     max-width: 78%;
     margin: 2px 0 0;
-    padding-inline-start: 36px;
 }
 .solid-message--group-start {
     margin-top: 14px;
 }
+.solid-message--incoming-group {
+    padding-inline-start: 36px;
+}
 .solid-message--outgoing {
     margin-left: auto;
-    padding-inline-start: 0;
     justify-content: flex-end;
 }
-.solid-message__avatar {
+.solid-message__avatar-run {
     position: absolute;
     inset-inline-start: 0;
-    bottom: 0;
+    top: 0;
+    width: 28px;
+    height: var(--avatar-run-height, 100%);
+    pointer-events: none;
+}
+.solid-message__avatar {
+    position: sticky;
+    top: 0;
     width: 28px;
     height: 28px;
     font-size: 10px;
