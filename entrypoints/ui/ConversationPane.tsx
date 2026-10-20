@@ -23,6 +23,7 @@ import type {
     OperationResult,
 } from '../../lib/engine/operations';
 import { MessageRow, dateLabel } from './MessageRow';
+import { SyncOrb } from './SyncOrb';
 
 export function ConversationPane(props: {
     threadId: string;
@@ -417,14 +418,18 @@ export function ConversationPane(props: {
                         Back
                     </button>
                 </Show>
-                <div>
+                <div class="sync-heading">
                     <h2>
                         {props.facts.threadsById[props.threadId]?.title ||
                             'Conversation'}
                     </h2>
-                    <Show when={props.history?.freshness === 'stale'}>
-                        <p>Showing retained history</p>
-                    </Show>
+                    <SyncOrb
+                        scope="History"
+                        resource={props.history}
+                        newerCoverageAvailable={
+                            props.history?.newerCoverageAvailable
+                        }
+                    />
                 </div>
                 <button
                     type="button"

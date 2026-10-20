@@ -99,11 +99,96 @@ a:focus-visible {
     color: #f4f5f7;
     padding: 7px 10px;
 }
-.solid-inbox__status {
-    min-height: 20px;
-    margin: 10px 20px 6px;
-    color: #89919f;
+.sync-heading {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+.sync-orb {
+    position: relative;
+    display: inline-flex;
+    flex: 0 0 auto;
+    --sync-pending: #a7c6ff;
+    --sync-fresh: #a3dfb5;
+    --sync-retained: #e3c484;
+    --sync-failed: #ffb6b5;
+    --sync-unavailable: #afb7c5;
+}
+button.sync-orb__target {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: inherit;
+}
+.sync-orb__mark {
+    display: grid;
+    place-items: center;
+    width: 18px;
+    height: 18px;
+    border: 1px solid currentcolor;
+    border-radius: 50%;
     font-size: 12px;
+    line-height: 1;
+    color: var(--sync-unavailable);
+    background: #20242b;
+
+    &[data-state='loading'],
+    &[data-state='refreshing'] {
+        color: var(--sync-pending);
+    }
+    &[data-state='fresh'] {
+        color: var(--sync-fresh);
+    }
+    &[data-state='retained'] {
+        color: var(--sync-retained);
+    }
+    &[data-state='failed'] {
+        color: var(--sync-failed);
+    }
+}
+:root[data-motion='on'] .sync-orb__mark {
+    &[data-state='loading'] {
+        animation: sync-breathe 1.6s ease-in-out infinite;
+    }
+    &[data-state='refreshing'] {
+        animation: sync-turn 2s linear infinite;
+    }
+}
+@keyframes sync-breathe {
+    50% {
+        opacity: 0.45;
+    }
+}
+@keyframes sync-turn {
+    to {
+        transform: rotate(360deg);
+    }
+}
+.sync-orb__description {
+    position: absolute;
+    z-index: 5;
+    inset-block-start: 100%;
+    inset-inline-start: 0;
+    width: min(260px, calc(100vw - 100px));
+    padding: 10px 12px;
+    border: 1px solid #414753;
+    border-radius: 8px;
+    background: #20242b;
+    color: #f4f5f7;
+    box-shadow: 0 6px 24px #0006;
+    font-size: 12px;
+    line-height: 1.5;
+
+    strong,
+    span {
+        display: block;
+    }
 }
 .solid-inbox__error {
     margin: 0 20px 8px;

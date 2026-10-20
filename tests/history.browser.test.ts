@@ -452,7 +452,7 @@ test('separator exposes keyboard resizing, focus and responsive accessibility bo
     await separator.press('Tab');
     assert.equal(
         await page
-            .getByRole('button', { name: 'Refresh history' })
+            .getByRole('button', { name: /^History sync:/ })
             .evaluate((element) => element === document.activeElement),
         true,
     );

@@ -8,6 +8,7 @@ import {
 } from 'solid-js';
 import type { EntityFacts, ResourceProjection } from '../../lib/engine/inbox';
 import { computeChatWindow, type ListAnchor } from './virtual-list';
+import { SyncOrb } from './SyncOrb';
 
 function preview(facts: EntityFacts, id: string) {
     const thread = facts.threadsById[id];
@@ -134,7 +135,10 @@ export function InboxList(props: {
             <div class="solid-inbox__list-heading">
                 <div>
                     <p class="solid-inbox__eyebrow">Read-only inbox</p>
-                    <h1>Messages</h1>
+                    <div class="sync-heading">
+                        <h1>Messages</h1>
+                        <SyncOrb scope="Inbox" resource={props.resource} />
+                    </div>
                 </div>
                 <button
                     type="button"
@@ -144,17 +148,6 @@ export function InboxList(props: {
                     Refresh
                 </button>
             </div>
-            <p class="solid-inbox__status" role="status">
-                {props.resource.availability === 'absent'
-                    ? props.resource.synchronization === 'refreshing'
-                        ? 'Checking Instagram…'
-                        : 'Inbox unavailable'
-                    : props.resource.synchronization === 'refreshing'
-                      ? 'Showing cached conversations · Refreshing…'
-                      : props.resource.freshness === 'stale'
-                        ? 'Showing cached conversations'
-                        : 'Up to date'}
-            </p>
             <Show when={props.resource.error}>
                 <p class="solid-inbox__error" role="alert">
                     {props.resource.error?.message}{' '}
