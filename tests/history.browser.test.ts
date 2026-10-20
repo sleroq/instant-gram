@@ -366,6 +366,283 @@ async function openHistory(
     return page;
 }
 
+test('separator exposes keyboard resizing, focus and responsive accessibility bounds', async () => {
+    const page = await openHistory();
+    const separator = page.getByRole('separator', {
+        name: 'Resize conversations',
+    });
+    async function value(name = 'aria-valuenow') {
+        return Number(await separator.getAttribute(name));
+    }
+    assert.equal(await separator.getAttribute('aria-orientation'), 'vertical');
+    await separator.focus();
+    const initial = await value();
+    await separator.press('ArrowRight');
+    assert.ok((await value()) > initial);
+    await separator.press('ArrowLeft');
+    assert.equal(await value(), initial);
+    await separator.press('Home');
+    assert.equal(await value(), await value('aria-valuemin'));
+    await separator.press('ArrowLeft');
+    assert.equal(await value(), await value('aria-valuemin'));
+    await separator.press('End');
+    assert.equal(await value(), await value('aria-valuemax'));
+    await separator.press('ArrowRight');
+    assert.equal(await value(), await value('aria-valuemax'));
+    assert.equal(
+        await separator.evaluate(
+            (element) => element === document.activeElement,
+        ),
+        true,
+    );
+    await separator.press('Tab');
+    assert.equal(
+        await page
+            .getByRole('button', { name: 'Refresh history' })
+            .evaluate((element) => element === document.activeElement),
+        true,
+    );
+    await page.keyboard.press('Shift+Tab');
+    assert.equal(
+        await separator.evaluate(
+            (element) => element === document.activeElement,
+        ),
+        true,
+    );
+
+    const wideMaximum = await value('aria-valuemax');
+    await page.setViewportSize({ width: 700, height: 700 });
+    await page.waitForFunction((maximum) => {
+        const element = document.querySelector('[role="separator"]')!;
+        return (
+            Number(element.getAttribute('aria-valuemax')) < maximum &&
+            element.getAttribute('aria-valuenow') ===
+                element.getAttribute('aria-valuemax')
+        );
+    }, wideMaximum);
+    assert.ok((await value()) >= (await value('aria-valuemin')));
+    await page.setViewportSize({ width: 600, height: 700 });
+    await separator.waitFor({ state: 'detached' });
+    await page.getByRole('button', { name: 'Back', exact: true }).click();
+    await page.waitForFunction(
+        () =>
+            document.activeElement?.getAttribute('data-thread-id') ===
+            'thread-0',
+    );
+    assert.ok((await page.locator('[data-thread-id]').count()) <= 31);
+    await page.close();
+});
+
+test('separator pointer capture ends on release, cancellation and owner disposal', async () => {
+    const page = await openHistory();
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    const separator = page.getByRole('separator', {
+        name: 'Resize conversations',
+    });
+    const listeners = await page.evaluateHandle(() => {
+        const active = new Map<
+            string,
+            Set<EventListenerOrEventListenerObject>
+        >();
+        const add = window.addEventListener.bind(window);
+        const remove = window.removeEventListener.bind(window);
+        window.addEventListener = (
+            type: string,
+            listener: EventListenerOrEventListenerObject,
+            options?: boolean | AddEventListenerOptions,
+        ) => {
+            if (
+                ['pointermove', 'pointerup', 'pointercancel'].includes(type) &&
+                listener
+            ) {
+                if (!active.has(type)) active.set(type, new Set());
+                active.get(type)!.add(listener);
+            }
+            add(type, listener, options);
+        };
+        window.removeEventListener = (
+            type: string,
+            listener: EventListenerOrEventListenerObject,
+            options?: boolean | EventListenerOptions,
+        ) => {
+            if (listener) active.get(type)?.delete(listener);
+            if (active.get(type)?.size === 0) active.delete(type);
+            remove(type, listener, options);
+        };
+        return active;
+    });
+    const pointer = await separator.evaluateHandle(
+        (element: HTMLButtonElement) => {
+            const state = { id: 0 };
+            element.addEventListener('pointerdown', (event) => {
+                state.id = event.pointerId;
+            });
+            return state;
+        },
+    );
+    function value() {
+        return separator.getAttribute('aria-valuenow');
+    }
+    async function start() {
+        const point = await separator.evaluate((element) => {
+            const rect = element.getBoundingClientRect();
+            return { x: rect.left + rect.width / 2, y: rect.top + 100 };
+        });
+        await page.mouse.move(point.x, point.y);
+        await page.mouse.down();
+        return point;
+    }
+    const before = Number(await value());
+    const point = await start();
+    await page.mouse.move(point.x + 60, point.y);
+    assert.ok(Number(await value()) > before);
+    assert.equal(
+        await separator.evaluate(
+            (element, state) => element.hasPointerCapture(state.id),
+            pointer,
+        ),
+        true,
+    );
+    const end = await listeners.evaluateHandle(
+        (active) => [...active.get('pointercancel')!][0],
+    );
+    async function assertDragEnded() {
+        assert.equal(
+            await listeners.evaluate((active) => active.has('pointermove')),
+            false,
+        );
+        assert.equal(
+            await listeners.evaluate((active) => active.has('pointercancel')),
+            false,
+        );
+        assert.equal(
+            await listeners.evaluate(
+                (active, end) => active.get('pointerup')?.has(end) ?? false,
+                end,
+            ),
+            false,
+        );
+    }
+    await page.mouse.up();
+    assert.equal(
+        await separator.evaluate(
+            (element, state) => element.hasPointerCapture(state.id),
+            pointer,
+        ),
+        false,
+    );
+    await assertDragEnded();
+    const released = await value();
+    await page.mouse.move(point.x + 100, point.y);
+    assert.equal(await value(), released);
+
+    await start();
+    await separator.dispatchEvent('pointercancel');
+    await assertDragEnded();
+    assert.equal(
+        await separator.evaluate(
+            (element, state) => element.hasPointerCapture(state.id),
+            pointer,
+        ),
+        false,
+    );
+    await page.mouse.move(point.x - 60, point.y);
+    assert.equal(await value(), released);
+    await page.mouse.up();
+
+    await start();
+    assert.equal(
+        await listeners.evaluate((active) => active.has('pointermove')),
+        true,
+    );
+    await page.setViewportSize({ width: 600, height: 700 });
+    await separator.waitFor({ state: 'detached' });
+    await assertDragEnded();
+    await page.mouse.move(300, 100);
+    await page.mouse.up();
+    await page.setViewportSize({ width: 1100, height: 700 });
+    await separator.waitFor();
+    const remounted = await value();
+    await page.mouse.move(500, 100);
+    assert.equal(await value(), remounted);
+    assert.deepEqual(errors, []);
+    await page.close();
+});
+
+test('resizing preserves logical history and inbox focus within mounted-row budgets', async () => {
+    const page = await openHistory();
+    const viewport = page.getByLabel('Messages', { exact: true });
+    await viewport.evaluate((element) => {
+        element.scrollTop = element.scrollHeight / 2;
+        element.dispatchEvent(new Event('scroll'));
+    });
+    function visibleMessage() {
+        return viewport.evaluate((element) => {
+            const top = element.getBoundingClientRect().top;
+            return [
+                ...element.querySelectorAll<HTMLElement>('[data-message-id]'),
+            ].find((row) => row.getBoundingClientRect().bottom > top)!.dataset
+                .messageId;
+        });
+    }
+    const anchorId = await visibleMessage();
+    const row = await page
+        .locator(`[data-message-id="${anchorId}"]`)
+        .elementHandle();
+
+    const inbox = page.getByLabel('Primary inbox', { exact: true });
+    await inbox.evaluate((element) => {
+        element.scrollTop = 72 * 40;
+        element.dispatchEvent(new Event('scroll'));
+    });
+    const thread = page.locator('[data-thread-id="thread-40"]');
+    await thread.focus();
+
+    const separator = page.getByRole('separator', {
+        name: 'Resize conversations',
+    });
+    await separator.focus();
+    await separator.press('ArrowRight');
+    assert.equal(
+        await separator.evaluate(
+            (element) => element === document.activeElement,
+        ),
+        true,
+    );
+    await thread.focus();
+    await page.setViewportSize({ width: 1000, height: 700 });
+    await page.evaluate(
+        () =>
+            new Promise<void>((resolve) =>
+                requestAnimationFrame(() => resolve()),
+            ),
+    );
+    assert.equal(await visibleMessage(), anchorId);
+    assert.equal(
+        await thread.evaluate((element) => element === document.activeElement),
+        true,
+    );
+    assert.equal(await row!.evaluate((element) => element.isConnected), true);
+    assert.ok((await page.locator('[data-thread-id]').count()) <= 31);
+    assert.ok((await page.locator('[data-message-id]').count()) <= 80);
+
+    const before = await page.evaluate(
+        () => window.historyTest.commands.length,
+    );
+    await viewport.evaluate((element) => {
+        element.scrollTop = 0;
+        element.dispatchEvent(new Event('scroll'));
+    });
+    await page.locator('[data-message-id="message-40"]').waitFor();
+    assert.ok((await page.locator('[data-message-id]').count()) <= 80);
+    assert.equal(
+        await page.evaluate(() => window.historyTest.commands.length),
+        before,
+    );
+    await page.close();
+});
+
 test('cached history stays bounded and local traversal sends no older request', async () => {
     const page = await openHistory();
     assert.ok((await page.locator('[data-message-id]').count()) <= 80);
