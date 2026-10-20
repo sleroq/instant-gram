@@ -384,23 +384,19 @@ a:focus-visible {
 .solid-composer {
     position: absolute;
     inset: auto 0 0;
-    display: flex;
-    align-items: flex-end;
-    gap: 10px;
     padding: 16px max(14px, calc((100% - 760px) / 2));
     padding-bottom: max(16px, env(safe-area-inset-bottom));
     pointer-events: none;
 
-    &__cloud,
-    &__send {
+    &__cloud {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: end;
         pointer-events: auto;
         border: 1px solid #414753;
         box-shadow: 0 6px 24px #0006;
-    }
-    &__cloud {
-        flex: 1;
         min-width: 0;
-        border-radius: 26px;
+        border-radius: 16px;
         background: #20242b;
         padding: 4px;
     }
@@ -417,7 +413,7 @@ a:focus-visible {
         color: inherit;
         background: transparent;
         border: 0;
-        border-radius: 22px;
+        border-radius: 12px;
         padding: 10px 14px;
 
         &:focus-visible {
@@ -426,6 +422,7 @@ a:focus-visible {
         }
     }
     &__reply {
+        grid-column: 1 / -1;
         display: flex;
         align-items: center;
         gap: 8px;
@@ -449,6 +446,7 @@ a:focus-visible {
         }
     }
     &__error {
+        grid-column: 1 / -1;
         margin: 0;
         padding: 4px 14px 10px;
         max-height: 20dvh;
@@ -460,10 +458,11 @@ a:focus-visible {
     &__send {
         display: grid;
         place-items: center;
-        flex: 0 0 52px;
-        width: 52px;
-        height: 52px;
-        border-radius: 50%;
+        width: 40px;
+        height: 40px;
+        margin: 1px;
+        border: 0;
+        border-radius: 12px;
         background: #31588f;
         color: #f4f5f7;
 
