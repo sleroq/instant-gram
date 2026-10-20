@@ -1,23 +1,25 @@
 import { createMemo, createSignal, onCleanup } from 'solid-js';
 import browser from 'webextension-polyfill';
 
-export type MotionPreference = 'system' | 'reduced' | 'full';
-export const MOTION_KEY = 'motion';
+const MOTION_KEY = 'motion';
 
-function validateMotion(value: unknown): MotionPreference {
-    return value === 'reduced' || value === 'full' ? value : 'system';
+function parseAnimations(value: unknown): boolean | undefined {
+    // Preserve saved choices from the former three-option control.
+    if (value === true || value === 'full') return true;
+    if (value === false || value === 'reduced') return false;
+    return undefined;
 }
 
 /** Small global presentation preferences, never account or worker policy. */
 export function createPreferences() {
     const media = window.matchMedia('(prefers-reduced-motion: reduce)');
-    const [motion, setMotion] = createSignal<MotionPreference>('system');
+    const [savedAnimations, setSavedAnimations] = createSignal<boolean>();
     const [osReduced, setOsReduced] = createSignal(media.matches);
     const [ready, setReady] = createSignal(false);
     const [error, setError] = createSignal('');
     const [pendingWrites, setPendingWrites] = createSignal(0);
-    const reduced = createMemo(() =>
-        motion() === 'system' ? osReduced() : motion() === 'reduced',
+    const animationsEnabled = createMemo(
+        () => savedAnimations() ?? !osReduced(),
     );
     let disposed = false;
     let changedDuringRead = false;
@@ -30,7 +32,7 @@ export function createPreferences() {
     ) {
         if (area !== 'local' || !(MOTION_KEY in changes)) return;
         changedDuringRead = true;
-        setMotion(validateMotion(changes[MOTION_KEY].newValue));
+        setSavedAnimations(parseAnimations(changes[MOTION_KEY].newValue));
     }
     media.addEventListener('change', onSystem);
     browser.storage.onChanged.addListener(onStorage);
@@ -38,12 +40,14 @@ export function createPreferences() {
         (stored) => {
             if (disposed) return;
             if (!changedDuringRead)
-                setMotion(validateMotion(stored[MOTION_KEY]));
+                setSavedAnimations(parseAnimations(stored[MOTION_KEY]));
             setReady(true);
         },
         () => {
             if (disposed) return;
-            setError('Could not load your motion preference. Using System.');
+            setError(
+                'Could not load your animation preference. Using your device’s setting.',
+            );
             setReady(true);
         },
     );
@@ -54,20 +58,19 @@ export function createPreferences() {
     });
 
     return {
-        motion,
-        reduced,
+        animationsEnabled,
         ready,
         error,
         saving: () => pendingWrites() > 0,
-        async chooseMotion(value: MotionPreference) {
+        async chooseAnimations(enabled: boolean) {
             setPendingWrites((count) => count + 1);
             setError('');
             try {
-                await browser.storage.local.set({ [MOTION_KEY]: value });
+                await browser.storage.local.set({ [MOTION_KEY]: enabled });
             } catch {
                 if (!disposed)
                     setError(
-                        'Could not save your motion preference. Try again.',
+                        'Could not save your animation preference. Try again.',
                     );
             } finally {
                 if (!disposed) setPendingWrites((count) => count - 1);

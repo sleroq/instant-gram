@@ -1,16 +1,19 @@
 import { createSignal, onCleanup } from 'solid-js';
 
-export type Route = { threadId?: string; settings?: true };
+export type AppTab = 'chats' | 'settings';
+type ChatsRoute = { tab: 'chats'; threadId?: string };
+export type Route = ChatsRoute | { tab: 'settings' };
 
 function readRoute(): Route {
     const hash = window.location.hash;
-    if (!hash || hash === '#/' || hash === '#') return {};
-    if (hash === '#/settings') return { settings: true };
+    if (hash === '#/settings') return { tab: 'settings' };
     const match = hash.match(/^#\/thread\/(.+)$/);
     try {
-        return match ? { threadId: decodeURIComponent(match[1]) } : {};
+        return match
+            ? { tab: 'chats', threadId: decodeURIComponent(match[1]) }
+            : { tab: 'chats' };
     } catch {
-        return {};
+        return { tab: 'chats' };
     }
 }
 
@@ -21,31 +24,34 @@ export function threadHash(threadId: string): string {
 export function createRouteController() {
     const initial = readRoute();
     const [route, setRoute] = createSignal<Route>(initial);
-    const [messages, setMessages] = createSignal<Route>(
-        initial.settings ? {} : initial,
+    const [chats, setChats] = createSignal<ChatsRoute>(
+        initial.tab === 'chats' ? initial : { tab: 'chats' },
     );
-
-    const [returningFromSettings, setReturningFromSettings] =
-        createSignal(false);
+    const [returningToChats, setReturningToChats] = createSignal(false);
 
     function apply(next: Route) {
         const current = route();
         if (
-            next.settings === current.settings &&
-            next.threadId === current.threadId
+            next.tab === current.tab &&
+            (next.tab === 'settings' || next.threadId === chats().threadId)
         )
             return;
-        setReturningFromSettings(Boolean(current.settings && !next.settings));
-        if (!next.settings && messages().threadId !== next.threadId)
-            setMessages(next);
+        setReturningToChats(current.tab === 'settings' && next.tab === 'chats');
+        if (next.tab === 'chats' && next.threadId !== chats().threadId)
+            setChats(next);
         setRoute(next);
     }
     function update() {
         apply(readRoute());
     }
-    function navigate(next: Route, hash: string) {
+    function navigate(next: Route) {
         apply(next);
-        window.location.hash = hash;
+        window.location.hash =
+            next.tab === 'settings'
+                ? '#/settings'
+                : next.threadId
+                  ? threadHash(next.threadId)
+                  : '#/';
     }
     window.addEventListener('hashchange', update);
     window.addEventListener('popstate', update);
@@ -56,19 +62,16 @@ export function createRouteController() {
 
     return {
         route,
-        messages,
-        returningFromSettings,
-        messagesHash: () => {
-            const id = messages().threadId;
-            return id ? threadHash(id) : '#/';
+        chats,
+        returningToChats,
+        selectTab(tab: AppTab) {
+            navigate(tab === 'settings' ? { tab } : chats());
         },
         open(threadId: string) {
-            if (route().threadId === threadId) return;
-            navigate({ threadId }, threadHash(threadId));
+            navigate({ tab: 'chats', threadId });
         },
         inbox() {
-            if (!route().threadId && !route().settings) return;
-            navigate({}, '#/');
+            navigate({ tab: 'chats' });
         },
     };
 }

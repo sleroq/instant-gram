@@ -13,26 +13,46 @@ updated_at: 2026-10-20T21:17:32Z
 parent: icr-i2ye
 ---
 
-Build a routed settings page with one shared presentation preference authority. Initial configuration is System (default), Reduced, or Full motion. Cache/loading controls stay absent until their policies and capabilities exist; no cache policy is selected here.
+Build Settings as a peer of Chats in the persistent application sidebar. The latest user-requested tab/On-Off design supersedes the initial three-option motion page and the intermediate Settings-only rail.
 
-- [x] Design and implement an accessible routed settings page/entry point in the sole Solid UI, preserving Messages route, draft, focus and logical scroll restoration on return. Do not add an empty navigation rail or unsupported switches.
-- [x] Own small global preferences in one storage.local service with validated defaults and cross-window updates. Resolve System/Reduced/Full animation mode before animated surfaces mount, follow live OS changes in System mode, and support immediate cleanup/focus restoration when effective motion is reduced.
-- [x] Decide concrete configuration during settings design (System by default, with Reduced and Full overrides); cache/loading choices are not a question the user must settle now. Initially expose functioning animation preferences. Connect unread loading to icr-sik0 (recent unread conversations, configurable lookback or authorized capped fallback) and expose each control only when its actual capability exists. Create concrete cache-policy work only if selected; icr-li1d is merged here, not a separate prerequisite.
-- [x] Separate global presentation choices from account-partitioned Instagram resources and worker read/storage policy. UI owns no alternate persistence authority for canonical facts, outbox or retry state.
-- [x] Cover persistence, validation, live cross-window/OS updates, routing/accessibility and motion gating; no new animation framework. Add storage permission only with the consuming implementation if needed.
+## Current acceptance
 
-- [x] Test behavior and accessible controls, navigation, drafts/acceptance, focus and restored logical message identity. No CSS, computed-style, animation, screenshot or pixel-design assertions. Review appearance manually under tests/AGENTS.md.
-- [x] Complete independent review and final verification before publishing the replacement PR.
+- [x] Provide Chats and Settings sidebar tabs, with Chats selected by default. Settings fills the remaining application area rather than opening a separate full-page destination.
+- [x] Keep direct `#/settings`, inbox and stable thread routes, browser Back/Forward, and the previous Chats selection when switching tabs. Support vertical-arrow/Home/End activation, selected state, named panels and logical focus.
+- [x] Preserve App-owned per-thread drafts, reply intent, accepted-version guards and IME; retain logical inbox/history positions and mounted-row bounds. Inactive feature content unmounts without delaying cleanup.
+- [x] Expose one compact Animations On/Off switch, with no Reduced or System control. Remove the introductory copy, footer, Back link and bordered Motion card.
+- [x] Own the validated boolean `motion` key in one small `storage.local` presentation service. Resolve initial preferences before surfaces render; synchronize windows and report storage failures honestly. Until the user makes a choice, use the initial/live device motion preference as the default. Read prior Full/Reduced saved choices as On/Off respectively.
+- [x] Keep preferences separate from canonical Instagram resources, worker persistence, outbox, retry, fetching, cache and retention policy. Add no fake loading controls, empty destinations or generic animation framework.
+- [x] Cover behavior/accessibility, navigation, persistence, OS/cross-window semantics, error handling and cleanup. Review appearance manually; no CSS/computed-style/screenshot/pixel-design assertions.
+- [x] Run fresh verification and a genuinely separate review. User reviewed the requested refinements and approved commit/push to the existing PR branch.
 
-This is the sole consuming owner for current polish and later R3/R4 surfaces; R5 must not implement a second settings system. Configuration details/defaults are decided during this task. The user has resolved unread preload scope and approved physical sidebar sliding; those are not outstanding design blockers. No cache policy change is implied by a settings-page request.
+## Ownership and deferred scope
 
-## Implementation and evidence
+`route.ts` owns application tabs, retained Chats selection and browser history.
+`AppNavigation.tsx` owns the persistent tabs and their keyboard/focus behavior.
+App retains draft/acceptance ownership and logical anchors; the existing Chats
+features retain virtualization and scroll ownership. Sidebar resizing uses its
+content container, so the navigation rail does not shift pointer coordinates or
+consume unaccounted width.
 
-- `preferences.ts` owns the validated global `storage.local` motion key, one live OS listener and one storage listener per shell. The shell waits for its initial read before rendering surfaces. Failed reads use System with an honest error; failed writes preserve the committed preference and radio selection. The storage permission is consumed by this implementation.
-- `#/settings` has native labelled radios, current effective mode, save feedback and a Messages return. Navigation retains the selected thread without resubscribing, App-owned drafts/accepted-version guards, and existing logical history/inbox anchors. Returning focus goes to the Settings entry point, not a competing inbox-restoration callback.
-- Behavior coverage: stored-value validation/removal, live System OS changes, explicit Full/Reduced, reload persistence, shared cross-window updates, initial-read/event ordering, read/write failure, keyboard focus, direct Settings/Back, compact/desktop logical reading restoration and draft acceptance while Settings is open. Resource bounds remain covered.
-- Manual appearance: inspected Chromium screenshots at 1200×850 and 390×844 in a safe mocked-Port/storage fixture; reviewed heading/description hierarchy, radio card states, text wrapping, visible focus, return link, footer and compact Messages entry point. No real Instagram account was touched. Screenshots are manual evidence only, not assertions or goldens.
-- Fresh verification uses Bun 1.4.3 (temporary binary because system Bun is 1.3.13), preserving the per-file `bun run test` script. After rebasing onto `origin/master` at `dbc9896`: 211 tests across 26 isolated files, zero failures. The history-browser conflict retains both upstream and Settings behavior coverage; production changes are unchanged apart from upstream context. Lint, typecheck, production build, git diff --check and beans check pass. Shared ast-grep scan completes with the single inapplicable parser finding explained below.
-- Independent reviewer (before the rebase): Pi/OpenAI Codex `gpt-6.1-sol`, high reasoning, agent `859128c6-ff96-41f0-8845-081c96e12de9`. No actionable findings; explicitly checked tests/AGENTS.md compliance and validated the external-parser scan explanation. Independently passed 31 browser tests, lint, typecheck, Beans and diff checks; did not claim to rerun the full suite or prove live extension behavior. Follow-up independently reran all 22 history browser cases, including both new inbox-restoration cases, and confirmed test-policy compliance with no new findings.
-- Shared scan: the remaining `unknown` parameter in `validateMotion` is the external-storage parser boundary itself. Narrowing it to a trusted preference before validation would discard the validation guarantee; this finding is inapplicable and is not suppressed.
-- Mocked browser evidence establishes UI and preference semantics, not installed-extension or live Instagram API behavior. Future animation consumers, unread loading and cache/retention policy remain out of scope.
+This remains the sole consuming global preference owner for polish and later
+R3/R4 surfaces. R5 must not add another settings system. Unread-loading
+configuration belongs with actual `icr-sik0` capability and prerequisites; no
+unsupported options are exposed here. No cache policy is selected; `icr-li1d`
+is merged here, not a separate prerequisite. No parent milestone is completed.
+
+## Current revision evidence
+
+- Bun 1.4.3, unchanged per-file `bun run test`: **216 tests across 26 isolated files**, zero failures. Lint, typecheck, production build, diff and Beans checks pass.
+- Shared ast-grep scan reports only `parseAnimations(value: unknown)`. This function is the external-storage parser itself; narrowing untrusted input before validation would defeat that boundary. The finding is inapplicable, independently reviewed, and not suppressed.
+- Independent reviewer: Pi/OpenAI Codex `gpt-6.1-sol`, high reasoning, agent `859128c6-ff96-41f0-8845-081c96e12de9`. No actionable findings in the current redesign, including untracked `AppNavigation.tsx`; explicitly verified behavior-only test policy. Independently passed 49 browser tests, lint/typecheck/diff/Beans checks and inspected the Settings screenshots. The full 216-test run is implementation-side evidence, not an independent full-suite claim.
+- Manually inspected safe mocked Messages/Settings fixtures at 1200×850, 390×844 and 320×720: persistent selected tabs, full content area, compact borderless settings, On/Off states, readable compact chat title/actions, and return to the selected conversation. No real Instagram account was touched. Screenshots are manual evidence, not asserted goldens.
+- Browser coverage includes tab mouse/keyboard activation and persistent navigation nodes, direct links and Back/Forward, Chats thread/draft/logical-anchor restoration, send acceptance while Settings is open, device defaults and saved overrides, legacy preference compatibility, reload and cross-window sync, validation, storage failure and initial-read/event ordering.
+- Evidence is mocked browser behavior, not installed-extension or live Instagram API verification. The user approved publishing the tab/On-Off and preceding rail refinements to the existing PR branch.
+
+## Delivery history
+
+Initial implementation was published as PR #8, superseding closed PR #4.
+It was rebased onto `origin/master` at `dbc9896` as `581bff1`; that historical
+revision passed 211 tests and CI. Its original System/Reduced/Full controls and
+later Settings-only rail are superseded by the current user-approved design.

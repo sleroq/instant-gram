@@ -8,7 +8,9 @@ Read [application architecture](../../docs/application-architecture.md) and the
 
 - `App.tsx` composes features and owns per-thread drafts, reply intent, and
   acceptance guards for this window. Clear these on identity reset.
-  `route.ts` owns `#/`, `#/thread/<stable-key>`, and `#/settings` browser history.
+  `route.ts` owns the Chats/Settings tabs, retained Chats selection, and
+  `#/`, `#/thread/<stable-key>`, and `#/settings` browser history.
+  `AppNavigation.tsx` owns the persistent sidebar tabs and their keyboard/focus behavior.
   `preferences.ts` owns validated global presentation preferences in storage.local,
   separate from account state. The shell gates surfaces on its initial read.
 - `client.ts` owns one Port, complete bounded projection reconciliation,
@@ -54,11 +56,12 @@ seeing, and arrivals do not advance the seen watermark automatically.
   Retry are domain intents; the worker selects opaque cursors.
 - Desktop uses inbox/conversation panes; compact screens mount the routed pane.
   Back restores inbox position and focus, not merely CSS visibility.
-- Honor effective reduced-motion from the shell's shared preference owner.
-  Do not animate layout, virtual-slot placement or anchor corrections. Approved `icr-f00w` may physically slide already-mounted
+- Honor Animations Off from the shell's shared preference owner; the unsaved
+  default follows the device's motion preference. Do not animate layout,
+  virtual-slot placement or anchor corrections. Approved `icr-f00w` may physically slide already-mounted
   sidebar conversations through a separate presentation transform during reorders;
   fixed 72px slots, the 31-row bound, stable keys and logical focus/anchors remain
-  unchanged. Reduced makes the reorder immediate. See [motion](../../docs/motion.md).
+  unchanged. Animations Off makes the reorder immediate. See [motion](../../docs/motion.md).
   Expose only currently implemented capabilities.
 
 Keep protocol knowledge outside components and source/styles/assets

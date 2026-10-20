@@ -185,93 +185,87 @@ async function publish(
     );
 }
 
-async function active(page: Page, mode: 'Reduced' | 'Full') {
+async function active(page: Page, enabled: boolean) {
     await page
-        .getByRole('status')
-        .filter({ hasText: `${mode} motion is active.` })
+        .getByRole('switch', { name: 'Animations', checked: enabled })
         .waitFor();
 }
 
-test('System follows initial and live OS changes; explicit modes persist and synchronize windows', async () => {
+test('device default follows live OS changes; On/Off persists and synchronizes windows', async () => {
     const { context, open } = await fixture();
     try {
         const first = await open();
         const second = await open();
-        assert.equal(
-            await first
-                .getByRole('radio', { name: 'System', exact: true })
-                .isChecked(),
-            true,
-        );
-        await active(first, 'Reduced');
+        await active(first, false);
         await first.emulateMedia({ reducedMotion: 'no-preference' });
-        await active(first, 'Full');
+        await active(first, true);
         await first.emulateMedia({ reducedMotion: 'reduce' });
-        await active(first, 'Reduced');
+        await active(first, false);
 
-        await first.getByRole('radio', { name: 'Full', exact: true }).check();
-        await active(first, 'Full');
-        await active(second, 'Full');
-        assert.equal(
-            await second
-                .getByRole('radio', { name: 'Full', exact: true })
-                .isChecked(),
-            true,
-        );
+        const toggle = first.getByRole('switch', { name: 'Animations' });
+        await toggle.click();
+        await active(first, true);
+        await active(second, true);
         await second.reload();
-        await active(second, 'Full');
+        await active(second, true);
         await second.emulateMedia({ reducedMotion: 'no-preference' });
-        await second
-            .getByRole('radio', { name: 'Reduced', exact: true })
-            .check();
-        await active(first, 'Reduced');
-        await active(second, 'Reduced');
+        const secondToggle = second.getByRole('switch', { name: 'Animations' });
+        await secondToggle.click();
+        await active(first, false);
+        await active(second, false);
 
-        // Native radios remain keyboard operable and keep focus after saving.
-        const reduced = second.getByRole('radio', {
-            name: 'Reduced',
-            exact: true,
-        });
-        await reduced.focus();
-        await reduced.press('ArrowLeft');
-        await active(second, 'Full');
-        await second.waitForFunction(
-            () => document.activeElement?.getAttribute('value') === 'system',
-        );
-        await active(first, 'Reduced');
-        await publish(context, 'full', 'sync');
+        await secondToggle.focus();
+        await secondToggle.press('Space');
+        await active(first, true);
+        await active(second, true);
         assert.equal(
-            await first
-                .getByRole('radio', { name: 'System', exact: true })
-                .isChecked(),
+            await secondToggle.evaluate(
+                (element) => element === document.activeElement,
+            ),
             true,
         );
+        await publish(context, false, 'sync');
+        await active(first, true);
+        await publish(context, undefined);
+        await active(first, false);
+        await active(second, true);
     } finally {
         await context.close();
     }
 });
 
 for (const value of ['unexpected', null, { mode: 'full' }]) {
-    test(`invalid stored preference defaults to System: ${JSON.stringify(value)}`, async () => {
+    test(`invalid stored preference uses device default: ${JSON.stringify(value)}`, async () => {
         const { context, open } = await fixture({ value });
         try {
             const page = await open();
-            await active(page, 'Reduced');
-            assert.equal(
-                await page
-                    .getByRole('radio', { name: 'System', exact: true })
-                    .isChecked(),
-                true,
-            );
-            await publish(context, 'full');
-            await active(page, 'Full');
+            await active(page, false);
+            await publish(context, true);
+            await active(page, true);
             await publish(context, undefined);
-            await active(page, 'Reduced');
-            assert.equal(
-                await page
-                    .getByRole('radio', { name: 'System', exact: true })
-                    .isChecked(),
-                true,
+            await active(page, false);
+        } finally {
+            await context.close();
+        }
+    });
+}
+
+for (const [value, enabled] of [
+    ['full', true],
+    ['reduced', false],
+    [true, true],
+    [false, false],
+] as const) {
+    test(`saved animation choice is recognized: ${value}`, async () => {
+        const { context, open } = await fixture({ value });
+        try {
+            const page = await open();
+            await active(page, enabled);
+            await page.getByRole('switch', { name: 'Animations' }).click();
+            await active(page, !enabled);
+            assert.deepEqual(
+                await page.evaluate(() => window.readPreference()),
+                { motion: !enabled },
             );
         } finally {
             await context.close();
@@ -281,49 +275,116 @@ for (const value of ['unexpected', null, { mode: 'full' }]) {
 
 test('preference resolution gates surfaces and newer storage events beat the initial read', async () => {
     const { context, open, releaseRead } = await fixture({
-        value: 'full',
+        value: true,
         holdRead: true,
     });
     try {
         const page = await open();
         await page.waitForFunction(() => window.preferenceTest.reads === 1);
-        assert.equal(await page.getByRole('heading').count(), 0);
-        assert.equal(await page.getByRole('radio').count(), 0);
-        await publish(context, 'reduced');
+        assert.equal(await page.getByRole('tab').count(), 0);
+        assert.equal(await page.getByRole('switch').count(), 0);
+        await publish(context, false);
         releaseRead();
-        await active(page, 'Reduced');
-        assert.equal(
-            await page
-                .getByRole('radio', { name: 'Reduced', exact: true })
-                .isChecked(),
-            true,
-        );
+        await active(page, false);
     } finally {
         releaseRead();
         await context.close();
     }
 });
 
-test('storage failures are honest and preserve the last preference', async () => {
+test('storage failures are honest and preserve the committed On/Off choice', async () => {
     const { context, open, failWrites } = await fixture({ failRead: true });
     try {
         const page = await open();
-        await active(page, 'Reduced');
+        await active(page, false);
         await page
             .getByRole('alert')
             .filter({ hasText: 'Could not load' })
             .waitFor();
         failWrites();
-        await page.getByRole('radio', { name: 'Full', exact: true }).click();
+        await page.getByRole('switch', { name: 'Animations' }).click();
         await page
             .getByRole('alert')
             .filter({ hasText: 'Could not save' })
             .waitFor();
-        await active(page, 'Reduced');
+        await active(page, false);
+    } finally {
+        await context.close();
+    }
+});
+
+test('Chats is the default tab and Settings uses the persistent keyboard-accessible sidebar', async () => {
+    const { context, open } = await fixture({ value: false });
+    try {
+        const page = await open('#/');
+        const chats = page.getByRole('tab', { name: 'Chats' });
+        const settings = page.getByRole('tab', {
+            name: 'Settings',
+            exact: true,
+        });
+        const settingsNode = await settings.elementHandle();
+        await page
+            .getByRole('tab', { name: 'Chats', selected: true })
+            .waitFor();
+        await page
+            .getByRole('tabpanel', { name: 'Chats', exact: true })
+            .waitFor();
+
+        await chats.focus();
+        await chats.press('ArrowDown');
+        await page
+            .getByRole('tab', { name: 'Settings', selected: true })
+            .waitFor();
+        await page
+            .getByRole('tabpanel', { name: 'Settings', exact: true })
+            .waitFor();
+        await active(page, false);
+        assert.equal(
+            await page.getByRole('region', { name: 'Primary inbox' }).count(),
+            0,
+        );
+        assert.equal(
+            await settingsNode!.evaluate(
+                (element) => element === document.activeElement,
+            ),
+            true,
+        );
+
+        await settings.press('Tab');
         assert.equal(
             await page
-                .getByRole('radio', { name: 'System', exact: true })
-                .isChecked(),
+                .getByRole('tabpanel', { name: 'Settings', exact: true })
+                .evaluate((element) => element === document.activeElement),
+            true,
+        );
+        await settings.focus();
+        await settings.press('Home');
+        await page
+            .getByRole('tabpanel', { name: 'Chats', exact: true })
+            .waitFor();
+        assert.equal(await page.getByRole('switch').count(), 0);
+        assert.equal(
+            await chats.evaluate(
+                (element) => element === document.activeElement,
+            ),
+            true,
+        );
+        await chats.press('End');
+        await active(page, false);
+
+        await page.goBack();
+        await page
+            .getByRole('tab', { name: 'Chats', selected: true })
+            .waitFor();
+        await page.goForward();
+        await page
+            .getByRole('tab', { name: 'Settings', selected: true })
+            .waitFor();
+        assert.equal(
+            await settingsNode!.evaluate(
+                (element) =>
+                    element === document.querySelector('#settings-tab'),
+            ),
             true,
         );
     } finally {
@@ -331,37 +392,25 @@ test('storage failures are honest and preserve the last preference', async () =>
     }
 });
 
-test('direct Settings route has an immediate accessible Messages return in Reduced mode', async () => {
-    const { context, open } = await fixture({ value: 'reduced' });
+test('direct Settings route returns to Chats through the sidebar without delayed cleanup', async () => {
+    const { context, open } = await fixture({ value: false });
     try {
         const page = await open();
-        await page.waitForFunction(
-            () => document.activeElement?.textContent === 'Settings',
-        );
-        await page.getByRole('link', { name: 'Back to Messages' }).click();
+        await page
+            .getByRole('tab', { name: 'Settings', selected: true })
+            .waitFor();
+        await active(page, false);
+        await page.getByRole('tab', { name: 'Chats' }).click();
         await page
             .getByRole('heading', { name: 'Messages', exact: true })
             .waitFor();
-        assert.equal(
-            await page.getByRole('group', { name: 'Motion' }).count(),
-            0,
-        );
-        await page.waitForFunction(
-            () => document.activeElement?.getAttribute('href') === '#/settings',
-        );
-        await page
-            .getByRole('link', { name: 'Settings', exact: true })
-            .press('Enter');
-        await page.getByRole('group', { name: 'Motion' }).waitFor();
+        assert.equal(await page.getByRole('switch').count(), 0);
+        await page.goBack();
+        await active(page, false);
         assert.equal(
             await page.getByRole('region', { name: 'Primary inbox' }).count(),
             0,
         );
-        await page.goBack();
-        await page
-            .getByRole('heading', { name: 'Messages', exact: true })
-            .waitFor();
-        assert.equal(await page.getByRole('radio').count(), 0);
     } finally {
         await context.close();
     }

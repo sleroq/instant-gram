@@ -157,10 +157,10 @@ async function openInbox(): Promise<{ page: Page; errors: string[] }> {
                     local: {
                         get: (
                             _key: string,
-                            callback: (value: { motion?: string }) => void,
+                            callback: (value: { motion?: boolean }) => void,
                         ) => callback({}),
                         set: (
-                            _value: { motion: string },
+                            _value: { motion: boolean },
                             callback: () => void,
                         ) => callback(),
                     },

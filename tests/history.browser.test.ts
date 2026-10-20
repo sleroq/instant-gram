@@ -283,10 +283,10 @@ async function openHistory(
                     local: {
                         get: (
                             _key: string,
-                            callback: (value: { motion?: string }) => void,
+                            callback: (value: { motion?: boolean }) => void,
                         ) => callback({}),
                         set: (
-                            _value: { motion: string },
+                            _value: { motion: boolean },
                             callback: () => void,
                         ) => callback(),
                     },
@@ -551,6 +551,9 @@ test('separator pointer capture ends on release, cancellation and owner disposal
     const point = await start();
     await page.mouse.move(point.x + 60, point.y);
     assert.ok(Number(await value()) > before);
+    await page.mouse.move(point.x, point.y);
+    assert.equal(Number(await value()), before);
+    await page.mouse.move(point.x + 60, point.y);
     assert.equal(
         await separator.evaluate(
             (element, state) => element.hasPointerCapture(state.id),
@@ -1308,7 +1311,7 @@ for (const width of [600, 1100]) {
         });
         await editor.fill('Keep this draft');
 
-        await page.getByRole('link', { name: 'Settings', exact: true }).click();
+        await page.getByRole('tab', { name: 'Settings', exact: true }).click();
         await page
             .getByRole('heading', { name: 'Settings', exact: true })
             .waitFor();
@@ -1321,9 +1324,15 @@ for (const width of [600, 1100]) {
             '#/thread/thread-0',
         );
         assert.equal(await visibleId(), id);
+        await page.getByRole('tab', { name: 'Settings', exact: true }).click();
+        await page.getByRole('switch', { name: 'Animations' }).waitFor();
+        await page.getByRole('tab', { name: 'Chats', exact: true }).click();
+        await editor.waitFor();
+        assert.equal(await editor.inputValue(), 'Keep this draft');
+        assert.equal(await visibleId(), id);
         assert.ok((await page.locator('[data-message-id]').count()) <= 80);
         await page.waitForFunction(
-            () => document.activeElement?.getAttribute('href') === '#/settings',
+            () => document.activeElement?.id === 'chats-tab',
         );
         await page.close();
     });
@@ -1355,7 +1364,7 @@ for (const width of [600, 1100]) {
         }
         const before = await visibleThread();
 
-        await page.getByRole('link', { name: 'Settings', exact: true }).click();
+        await page.getByRole('tab', { name: 'Settings', exact: true }).click();
         await page
             .getByRole('heading', { name: 'Settings', exact: true })
             .waitFor();
@@ -1364,7 +1373,7 @@ for (const width of [600, 1100]) {
         assert.equal(await visibleThread(), before);
         assert.ok((await page.locator('[data-thread-id]').count()) <= 31);
         await page.waitForFunction(
-            () => document.activeElement?.getAttribute('href') === '#/settings',
+            () => document.activeElement?.id === 'chats-tab',
         );
         await page.close();
     });
@@ -1753,10 +1762,10 @@ test('a direct compact route has a safe in-app Back destination', async () => {
                     local: {
                         get: (
                             _key: string,
-                            callback: (value: { motion?: string }) => void,
+                            callback: (value: { motion?: boolean }) => void,
                         ) => callback({}),
                         set: (
-                            _value: { motion: string },
+                            _value: { motion: boolean },
                             callback: () => void,
                         ) => callback(),
                     },

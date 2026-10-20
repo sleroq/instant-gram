@@ -16,6 +16,7 @@ import { createInboxClient } from './client';
 import { InboxList } from './InboxList';
 import { createRouteController } from './route';
 import { Sidebar } from './Sidebar';
+import { AppNavigation } from './AppNavigation';
 import { SettingsPage } from './SettingsPage';
 import { createPreferences } from './preferences';
 import type { HistoryAnchor } from './history-window';
@@ -25,11 +26,9 @@ export default function App() {
     const preferences = createPreferences();
     const client = createInboxClient();
     createEffect(
-        () => preferences.reduced(),
-        (reduced) => {
-            document.documentElement.dataset.motion = reduced
-                ? 'reduced'
-                : 'full';
+        () => preferences.animationsEnabled(),
+        (enabled) => {
+            document.documentElement.dataset.motion = enabled ? 'on' : 'off';
         },
     );
     onCleanup(() => {
@@ -88,7 +87,7 @@ export default function App() {
     onCleanup(() => window.removeEventListener('resize', onResize));
 
     createEffect(
-        () => route.messages().threadId,
+        () => route.chats().threadId,
         (threadId) =>
             client.select(
                 threadId,
@@ -134,17 +133,7 @@ export default function App() {
 
     const inbox = () => client.state.inbox;
     const facts = () => client.state.entities;
-    const selected = () => route.messages().threadId;
-    let settingsLink: HTMLAnchorElement | undefined;
-    createEffect(
-        () => Boolean(route.route().settings),
-        (settings, previous) => {
-            if (!settings && previous)
-                queueMicrotask(() =>
-                    settingsLink?.focus({ preventScroll: true }),
-                );
-        },
-    );
+    const selected = () => route.chats().threadId;
 
     const list = () => (
         <Show when={navigationKey()} keyed>
@@ -154,7 +143,7 @@ export default function App() {
                     resource={inbox()}
                     selectedId={selected()}
                     restore={listAnchor}
-                    restoreFocus={!route.returningFromSettings()}
+                    restoreFocus={!route.returningToChats()}
                     onPosition={(anchor) => {
                         if (key === navigationGeneration + 1)
                             listAnchor = anchor;
@@ -205,43 +194,56 @@ export default function App() {
     return (
         <main class="solid-app">
             <Show when={preferences.ready()}>
-                <Show
-                    when={route.route().settings}
-                    fallback={
-                        <div class="solid-messages">
-                            <nav class="solid-app-nav" aria-label="Application">
-                                <a
-                                    href="#/settings"
-                                    ref={(element) => (settingsLink = element)}
+                <div class="solid-shell">
+                    <AppNavigation
+                        active={route.route().tab}
+                        onSelect={route.selectTab}
+                    />
+                    <div class="solid-shell__content">
+                        <div
+                            role="tabpanel"
+                            id="chats-panel"
+                            aria-labelledby="chats-tab"
+                            tabindex={0}
+                            hidden={route.route().tab !== 'chats'}
+                        >
+                            <Show when={route.route().tab === 'chats'}>
+                                <Show
+                                    when={compact()}
+                                    fallback={
+                                        <Sidebar
+                                            inbox={list()}
+                                            conversation={
+                                                <Show when={selected()} keyed>
+                                                    {(id) => conversation(id)}
+                                                </Show>
+                                            }
+                                        />
+                                    }
                                 >
-                                    Settings
-                                </a>
-                            </nav>
-                            <Show
-                                when={compact()}
-                                fallback={
-                                    <Sidebar
-                                        inbox={list()}
-                                        conversation={
-                                            <Show when={selected()} keyed>
-                                                {(id) => conversation(id)}
-                                            </Show>
-                                        }
-                                    />
-                                }
-                            >
-                                <Show when={selected()} fallback={list()} keyed>
-                                    {(id) => conversation(id)}
+                                    <Show
+                                        when={selected()}
+                                        fallback={list()}
+                                        keyed
+                                    >
+                                        {(id) => conversation(id)}
+                                    </Show>
                                 </Show>
                             </Show>
                         </div>
-                    }
-                >
-                    <SettingsPage
-                        preferences={preferences}
-                        messagesHash={route.messagesHash()}
-                    />
-                </Show>
+                        <div
+                            role="tabpanel"
+                            id="settings-panel"
+                            aria-labelledby="settings-tab"
+                            tabindex={0}
+                            hidden={route.route().tab !== 'settings'}
+                        >
+                            <Show when={route.route().tab === 'settings'}>
+                                <SettingsPage preferences={preferences} />
+                            </Show>
+                        </div>
+                    </div>
+                </div>
             </Show>
         </main>
     );

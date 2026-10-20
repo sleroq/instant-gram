@@ -275,10 +275,10 @@ test('composer preserves newer drafts on acceptance and supports IME and replies
                         local: {
                             get: (
                                 _key: string,
-                                callback: (value: { motion?: string }) => void,
+                                callback: (value: { motion?: boolean }) => void,
                             ) => callback({}),
                             set: (
-                                _value: { motion: string },
+                                _value: { motion: boolean },
                                 callback: () => void,
                             ) => callback(),
                         },
@@ -405,7 +405,7 @@ test('composer preserves newer drafts on acceptance and supports IME and replies
             .locator('[data-message-id^="operation:"]')
             .getAttribute('data-message-id');
         await editor.fill('newer');
-        await page.getByRole('link', { name: 'Settings', exact: true }).click();
+        await page.getByRole('tab', { name: 'Settings', exact: true }).click();
         await page
             .getByRole('heading', { name: 'Settings', exact: true })
             .waitFor();
