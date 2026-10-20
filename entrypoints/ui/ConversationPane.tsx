@@ -594,16 +594,17 @@ export function ConversationPane(props: {
                                                 dateLabel(previous.ts)),
                                 );
                             };
-                            const showSender = () => {
+                            const groupStart = () => {
                                 const current = message();
                                 const previous = prior();
-                                return Boolean(
-                                    current &&
-                                        'senderId' in current &&
-                                        (!previous ||
-                                            !('senderId' in previous) ||
-                                            current.senderId !==
-                                                previous.senderId),
+                                return (
+                                    !current ||
+                                    !previous ||
+                                    !('senderId' in current) ||
+                                    !('senderId' in previous) ||
+                                    current.senderId !== previous.senderId ||
+                                    newDate() ||
+                                    current.ts - previous.ts > 5 * 60_000
                                 );
                             };
 
@@ -646,7 +647,12 @@ export function ConversationPane(props: {
                                                 }
                                                 user={userFor(id)}
                                                 outgoing={outgoing(id)}
-                                                showSender={showSender()}
+                                                groupStart={groupStart()}
+                                                showAuthor={
+                                                    props.facts.threadsById[
+                                                        props.threadId
+                                                    ]?.isGroup ?? false
+                                                }
                                             />
                                         )}
                                     </Show>

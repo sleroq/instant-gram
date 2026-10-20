@@ -109,19 +109,27 @@ export function MessageRow(props: {
     onRemove(operationId: string): void;
     user: User | undefined;
     outgoing: boolean;
-    showSender: boolean;
+    groupStart: boolean;
+    showAuthor: boolean;
 }) {
     const reply = () => replyPreview(props.message);
+    const showSender = () =>
+        props.groupStart && !props.outgoing && 'senderId' in props.message;
+    const author = () =>
+        props.user?.fullName ||
+        props.user?.username ||
+        ('senderId' in props.message ? props.message.senderId : '');
 
     return (
         <article
             class={{
                 'solid-message': true,
                 'solid-message--outgoing': props.outgoing,
+                'solid-message--group-start': props.groupStart,
             }}
             data-message-id={props.message.id}
         >
-            <Show when={props.showSender && !props.outgoing}>
+            <Show when={showSender()}>
                 <span class="solid-message__avatar" aria-hidden="true">
                     <Show
                         when={props.user?.picUrl}
@@ -132,6 +140,9 @@ export function MessageRow(props: {
                 </span>
             </Show>
             <div class="solid-message__body">
+                <Show when={showSender() && props.showAuthor}>
+                    <div class="solid-message__author">{author()}</div>
+                </Show>
                 <Show when={reply()}>
                     <div
                         class="solid-message__reply"

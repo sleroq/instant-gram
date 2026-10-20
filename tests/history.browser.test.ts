@@ -875,6 +875,297 @@ for (const width of [1100, 390]) {
     });
 }
 
+async function replaceMessages(page: Page, messages: Message[]) {
+    await page.evaluate((messages) => {
+        const next = structuredClone(window.historyTest.current);
+        next.entities.threadsById['thread-0'].isGroup = true;
+        next.entities.threadsById['thread-0'].threadFbid = 'fbid-group';
+        Object.assign(
+            next.entities.messagesById,
+            Object.fromEntries(
+                messages.map((message) => [message.id, message]),
+            ),
+        );
+        next.histories['thread-0'].orderedIds = messages.map(({ id }) => id);
+        window.historyTest.send(next, ++next.commitRevision);
+    }, messages);
+    await page.locator(`[data-message-id="${messages.at(-1)!.id}"]`).waitFor();
+}
+
+function messageRow(page: Page, id: string) {
+    return page.locator(`[data-message-id="${id}"]`);
+}
+
+const authorName = 'Peer';
+
+test('rolling five-minute groups identify authors across time, sender, day and system boundaries', async () => {
+    const page = await openHistory();
+    const start = await page.evaluate(() =>
+        new Date(2026, 9, 18, 23, 40).getTime(),
+    );
+    function text(id: string, minutes: number, senderId = 'peer'): Message {
+        return {
+            id,
+            ts: start + minutes * 60_000,
+            kind: 'text',
+            text: `Content for ${id}`,
+            senderId,
+        };
+    }
+    const messages: Message[] = [
+        text('first', 0),
+        text('exact-five', 5),
+        text('rolling-ten', 10),
+        { ...text('over-five', 15), ts: start + 15 * 60_000 + 1 },
+        text('different-sender', 16, 'other-participant'),
+        text('returning-sender', 17),
+        {
+            id: 'activity',
+            ts: start + 18 * 60_000,
+            kind: 'activity',
+            text: 'Someone joined',
+        },
+        text('after-activity', 18.5),
+        {
+            id: 'system',
+            ts: start + 19 * 60_000,
+            kind: 'reaction_log',
+            fragment: 'A reaction changed',
+        },
+        text('before-midnight', 19.5),
+        text('next-day', 20),
+        text('outgoing-first', 21, 'viewer'),
+        text('outgoing-second', 22, 'viewer'),
+        text('incoming-again', 23),
+    ];
+    await replaceMessages(page, messages);
+
+    assert.deepEqual(
+        await page
+            .locator('[data-message-id]')
+            .evaluateAll((rows) =>
+                rows.map((row) => row.getAttribute('data-message-id')),
+            ),
+        messages.map(({ id }) => id),
+    );
+    const authors = [
+        'first',
+        'over-five',
+        'returning-sender',
+        'after-activity',
+        'before-midnight',
+        'next-day',
+        'incoming-again',
+    ];
+    for (const message of messages) {
+        assert.equal(
+            await messageRow(page, message.id)
+                .getByText(authorName, { exact: true })
+                .count(),
+            authors.includes(message.id) ? 1 : 0,
+            `Author for ${message.id}`,
+        );
+        if (message.kind === 'text')
+            assert.equal(
+                await messageRow(page, message.id)
+                    .getByText(message.text, { exact: true })
+                    .count(),
+                1,
+            );
+    }
+    assert.equal(
+        await messageRow(page, 'different-sender')
+            .getByText('other-participant', { exact: true })
+            .count(),
+        1,
+    );
+    assert.equal(
+        await page.getByText('Someone joined', { exact: true }).count(),
+        1,
+    );
+    assert.equal(
+        await page.getByText('A reaction changed', { exact: true }).count(),
+        1,
+    );
+    assert.equal(
+        await page.getByLabel('Oct 19, 2026', { exact: true }).count(),
+        1,
+    );
+
+    await messageRow(page, 'exact-five')
+        .getByRole('button', { name: 'Reply', exact: true })
+        .click();
+    await page
+        .getByRole('status')
+        .filter({ hasText: 'Replying to Content for exact-five' })
+        .waitFor();
+    await page.getByRole('button', { name: 'Cancel reply' }).click();
+    await messageRow(page, 'rolling-ten')
+        .getByRole('button', { name: 'Reply', exact: true })
+        .click();
+    await page
+        .getByRole('status')
+        .filter({ hasText: 'Replying to Content for rolling-ten' })
+        .waitFor();
+    await page.close();
+});
+
+test('grouped text, share and settled send retain independent stable rows', async () => {
+    const page = await openHistory();
+    const ts = 1_700_000_000_000;
+    await replaceMessages(page, [
+        {
+            id: 'text-before-share',
+            ts,
+            kind: 'text',
+            text: 'A separate comment',
+            senderId: 'peer',
+        },
+        {
+            id: 'share',
+            ts: ts + 1_000,
+            kind: 'inline_share',
+            title: 'A separate shared post',
+            thumbUrl: '',
+            targetUrl: 'https://www.instagram.com/p/fixture/',
+            senderId: 'peer',
+        },
+        {
+            id: 'local:group-send',
+            ts: ts + 2_000,
+            kind: 'text',
+            text: 'Pending response',
+            senderId: 'viewer',
+            delivery: {
+                operationId: 'group-send',
+                status: 'dispatching',
+                retryable: false,
+            },
+        },
+    ]);
+
+    const pending = messageRow(page, 'local:group-send');
+    const node = await pending.elementHandle();
+    await pending
+        .getByRole('status')
+        .filter({ hasText: 'dispatching' })
+        .waitFor();
+
+    await page.evaluate(() => {
+        const next = structuredClone(window.historyTest.current);
+        const sent = next.entities.messagesById['local:group-send'];
+        sent.serverId = 'canonical-group-send';
+        sent.delivery!.status = 'succeeded';
+        window.historyTest.send(next, ++next.commitRevision);
+    });
+    await pending.getByRole('button', { name: 'Reply', exact: true }).waitFor();
+    assert.equal(
+        await node!.evaluate(
+            (element) =>
+                element ===
+                document.querySelector('[data-message-id="local:group-send"]'),
+        ),
+        true,
+    );
+    assert.equal(
+        await page.getByText('Pending response', { exact: true }).count(),
+        1,
+    );
+    assert.equal(
+        await page.getByText('A separate comment', { exact: true }).count(),
+        1,
+    );
+    assert.equal(
+        await page
+            .getByRole('link', { name: 'A separate shared post' })
+            .getAttribute('href'),
+        'https://www.instagram.com/p/fixture/',
+    );
+    assert.deepEqual(
+        await page
+            .locator('[data-message-id]')
+            .evaluateAll((rows) =>
+                rows.map((row) => row.getAttribute('data-message-id')),
+            ),
+        ['text-before-share', 'share', 'local:group-send'],
+    );
+    assert.equal(
+        await messageRow(page, 'text-before-share')
+            .getByRole('button', { name: 'Reply', exact: true })
+            .count(),
+        1,
+    );
+    assert.equal(
+        await messageRow(page, 'share')
+            .getByRole('button', { name: 'Reply', exact: true })
+            .count(),
+        1,
+    );
+    await page.close();
+});
+
+test('author context uses the retained predecessor without fetching history at a mounted boundary', async () => {
+    const page = await openHistory();
+    const messages: Message[] = Array.from({ length: 45 }, (_, index) => ({
+        id: `group-window-${index}`,
+        ts: 1_700_000_000_000 + index * 60_000 + (index >= 5 ? 5 * 60_000 : 0),
+        kind: 'text',
+        text: `Grouped message ${index}`,
+        senderId: 'peer',
+    }));
+    await replaceMessages(page, messages);
+
+    const head = messageRow(page, 'group-window-5');
+    await head
+        .getByText(authorName, { exact: true })
+        .waitFor({ state: 'attached' });
+    const node = await head.elementHandle();
+
+    await page.evaluate(() => {
+        const next = structuredClone(window.historyTest.current);
+        // A retained predecessor arrives with corrected time, on the five-minute boundary.
+        next.entities.messagesById['group-window-4'].ts += 60_000;
+        window.historyTest.send(next, ++next.commitRevision);
+    });
+    await head
+        .getByText(authorName, { exact: true })
+        .waitFor({ state: 'detached' });
+    assert.equal(
+        await node!.evaluate(
+            (element) =>
+                element ===
+                document.querySelector('[data-message-id="group-window-5"]'),
+        ),
+        true,
+    );
+
+    await page.getByLabel('Messages', { exact: true }).evaluate((element) => {
+        element.scrollTop = 0;
+        element.dispatchEvent(new Event('scroll'));
+    });
+    await messageRow(page, 'group-window-0')
+        .getByText(authorName, { exact: true })
+        .waitFor({ state: 'attached' });
+    assert.deepEqual(
+        await page
+            .locator('[data-message-id]')
+            .evaluateAll((rows) =>
+                rows.map((row) => row.getAttribute('data-message-id')),
+            ),
+        messages.map(({ id }) => id),
+    );
+    assert.ok((await page.locator('[data-message-id]').count()) <= 80);
+    assert.equal(
+        await page.evaluate(() =>
+            window.historyTest.commands.some((command) =>
+                command.kind.startsWith('load-'),
+            ),
+        ),
+        false,
+    );
+    await page.close();
+});
+
 test('cached history stays bounded and local traversal sends no older request', async () => {
     const page = await openHistory();
     assert.ok((await page.locator('[data-message-id]').count()) <= 80);
