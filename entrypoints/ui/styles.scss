@@ -99,11 +99,167 @@ a:focus-visible {
     color: #f4f5f7;
     padding: 7px 10px;
 }
-.solid-inbox__status {
-    min-height: 20px;
-    margin: 10px 20px 6px;
-    color: #89919f;
+.sync-orb {
+    position: relative;
+    display: inline-flex;
+    flex: 0 0 auto;
+    margin-block: auto 12px;
+}
+.sync-orb__target {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: inherit;
+}
+@property --sync-depth {
+    syntax: '<color>';
+    inherits: true;
+    initial-value: #082a62;
+}
+@property --sync-light {
+    syntax: '<color>';
+    inherits: true;
+    initial-value: #1c8fff;
+}
+@property --sync-bloom {
+    syntax: '<color>';
+    inherits: true;
+    initial-value: #34e0ff;
+}
+@property --sync-indicator {
+    syntax: '<color>';
+    inherits: true;
+    initial-value: #368dff;
+}
+.sync-orb__mark {
+    --sync-depth: #082a62;
+    --sync-light: #1c8fff;
+    --sync-bloom: #34e0ff;
+    --sync-indicator: #368dff;
+    --sync-drift-duration: 18s;
+
+    position: relative;
+    width: 24px;
+    height: 24px;
+    overflow: hidden;
+    isolation: isolate;
+    border-radius: 50%;
+    background: var(--sync-depth);
+    box-shadow:
+        inset 0 -3px 6px #0005,
+        0 0 12px #91d4ff18;
+
+    &::before,
+    &::after {
+        position: absolute;
+        inset: -35%;
+        content: '';
+        filter: blur(2px);
+    }
+    &::before {
+        background:
+            radial-gradient(
+                ellipse at 30% 30%,
+                var(--sync-light),
+                transparent 55%
+            ),
+            radial-gradient(
+                ellipse at 70% 75%,
+                var(--sync-bloom),
+                transparent 60%
+            );
+        transform: translate(-6%, 3%) rotate(-12deg);
+    }
+    &::after {
+        background:
+            radial-gradient(ellipse at 70% 25%, #ffffff24, transparent 35%),
+            radial-gradient(
+                ellipse at 35% 70%,
+                var(--sync-indicator),
+                transparent 50%
+            );
+        opacity: 0.65;
+        transform: translate(6%, -3%) rotate(24deg);
+    }
+    &[data-state='loading'] {
+        --sync-depth: #5c4300;
+        --sync-light: #ffe14d;
+        --sync-bloom: #f5a600;
+        --sync-indicator: #ffe156;
+    }
+    &[data-state='refreshing'] {
+        --sync-depth: #633000;
+        --sync-light: #ffbd1a;
+        --sync-bloom: #ff7028;
+        --sync-indicator: #ffe156;
+    }
+    &[data-state='retained'] {
+        --sync-depth: #422600;
+        --sync-light: #c9a132;
+        --sync-bloom: #866414;
+        --sync-indicator: #ffe156;
+    }
+    &[data-state='failed'] {
+        --sync-depth: #650c21;
+        --sync-light: #ff284e;
+        --sync-bloom: #ff5c28;
+        --sync-indicator: #ff4352;
+    }
+    &[data-state='unavailable'] {
+        --sync-depth: #341e26;
+        --sync-light: #a74d5c;
+        --sync-bloom: #63363c;
+        --sync-indicator: #ff4352;
+    }
+}
+:root[data-motion='on'] .sync-orb__mark {
+    transition:
+        --sync-depth 700ms ease,
+        --sync-light 700ms ease,
+        --sync-bloom 700ms ease,
+        --sync-indicator 300ms ease;
+
+    &::before {
+        animation: sync-drift var(--sync-drift-duration) ease-in-out infinite
+            alternate;
+    }
+    &::after {
+        animation: sync-drift calc(var(--sync-drift-duration) * 1.3) ease-in-out
+            infinite alternate-reverse;
+    }
+}
+@keyframes sync-drift {
+    to {
+        transform: translate(8%, -6%) rotate(65deg) scale(1.1);
+    }
+}
+.sync-orb__description {
+    position: absolute;
+    z-index: 5;
+    inset-block-end: 0;
+    inset-inline-start: 100%;
+    width: min(280px, calc(100vw - 76px));
+    padding: 10px 12px;
+    border: 1px solid #414753;
+    border-radius: 8px;
+    background: #20242b;
+    color: #f4f5f7;
+    box-shadow: 0 6px 24px #0006;
     font-size: 12px;
+    line-height: 1.5;
+
+    strong,
+    span {
+        display: block;
+    }
+    > span + span {
+        margin-block-start: 10px;
+    }
 }
 .solid-inbox__error {
     margin: 0 20px 8px;
@@ -413,23 +569,29 @@ a:focus-visible {
 .solid-shell__content {
     min-width: 0;
 }
-.solid-app-nav {
+.solid-app-rail {
     --navigation-surface: #15171c;
     --navigation-hover: #252a33;
     --navigation-border: #292d35;
     --navigation-icon: #b9d2ff;
 
     position: sticky;
+    z-index: 2;
     top: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
     align-self: start;
-    gap: 8px;
     height: 100dvh;
-    padding-block: 12px;
     border-inline-end: 1px solid var(--navigation-border);
     background: var(--navigation-surface);
+}
+.solid-app-nav {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding-block: 12px;
 
     button {
         display: grid;

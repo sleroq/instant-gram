@@ -422,9 +422,6 @@ export function ConversationPane(props: {
                         {props.facts.threadsById[props.threadId]?.title ||
                             'Conversation'}
                     </h2>
-                    <Show when={props.history?.freshness === 'stale'}>
-                        <p>Showing retained history</p>
-                    </Show>
                 </div>
                 <button
                     type="button"
