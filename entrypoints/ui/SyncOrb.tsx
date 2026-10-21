@@ -137,9 +137,7 @@ export function SyncOrb(props: {
                     class="sync-orb__mark"
                     data-state={state().kind}
                     aria-hidden="true"
-                >
-                    <span class="sync-orb__dot" />
-                </span>
+                />
             </button>
             <Show when={open()}>
                 <span

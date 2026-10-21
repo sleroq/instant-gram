@@ -136,17 +136,11 @@ a:focus-visible {
     inherits: true;
     initial-value: #368dff;
 }
-@property --sync-float {
-    syntax: '<length>';
-    inherits: true;
-    initial-value: 0px;
-}
 .sync-orb__mark {
     --sync-depth: #082a62;
     --sync-light: #1c8fff;
     --sync-bloom: #34e0ff;
     --sync-indicator: #368dff;
-    --sync-float: 0px;
     --sync-drift-duration: 18s;
 
     position: relative;
@@ -197,14 +191,12 @@ a:focus-visible {
         --sync-light: #ffe14d;
         --sync-bloom: #f5a600;
         --sync-indicator: #ffe156;
-        --sync-float: 3px;
     }
     &[data-state='refreshing'] {
         --sync-depth: #633000;
         --sync-light: #ffbd1a;
         --sync-bloom: #ff7028;
         --sync-indicator: #ffe156;
-        --sync-float: 3px;
     }
     &[data-state='retained'] {
         --sync-depth: #422600;
@@ -225,27 +217,12 @@ a:focus-visible {
         --sync-indicator: #ff4352;
     }
 }
-.sync-orb__dot {
-    position: absolute;
-    z-index: 1;
-    inset: 50% auto auto 50%;
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--sync-indicator);
-    transform: translate(-50%, -50%);
-}
 :root[data-motion='on'] .sync-orb__mark {
     transition:
         --sync-depth 700ms ease,
         --sync-light 700ms ease,
         --sync-bloom 700ms ease,
-        --sync-indicator 300ms ease,
-        --sync-float 700ms ease;
-
-    .sync-orb__dot {
-        animation: sync-float 7s ease-in-out infinite;
-    }
+        --sync-indicator 300ms ease;
 
     &::before {
         animation: sync-drift var(--sync-drift-duration) ease-in-out infinite
@@ -254,26 +231,6 @@ a:focus-visible {
     &::after {
         animation: sync-drift calc(var(--sync-drift-duration) * 1.3) ease-in-out
             infinite alternate-reverse;
-    }
-}
-@keyframes sync-float {
-    25% {
-        transform: translate(
-            calc(-50% + var(--sync-float)),
-            calc(-50% - var(--sync-float))
-        );
-    }
-    50% {
-        transform: translate(
-            calc(-50% - var(--sync-float)),
-            calc(-50% + var(--sync-float))
-        );
-    }
-    75% {
-        transform: translate(
-            calc(-50% - var(--sync-float)),
-            calc(-50% - var(--sync-float))
-        );
     }
 }
 @keyframes sync-drift {
