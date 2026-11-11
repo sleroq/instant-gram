@@ -1597,6 +1597,214 @@ test(
     },
 );
 
+for (const width of [1100, 390]) {
+    test(`reply content and localized timestamps support keyboard access at ${width}px`, async () => {
+        const page = await openHistory(width);
+        const ts = 1_700_000_000_000;
+        await replaceMessages(page, [
+            {
+                id: 'incoming-reply',
+                ts,
+                kind: 'text',
+                text: 'Yes',
+                senderId: 'peer',
+                replyPreview: { kind: 'text', text: 'Original message' },
+            },
+            {
+                id: 'grouped-reply',
+                ts: ts + 60_000,
+                kind: 'text',
+                text: 'First line\nSecond line',
+                senderId: 'peer',
+                replyPreview: { kind: 'unavailable', label: 'Message deleted' },
+            },
+            {
+                id: 'outgoing-reply',
+                ts: ts + 120_000,
+                kind: 'text',
+                text: 'A long response with an unbroken identifier: abcdefghijklmnopqrstuvwxyz'.repeat(
+                    3,
+                ),
+                senderId: 'viewer',
+                replyPreview: { kind: 'media', title: 'Shared reel' },
+            },
+        ]);
+
+        const incoming = messageRow(page, 'incoming-reply');
+        await incoming.getByText('Yes', { exact: true }).waitFor();
+        assert.equal(
+            await incoming.getByLabel('Reply preview').textContent(),
+            'Original message',
+        );
+        assert.equal(
+            await messageRow(page, 'grouped-reply')
+                .getByLabel('Reply preview')
+                .textContent(),
+            'Message deleted',
+        );
+        assert.equal(
+            await messageRow(page, 'outgoing-reply')
+                .getByLabel('Reply preview')
+                .textContent(),
+            'Shared reel',
+        );
+
+        const time = incoming.locator('time');
+        const node = await time.elementHandle();
+        const expected = await page.evaluate(
+            (ts) => ({
+                full: new Intl.DateTimeFormat(undefined, {
+                    dateStyle: 'full',
+                    timeStyle: 'long',
+                }).format(ts),
+                short: new Intl.DateTimeFormat(undefined, {
+                    hour: 'numeric',
+                    minute: '2-digit',
+                }).format(ts),
+                date: new Intl.DateTimeFormat(undefined, {
+                    month: 'short',
+                    day: 'numeric',
+                    year: 'numeric',
+                }).format(ts),
+            }),
+            ts,
+        );
+        assert.equal(
+            await time.getAttribute('datetime'),
+            new Date(ts).toISOString(),
+        );
+        assert.equal(await time.textContent(), expected.short);
+        assert.equal(await time.getAttribute('aria-label'), expected.full);
+        await page.getByText(expected.date, { exact: true }).waitFor();
+
+        // Native hover information and the keyboard detail expose the same date.
+        await time.hover();
+        assert.equal(await time.getAttribute('title'), expected.full);
+        await time.focus();
+        await incoming
+            .getByRole('tooltip')
+            .getByText(expected.full, { exact: true })
+            .waitFor();
+        await time.press('Escape');
+        await incoming.getByRole('tooltip').waitFor({ state: 'hidden' });
+        assert.equal(
+            await time.evaluate(
+                (element) => element === document.activeElement,
+            ),
+            true,
+        );
+
+        await time.press('Tab');
+        const replyButton = incoming.getByRole('button', {
+            name: 'Reply',
+            exact: true,
+        });
+        assert.equal(
+            await replyButton.evaluate(
+                (element) => element === document.activeElement,
+            ),
+            true,
+        );
+        await replyButton.press('Shift+Tab');
+        await incoming.getByRole('tooltip').waitFor();
+
+        await page.evaluate(() => {
+            const next = structuredClone(window.historyTest.current);
+            next.entities.messagesById['incoming-reply'].ts += 1_000;
+            window.historyTest.send(next, ++next.commitRevision);
+        });
+        await page.waitForFunction(
+            (iso) =>
+                document
+                    .querySelector('[data-message-id="incoming-reply"] time')
+                    ?.getAttribute('datetime') === iso,
+            new Date(ts + 1_000).toISOString(),
+        );
+        assert.equal(
+            await node!.evaluate(
+                (element) =>
+                    element.isConnected && element === document.activeElement,
+            ),
+            true,
+        );
+
+        await replyButton.click();
+        await incoming.getByRole('tooltip').waitFor({ state: 'hidden' });
+        await page
+            .getByRole('status')
+            .filter({ hasText: 'Replying to Yes' })
+            .waitFor();
+        assert.ok((await page.locator('[data-message-id]').count()) <= 80);
+        await page.close();
+    });
+}
+
+test('unavailable timestamps and reply context remain honest for text and attachments', async () => {
+    const page = await openHistory();
+    await replaceMessages(page, [
+        {
+            id: 'invalid-time',
+            ts: Number.NaN,
+            kind: 'text',
+            text: 'Date missing',
+            senderId: 'peer',
+            replyPreview: {
+                kind: 'unavailable',
+                label: 'Original message unavailable',
+            },
+        },
+        {
+            id: 'image-reply',
+            ts: 8_640_000_000_000_001,
+            kind: 'image',
+            senderId: 'viewer',
+            images: [
+                {
+                    url: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==',
+                    width: 1,
+                    height: 1,
+                },
+            ],
+            replyPreview: {
+                kind: 'media',
+                title: 'Photo',
+                subtitle: 'Original photo',
+            },
+        },
+    ]);
+
+    for (const id of ['invalid-time', 'image-reply']) {
+        const row = messageRow(page, id);
+        const time = row.locator('time');
+        assert.equal(await time.getAttribute('datetime'), null);
+        assert.equal(await time.textContent(), 'Time unavailable');
+        assert.equal(await time.getAttribute('title'), 'Time unavailable');
+        await time.focus();
+        await row
+            .getByRole('tooltip')
+            .getByText('Time unavailable', { exact: true })
+            .waitFor();
+    }
+
+    assert.ok(
+        (await page.getByText('Date unavailable', { exact: true }).count()) > 0,
+    );
+    assert.equal(
+        await messageRow(page, 'invalid-time')
+            .getByLabel('Reply preview')
+            .textContent(),
+        'Original message unavailable',
+    );
+    assert.equal(
+        await messageRow(page, 'image-reply')
+            .getByLabel('Reply preview')
+            .textContent(),
+        'Original photo',
+    );
+    await page.getByRole('img', { name: 'Shared image' }).waitFor();
+    await page.close();
+});
+
 test('message variants remain accessible with capability-gated composer and no provider work', async () => {
     const page = await openHistory();
     assert.equal(

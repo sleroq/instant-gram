@@ -307,17 +307,31 @@ a:focus-visible {
     font-size: 12px;
     overflow-wrap: anywhere;
 }
-.solid-message__content,
-.solid-message__reply,
-.solid-message__unavailable,
-.solid-message__share {
+.solid-message__bubble {
+    --message-surface: #242932;
+    --message-time: #b4bece;
+    --message-quote: #c7d9fa;
+    --message-quote-surface: #ffffff0a;
+    --message-tooltip-surface: #15171c;
+
+    position: relative;
     border-radius: 12px;
-    background: #242932;
-    padding: 9px 12px;
+    background: var(--message-surface);
     color: #f0f2f5;
 }
-.solid-message--outgoing .solid-message__content {
-    background: #31588f;
+.solid-message--outgoing .solid-message__bubble {
+    --message-surface: #31588f;
+    --message-time: #d0def2;
+}
+.solid-message__content {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) max-content;
+    align-items: end;
+    column-gap: 10px;
+    padding: 9px 12px;
+}
+.solid-message__content > :first-child {
+    min-width: 0;
 }
 .solid-message__content p {
     margin: 0;
@@ -328,21 +342,61 @@ a:focus-visible {
     color: #b9c0cc;
     font-style: italic;
 }
-.solid-message__body time {
-    display: block;
-    margin-top: 3px;
-    color: #737c8b;
+.solid-message__timestamp {
+    anchor-scope: --message-time;
+    color: var(--message-time);
     font-size: 10px;
+    line-height: 1.6;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
 }
-.solid-message--outgoing .solid-message__body time {
-    text-align: right;
+.solid-message__timestamp time {
+    anchor-name: --message-time;
+}
+.solid-message__timestamp time:focus-visible {
+    outline: 2px solid var(--message-quote);
+    outline-offset: 2px;
+    border-radius: 2px;
+}
+.solid-message__timestamp-detail {
+    position: fixed;
+    position-anchor: --message-time;
+    position-area: top span-left;
+    position-try-fallbacks: flip-block;
+    justify-self: end;
+    inset: auto;
+    width: max-content;
+    max-width: min(260px, 100%, calc(100vw - 32px));
+    margin: 4px;
+    padding: 6px 9px;
+    border: 0;
+    border-radius: 6px;
+    background: var(--message-tooltip-surface);
+    color: var(--message-quote);
+    font-size: 12px;
+    white-space: normal;
 }
 .solid-message__reply {
-    margin-bottom: 4px;
-    border-left: 3px solid #8db8ff;
-    padding: 5px 9px;
-    color: #c7d9fa;
+    border-inline-start: 3px solid var(--message-quote);
+    border-radius: 12px 12px 0 0;
+    padding: 7px 12px 7px 9px;
+    background: var(--message-quote-surface);
+    color: var(--message-quote);
     font-size: 12px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+.solid-message__content--attachment {
+    position: relative;
+    display: block;
+}
+.solid-message__content--attachment .solid-message__timestamp {
+    position: absolute;
+    inset-inline-end: 12px;
+    bottom: 9px;
+    padding-inline: 4px;
+    border-radius: 3px;
+    background: var(--message-tooltip-surface);
 }
 .solid-message__images {
     display: grid;
@@ -355,6 +409,7 @@ a:focus-visible {
     border-radius: 7px;
 }
 .solid-message__share {
+    padding: 9px 12px;
     display: flex;
     max-width: 360px;
     gap: 8px;
@@ -370,6 +425,7 @@ a:focus-visible {
 }
 .solid-message__unavailable {
     display: grid;
+    overflow-wrap: anywhere;
     gap: 3px;
     color: #d0d5df;
 }

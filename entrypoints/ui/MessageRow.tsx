@@ -1,14 +1,56 @@
-import { For, Show } from 'solid-js';
+import { createMemo, For, Show } from 'solid-js';
 import type { Message, User } from '../../lib/domain';
 
-function validDate(ts: number) {
-    const date = new Date(ts);
-    return Number.isFinite(ts) && !Number.isNaN(date.getTime())
-        ? new Intl.DateTimeFormat(undefined, {
-              hour: 'numeric',
-              minute: '2-digit',
-          }).format(date)
-        : 'Time unavailable';
+function MessageTime(props: { ts: number }) {
+    let detail!: HTMLSpanElement;
+    const timestamp = createMemo(() => {
+        const date = new Date(props.ts);
+        if (Number.isNaN(date.getTime())) {
+            return { short: 'Time unavailable', full: 'Time unavailable' };
+        }
+        return {
+            short: new Intl.DateTimeFormat(undefined, {
+                hour: 'numeric',
+                minute: '2-digit',
+            }).format(date),
+            full: new Intl.DateTimeFormat(undefined, {
+                dateStyle: 'full',
+                timeStyle: 'long',
+            }).format(date),
+            iso: date.toISOString(),
+        };
+    });
+
+    return (
+        <span
+            class="solid-message__timestamp"
+            onFocusIn={() => detail.showPopover()}
+            onFocusOut={() => detail.hidePopover()}
+            onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                    detail.hidePopover();
+                    event.stopPropagation();
+                }
+            }}
+        >
+            <time
+                tabindex={0}
+                datetime={timestamp().iso}
+                aria-label={timestamp().full}
+                title={timestamp().full}
+            >
+                {timestamp().short}
+            </time>
+            <span
+                ref={(element) => (detail = element)}
+                class="solid-message__timestamp-detail"
+                role="tooltip"
+                popover="manual"
+            >
+                {timestamp().full}
+            </span>
+        </span>
+    );
 }
 
 function initials(user: User | undefined, fallback: string) {
@@ -161,16 +203,27 @@ export function MessageRow(props: {
                 <Show when={showSender()}>
                     <div class="solid-message__author">{author()}</div>
                 </Show>
-                <Show when={reply()}>
+                <div class="solid-message__bubble">
+                    <Show when={reply()}>
+                        <div
+                            class="solid-message__reply"
+                            aria-label="Reply preview"
+                        >
+                            {reply()}
+                        </div>
+                    </Show>
                     <div
-                        class="solid-message__reply"
-                        aria-label="Reply preview"
+                        class={{
+                            'solid-message__content': true,
+                            'solid-message__content--attachment':
+                                props.message.kind === 'image' ||
+                                props.message.kind === 'reel_share' ||
+                                props.message.kind === 'inline_share',
+                        }}
                     >
-                        {reply()}
+                        {content(props.message)}
+                        <MessageTime ts={props.message.ts} />
                     </div>
-                </Show>
-                <div class="solid-message__content">
-                    {content(props.message)}
                 </div>
                 <Show
                     when={
@@ -233,16 +286,6 @@ export function MessageRow(props: {
                         </div>
                     )}
                 </Show>
-                <time
-                    datetime={
-                        Number.isFinite(props.message.ts) &&
-                        !Number.isNaN(new Date(props.message.ts).getTime())
-                            ? new Date(props.message.ts).toISOString()
-                            : undefined
-                    }
-                >
-                    {validDate(props.message.ts)}
-                </time>
             </div>
         </article>
     );
