@@ -69,6 +69,8 @@ export default function App() {
     }
     const route = createRouteController();
     const [compact, setCompact] = createSignal(window.innerWidth < 700);
+    const [sidebarFolded, setSidebarFolded] = createSignal(false);
+    const [sidebarWidth, setSidebarWidth] = createSignal(360);
     let listAnchor: ListAnchor | undefined;
     const anchors: Record<string, HistoryAnchor | undefined> = {};
     let identity:
@@ -142,6 +144,12 @@ export default function App() {
                     facts={facts()}
                     resource={inbox()}
                     selectedId={selected()}
+                    folded={!compact() && sidebarFolded()}
+                    onToggleFold={
+                        compact()
+                            ? undefined
+                            : () => setSidebarFolded((folded) => !folded)
+                    }
                     restore={listAnchor}
                     restoreFocus={!route.returningToChats()}
                     onPosition={(anchor) => {
@@ -212,6 +220,9 @@ export default function App() {
                                     when={compact()}
                                     fallback={
                                         <Sidebar
+                                            folded={sidebarFolded()}
+                                            width={sidebarWidth()}
+                                            onResize={setSidebarWidth}
                                             inbox={list()}
                                             conversation={
                                                 <Show when={selected()} keyed>

@@ -48,6 +48,8 @@ export function InboxList(props: {
     facts: EntityFacts;
     resource: ResourceProjection;
     selectedId?: string;
+    folded?: boolean;
+    onToggleFold?(): void;
     onSelect(id: string): void;
     onRefresh(): void;
     onLoadMore(): void;
@@ -130,19 +132,64 @@ export function InboxList(props: {
     );
 
     return (
-        <section class="solid-inbox__list-panel" aria-label="Inbox">
+        <section
+            id="conversation-sidebar"
+            class={[
+                'solid-inbox__list-panel',
+                { 'solid-inbox__list-panel--folded': !!props.folded },
+            ]}
+            aria-label="Inbox"
+        >
             <div class="solid-inbox__list-heading">
-                <div>
+                <div class="solid-inbox__heading-copy">
                     <p class="solid-inbox__eyebrow">Read-only inbox</p>
                     <h1>Messages</h1>
                 </div>
                 <button
                     type="button"
+                    aria-label="Refresh"
+                    title="Refresh conversations"
                     onClick={() => props.onRefresh()}
                     disabled={props.resource.synchronization === 'refreshing'}
                 >
-                    Refresh
+                    <span class="solid-inbox__control-copy">Refresh</span>
+                    <svg
+                        class="solid-inbox__compact-icon"
+                        viewBox="0 0 24 24"
+                        aria-hidden="true"
+                    >
+                        <path d="M20 7v5h-5M4 17v-5h5M6 7a7 7 0 0 1 12-1l2 6M4 12l2 6a7 7 0 0 0 12-1" />
+                    </svg>
                 </button>
+                <Show when={props.onToggleFold}>
+                    <button
+                        class="solid-inbox__fold"
+                        type="button"
+                        aria-label={
+                            props.folded
+                                ? 'Expand conversations'
+                                : 'Collapse conversations'
+                        }
+                        title={
+                            props.folded
+                                ? 'Expand conversations'
+                                : 'Collapse conversations'
+                        }
+                        aria-expanded={props.folded ? 'false' : 'true'}
+                        aria-controls="conversation-sidebar"
+                        onClick={() => props.onToggleFold?.()}
+                    >
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path
+                                d={
+                                    props.folded
+                                        ? 'm9 6 6 6-6 6'
+                                        : 'm15 6-6 6 6 6'
+                                }
+                            />
+                        </svg>
+                    </button>
+                </Show>
             </div>
             <p class="solid-inbox__status" role="status">
                 {props.resource.availability === 'absent'
@@ -184,6 +231,16 @@ export function InboxList(props: {
                     <For each={ids()}>
                         {(id, index) => {
                             const thread = () => props.facts.threadsById[id];
+                            const title = () =>
+                                thread()?.title || 'Conversation';
+                            const description = () =>
+                                [
+                                    preview(props.facts, id),
+                                    thread()?.serverIsPin ? 'Pinned' : '',
+                                    thread()?.isUnread ? 'Unread' : '',
+                                ]
+                                    .filter(Boolean)
+                                    .join(' · ');
 
                             return (
                                 <li
@@ -196,6 +253,9 @@ export function InboxList(props: {
                                         type="button"
                                         class="solid-inbox__thread"
                                         data-thread-id={id}
+                                        aria-label={title()}
+                                        aria-description={description()}
+                                        title={`${title()} — ${description()}`}
                                         aria-current={
                                             props.selectedId === id
                                                 ? 'page'
@@ -215,7 +275,10 @@ export function InboxList(props: {
                                                     'Conversation',
                                             )}
                                         </span>
-                                        <span class="solid-inbox__thread-copy">
+                                        <span
+                                            class="solid-inbox__thread-copy"
+                                            aria-hidden="true"
+                                        >
                                             <span class="solid-inbox__thread-title">
                                                 <strong>
                                                     {thread()?.title ||
@@ -240,7 +303,7 @@ export function InboxList(props: {
                                         <Show when={thread()?.isUnread}>
                                             <span
                                                 class="solid-inbox__unread"
-                                                aria-label="Unread"
+                                                aria-hidden="true"
                                             />
                                         </Show>
                                     </button>
@@ -262,17 +325,37 @@ export function InboxList(props: {
                         fallback={
                             <button
                                 type="button"
+                                aria-label="Load more conversations"
+                                title="Load more conversations"
                                 onClick={() => props.onLoadMore()}
                             >
-                                Load more conversations
+                                <span class="solid-inbox__control-copy">
+                                    Load more conversations
+                                </span>
+                                <span
+                                    class="solid-inbox__compact-icon"
+                                    aria-hidden="true"
+                                >
+                                    ↓
+                                </span>
                             </button>
                         }
                     >
                         <button
                             type="button"
+                            aria-label="Retry older conversations"
+                            title="Retry older conversations"
                             onClick={() => props.onLoadMore()}
                         >
-                            Retry older conversations
+                            <span class="solid-inbox__control-copy">
+                                Retry older conversations
+                            </span>
+                            <span
+                                class="solid-inbox__compact-icon"
+                                aria-hidden="true"
+                            >
+                                ↻
+                            </span>
                         </button>
                     </Show>
                 </div>
