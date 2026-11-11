@@ -15,7 +15,7 @@ jobs:
     validate:
         runs-on: ubuntu-latest
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@v7
             - uses: oven-sh/setup-bun@v2
               with:
                   bun-version: 1.4.3
@@ -33,7 +33,7 @@ jobs:
         permissions:
             contents: write
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@v7
             - uses: oven-sh/setup-bun@v2
               with:
                   bun-version: 1.4.3
@@ -41,12 +41,12 @@ jobs:
             - name: Verify tag matches package version
               run: test "${GITHUB_REF_NAME}" = "v$(bun -p "require('./package.json').version")"
             - run: bun run zip
-            - uses: actions/upload-artifact@v4
+            - uses: actions/upload-artifact@v7
               with:
                   name: instagram-client-reels-${{ github.ref_name }}
                   path: .output/*.zip
                   if-no-files-found: error
-            - uses: softprops/action-gh-release@v2
+            - uses: softprops/action-gh-release@v3
               with:
                   files: .output/*.zip
                   generate_release_notes: true
