@@ -144,17 +144,6 @@ export function InboxList(props: {
                     Refresh
                 </button>
             </div>
-            <p class="solid-inbox__status" role="status">
-                {props.resource.availability === 'absent'
-                    ? props.resource.synchronization === 'refreshing'
-                        ? 'Checking Instagram…'
-                        : 'Inbox unavailable'
-                    : props.resource.synchronization === 'refreshing'
-                      ? 'Showing cached conversations · Refreshing…'
-                      : props.resource.freshness === 'stale'
-                        ? 'Showing cached conversations'
-                        : 'Up to date'}
-            </p>
             <Show when={props.resource.error}>
                 <p class="solid-inbox__error" role="alert">
                     {props.resource.error?.message}{' '}

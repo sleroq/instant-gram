@@ -18,6 +18,7 @@ import { createRouteController } from './route';
 import { Sidebar } from './Sidebar';
 import { AppNavigation } from './AppNavigation';
 import { SettingsPage } from './SettingsPage';
+import { SyncOrb } from './SyncOrb';
 import { createPreferences } from './preferences';
 import type { HistoryAnchor } from './history-window';
 import type { ListAnchor } from './virtual-list';
@@ -134,6 +135,10 @@ export default function App() {
     const inbox = () => client.state.inbox;
     const facts = () => client.state.entities;
     const selected = () => route.chats().threadId;
+    const selectedHistory = () => {
+        const id = selected();
+        return id ? client.state.histories[id] : undefined;
+    };
 
     const list = () => (
         <Show when={navigationKey()} keyed>
@@ -195,10 +200,17 @@ export default function App() {
         <main class="solid-app">
             <Show when={preferences.ready()}>
                 <div class="solid-shell">
-                    <AppNavigation
-                        active={route.route().tab}
-                        onSelect={route.selectTab}
-                    />
+                    <div class="solid-app-rail">
+                        <AppNavigation
+                            active={route.route().tab}
+                            onSelect={route.selectTab}
+                        />
+                        <SyncOrb
+                            inbox={inbox()}
+                            selectedThreadId={selected()}
+                            history={selectedHistory()}
+                        />
+                    </div>
                     <div class="solid-shell__content">
                         <div
                             role="tabpanel"
