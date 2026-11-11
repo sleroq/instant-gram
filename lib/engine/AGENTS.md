@@ -41,8 +41,10 @@ settlement here; provider protocol and UI geometry stay outside.
 - An unmatched head refresh preserves one previous proven generation with its
   own frontier and old-head ownership. Existing windows pin it; anchors resolve
   only against current or proven previous coverage, never arbitrary pages.
-  Expose `newerCoverageAvailable`; current adoption is explicit. Retire previous
-  coverage when current coverage contains all its IDs.
+  Expose `newerCoverageAvailable`; the client's newer-history intent selects
+  current coverage after cached newer traversal, including automatic adoption for
+  genuine newest followers. Retire previous coverage when current coverage contains
+  all its IDs.
 - Failures belong to head refresh or the exact continuation cursor. Head refresh
   must not clear an active continuation error. Cyclic/no-progress cursors are
   failure-gated until explicit retry. Enforce retention gates programmatically.

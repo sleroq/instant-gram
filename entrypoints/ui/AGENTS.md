@@ -50,8 +50,12 @@ seeing, and arrivals do not advance the seen watermark automatically.
   400-ID projection window is not a DOM or durable-retention limit.
 - Preserve ID-plus-offset anchors after prepend and measured size changes.
   Maintenance scroll corrections are immediate, not animated.
-- Respect previous proven coverage and `newerCoverageAvailable`; current newest
-  adoption is explicit. Never concatenate detached ranges or jump an older reader.
+- Respect previous proven coverage and `newerCoverageAvailable`. Preserve genuine
+  newest-follow intent across head refreshes and automatically adopt current coverage
+  through worker-owned newer traversal. An older reader keeps the exact logical
+  anchor; deliberate forward/bottom navigation can reach current coverage after
+  cached newer ranges. Slice/projection ends and short-viewport fill are not newest
+  intent. Never concatenate detached ranges or jump an older reader.
 - Keep cached content visible during refresh/errors. Refresh and failure-specific
   Retry are domain intents; the worker selects opaque cursors.
 - Desktop uses inbox/conversation panes; compact screens mount the routed pane.

@@ -43,7 +43,10 @@ Milestone: **icr-i2ye**. Finish before R3.
 Keep this pass narrow:
 
 - Floating controls must not cover the newest message at bottom.
-- Older readers keep their anchors. Do not join retained ranges across cursor gaps.
+- Genuine newest followers automatically adopt refreshed coverage through worker
+  newer traversal; older readers keep their anchors until deliberate forward/bottom
+  navigation. Slice/projection ends are not newest intent. Do not join retained
+  ranges across cursor gaps.
 - Automatic recovery applies only to eligible transient reads.
   Cyclic/no-progress cursors stay gated. Unknown sends are never blindly retried.
 - Keep the header Pin/Unpin action until R3 conversation menus replace it.

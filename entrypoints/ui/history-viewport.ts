@@ -8,6 +8,20 @@ import {
 export function createHistoryViewportController(onResize: () => void) {
     let viewport: HTMLDivElement | undefined;
     let bottomClearance = 0;
+    let lastScrollTop = 0;
+
+    function scrollToBottom() {
+        if (!viewport) return;
+        viewport.scrollTop = viewport.scrollHeight;
+        lastScrollTop = viewport.scrollTop;
+    }
+
+    function scrollDirection() {
+        const next = viewport?.scrollTop ?? 0;
+        const direction = Math.sign(next - lastScrollTop);
+        lastScrollTop = next;
+        return direction;
+    }
 
     function setBottomClearance(height: number) {
         bottomClearance = height;
@@ -34,6 +48,7 @@ export function createHistoryViewportController(onResize: () => void) {
         observer?.disconnect();
         mutations?.disconnect();
         viewport = element;
+        lastScrollTop = element.scrollTop;
         element.style.setProperty('--composer-height', `${bottomClearance}px`);
         observer = new ResizeObserver(() => {
             onResize();
@@ -61,6 +76,7 @@ export function createHistoryViewportController(onResize: () => void) {
         ].find((item) => item.dataset.messageId === anchor.id);
         if (!row) return;
         viewport.scrollTop = correctionForAnchor(viewport, row, anchor);
+        lastScrollTop = viewport.scrollTop;
     }
 
     function dispose() {
@@ -76,6 +92,8 @@ export function createHistoryViewportController(onResize: () => void) {
         setBottomClearance,
         capture,
         correct,
+        scrollToBottom,
+        scrollDirection,
         element: () => (viewport?.isConnected ? viewport : undefined),
         dispose,
     };
